@@ -13,6 +13,8 @@ from app.config import settings
 
 router = APIRouter(tags=["analytics"])
 
+SCAN_GRACE_HOURS = 48  # запас к окну атрибуции на лаг вебхуков клика
+
 # Бенчмарк LeadHit (ТЗ 2.7 / 3.6 / 4.7) — цель сравнения на пилоте.
 BENCHMARK = {
     "best_offer": {"deliverability": 0.971, "open": 0.087, "ctr": 0.0056, "conversion": 0.0171, "unsub": 0.0007, "avg_check": 5667},
@@ -65,6 +67,11 @@ async def run_attribution(con) -> int:
     """
     from app import app_settings
     window_hours = (await app_settings.get(con))["attribution_window_hours"]
+    # Заказ привязывается только к клику в пределах окна ДО него. Как только заказ старше
+    # окна + запас на поздние вебхуки, новой привязки уже не будет — из скана его убираем,
+    # иначе заказы без клика пересканируются на каждом тике вечно.
+    # ponytail: запас 48ч на лаг вебхуков; мало — поднять SCAN_GRACE_HOURS.
+    scan_hours = window_hours + SCAN_GRACE_HOURS
     n = 0
     orders = await con.fetch(
         """SELECT o.order_id, o.user_id, o.order_date,
@@ -72,7 +79,9 @@ async def run_attribution(con) -> int:
                      FROM jsonb_array_elements(o.items) i) AS total
            FROM orders o
            WHERE lower(o.status) NOT IN ('cancelled','canceled','returned','refunded')
-             AND NOT EXISTS (SELECT 1 FROM email_log e WHERE e.attributed_order_id = o.order_id)"""
+             AND o.order_date >= now() - make_interval(hours => $1)
+             AND NOT EXISTS (SELECT 1 FROM email_log e WHERE e.attributed_order_id = o.order_id)""",
+        scan_hours,
     )
     for o in orders:
         log = await con.fetchrow(
