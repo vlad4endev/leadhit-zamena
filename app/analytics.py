@@ -5,7 +5,11 @@
 """
 from __future__ import annotations
 
+import html as _htmllib
+from urllib.parse import urlencode
+
 from fastapi import APIRouter
+from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
 from app import db
@@ -57,6 +61,41 @@ async def esp_webhook(wh: Webhook) -> dict:
         else:
             return {"ok": False, "reason": "unknown event"}
     return {"ok": True}
+
+
+def _unsub_page(msg: str, confirm_href: str | None) -> str:
+    """Страница отписки. msg — статичный текст (не пользовательский ввод)."""
+    btn = (f'<a href="{_htmllib.escape(confirm_href, quote=True)}" '
+           f'style="display:inline-block;margin-top:20px;background:#a81fcb;color:#fff;'
+           f'text-decoration:none;padding:12px 28px;border-radius:8px;font-weight:600">'
+           f'Отписаться</a>' if confirm_href else "")
+    return (
+        '<!doctype html><html lang="ru"><head><meta charset="utf-8">'
+        '<meta name="viewport" content="width=device-width,initial-scale=1">'
+        '<title>Отписка — groster.me</title></head>'
+        '<body style="font-family:sans-serif;max-width:520px;margin:80px auto;padding:0 20px;'
+        'text-align:center;color:#222">'
+        '<div style="font-size:20px;font-weight:700;color:#a81fcb;margin-bottom:24px">Groster.me</div>'
+        f'<p style="font-size:16px;line-height:1.5">{msg}</p>{btn}</body></html>'
+    )
+
+
+@router.get("/unsubscribe", response_class=HTMLResponse)
+async def unsubscribe(u: str = "", c: str = "", confirm: int = 0) -> str:
+    """Отписка по ссылке из футера письма (ТЗ 5 / 152-ФЗ).
+
+    Шаг 1 (GET без confirm) — страница подтверждения: префетч ссылки почтовыми
+    сканерами НЕ меняет состояние. Шаг 2 (клик → confirm=1) — снимаем из всех сценариев.
+    """
+    if not u:
+        return _unsub_page("Ссылка недействительна.", None)
+    if confirm:
+        async with db.pool().acquire() as con:
+            await con.execute(
+                "UPDATE subscribers SET is_unsubscribed = TRUE WHERE user_id = $1", u)
+        return _unsub_page("Вы отписаны от рассылки. Больше писем не придёт.", None)
+    href = "/unsubscribe?" + urlencode({"u": u, "c": c, "confirm": 1})
+    return _unsub_page("Отписаться от рассылки Groster.me?", href)
 
 
 async def run_attribution(con) -> int:
@@ -169,6 +208,10 @@ def _demo() -> None:
     assert _status("best_offer", m_yellow)["deliverability"] == "yellow"  # (0.971-0.75)/0.971≈0.228
     m_red = {"deliverability": 0.5, "open": 0.087, "ctr": 0.0056, "conversion": 0.0171}
     assert _status("best_offer", m_red)["deliverability"] == "red"
+    # Отписка: user_id с спецсимволами кодируется в ссылке и не пролезает в HTML сырым.
+    href = "/unsubscribe?" + urlencode({"u": 'a"><b', "c": "cart", "confirm": 1})
+    assert "confirm=1" in href and '"><b' not in _unsub_page("x", href)
+    assert "Отписаться" not in _unsub_page("Вы отписаны.", None)  # финальная страница без кнопки
     print("analytics._demo OK")
 
 

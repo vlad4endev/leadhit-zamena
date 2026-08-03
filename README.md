@@ -57,6 +57,7 @@ delayed-job; атрибуция — по расписанию.
 | PUT | `/feeds/{categories,products,top5,subscribers,orders}` | приём фидов |
 | POST | `/cart-ping` | heartbeat корзины (session-ping) |
 | POST | `/esp/webhook` | статусы письма от ESP |
+| GET | `/unsubscribe` | отписка по ссылке из футера (подтверждение → `confirm=1`) |
 | GET | `/kpi` | 6 метрик по сервису + бенчмарк + флаг просадки |
 | GET | `/admin` | админ-панель (ТЗ 8.1): настройки, логи, фиды, ручной запуск |
 | GET/PUT | `/admin/config[/{service}]` | вкл/выкл + интервалы/cooldown (без перезапуска) |
