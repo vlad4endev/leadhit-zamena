@@ -1,0 +1,29 @@
+[Unit]
+Description=LeadHit-замена — воркеры триггерных рассылок (Best Offer, Корзина, Постпродажа, атрибуция)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+# Подставить под прод:
+User=leadhit
+Group=leadhit
+WorkingDirectory=/opt/leadhit
+EnvironmentFile=/opt/leadhit/.env
+ExecStart=/opt/leadhit/.venv/bin/python scripts/worker_loop.py
+
+# worker_loop сам не падает от одной ошибки тика; рестарт — на случай краха процесса/БД.
+Restart=always
+RestartSec=5
+# Мягкая остановка: loop ловит SIGINT/SIGTERM и закрывает пул.
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Базовая изоляция.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target

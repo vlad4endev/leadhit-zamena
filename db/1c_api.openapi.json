@@ -1,0 +1,283 @@
+{
+  "openapi": "3.0.3",
+  "info": {
+    "title": "1C HTTP API for triggers",
+    "version": "1.1",
+    "description": "HTTP-сервис 1С для сервиса триггерных рассылок groster.me (опт, HoReCa/расходники). Отдаёт товары, состав корзины и статусы заказов. Авторизация: Authorization: Bearer <token>. Даты ISO 8601 с зоной, цена за базовую единицу числом (71.60)."
+  },
+  "servers": [
+    { "url": "https://1c.groster.me/base/hs/leadhit/v1" }
+  ],
+  "security": [ { "bearerAuth": [] } ],
+  "tags": [
+    { "name": "catalog" },
+    { "name": "cart" },
+    { "name": "orders" }
+  ],
+  "paths": {
+    "/catalog": {
+      "get": {
+        "tags": ["catalog"],
+        "summary": "Выгрузка каталога",
+        "description": "Постранично. changed_since ограничивает выборку позициями, изменёнными после указанной даты.",
+        "parameters": [
+          { "name": "changed_since", "in": "query", "required": false, "schema": { "type": "string", "format": "date-time" }, "example": "2026-07-22T00:00:00+03:00" },
+          { "name": "page", "in": "query", "required": false, "schema": { "type": "integer", "default": 1 } },
+          { "name": "page_size", "in": "query", "required": false, "schema": { "type": "integer", "default": 1000 } }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/CatalogPage" },
+              "example": {
+                "items": [
+                  {
+                    "product_id": "0057412",
+                    "name": "Салфетка бумажная 1-слойная 24*24 \"Лилия\" белая, 250 лист",
+                    "category_id": "salfetki-bumajnye", "category_name": "Бумажные салфетки",
+                    "price": 71.60, "unit": "пач", "currency": "RUB", "min_order_qty": 1,
+                    "packaging": [ { "level": "упак", "qty": 21 } ],
+                    "in_stock": true, "stock_level": "много", "attributes": [], "tags": ["хит"],
+                    "image_url": "https://groster.me/upload/iblock/0057412.jpg",
+                    "product_url": "https://groster.me/catalog/salfetki-bumajnye/0057412/",
+                    "updated_at": "2026-07-23T09:00:00+03:00"
+                  },
+                  {
+                    "product_id": "0038921",
+                    "name": "Касалетка 900 мл 222*160*38 алюминиевая без крышки",
+                    "category_id": "kasaletki", "category_name": "Касалетки",
+                    "price": 11.80, "unit": "шт", "currency": "RUB", "min_order_qty": 100,
+                    "packaging": [ { "level": "упак", "qty": 100 }, { "level": "кор", "qty": 600 } ],
+                    "in_stock": true, "stock_level": "много", "attributes": [], "tags": [],
+                    "image_url": "https://groster.me/upload/iblock/0038921.jpg",
+                    "product_url": "https://groster.me/catalog/kasaletki/0038921/",
+                    "updated_at": "2026-07-23T09:00:00+03:00"
+                  },
+                  {
+                    "product_id": "0061044",
+                    "name": "Салфетка влажная 120 шт. Lili с клапаном",
+                    "category_id": "vlajnye-salfetki", "category_name": "Влажные салфетки",
+                    "price": 89.00, "unit": "пач", "currency": "RUB", "min_order_qty": 1,
+                    "packaging": [ { "level": "кор", "qty": 16 } ],
+                    "in_stock": true, "stock_level": "мало",
+                    "attributes": [ { "name": "Запах", "value": "Экстракт ромашки" } ], "tags": ["новинка"],
+                    "image_url": "https://groster.me/upload/iblock/0061044.jpg",
+                    "product_url": "https://groster.me/catalog/vlajnye-salfetki/0061044/",
+                    "updated_at": "2026-07-23T09:00:00+03:00"
+                  }
+                ],
+                "page": 1, "page_size": 1000, "total": 5230
+              } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/products": {
+      "post": {
+        "tags": ["catalog"],
+        "summary": "Товары по списку id",
+        "requestBody": { "required": true, "content": { "application/json": {
+          "schema": { "$ref": "#/components/schemas/IdsRequest" }, "example": { "ids": ["0057412", "0038921"] } } } },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/ProductsResponse" },
+              "example": { "items": [ {
+                "product_id": "0057412",
+                "name": "Салфетка бумажная 1-слойная 24*24 \"Лилия\" белая, 250 лист",
+                "category_id": "salfetki-bumajnye", "category_name": "Бумажные салфетки",
+                "price": 71.60, "unit": "пач", "currency": "RUB", "min_order_qty": 1,
+                "packaging": [ { "level": "упак", "qty": 21 } ],
+                "in_stock": true, "stock_level": "много", "attributes": [], "tags": ["хит"],
+                "image_url": "https://groster.me/upload/iblock/0057412.jpg",
+                "product_url": "https://groster.me/catalog/salfetki-bumajnye/0057412/",
+                "updated_at": "2026-07-23T09:00:00+03:00"
+              } ], "missing": ["0038921"] } } }
+          },
+          "401": { "$ref": "#/components/responses/Unauthorized" }
+        }
+      }
+    },
+    "/cart": {
+      "get": {
+        "tags": ["cart"],
+        "summary": "Состав корзины",
+        "description": "Идентификация по session_id (основной вариант) либо user_id / email.",
+        "parameters": [
+          { "name": "session_id", "in": "query", "required": false, "schema": { "type": "string" }, "example": "s_7f3a91c2" },
+          { "name": "user_id", "in": "query", "required": false, "schema": { "type": "string" } },
+          { "name": "email", "in": "query", "required": false, "schema": { "type": "string" } }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Cart" },
+              "example": {
+                "session_id": "s_7f3a91c2", "user_id": "42817", "email": "m.orlova@mail.ru", "is_empty": false,
+                "cart_items": [
+                  { "product_id": "0057412", "category_id": "salfetki-bumajnye", "name": "Салфетка бумажная \"Лилия\" белая, 250 лист", "price": 71.60, "unit": "пач", "qty": 2 },
+                  { "product_id": "0038921", "category_id": "kasaletki", "name": "Касалетка 900 мл алюминиевая", "price": 11.80, "unit": "шт", "qty": 100 }
+                ],
+                "cart_hash": "7c1e9a2f4b", "updated_at": "2026-07-23T09:05:00+03:00"
+              } } }
+          },
+          "404": { "$ref": "#/components/responses/NotFound" }
+        }
+      }
+    },
+    "/orders/status": {
+      "post": {
+        "tags": ["orders"],
+        "summary": "Статусы заказов",
+        "requestBody": { "required": true, "content": { "application/json": {
+          "schema": { "$ref": "#/components/schemas/OrderIdsRequest" }, "example": { "order_ids": ["ГР-184213", "ГР-184001"] } } } },
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderStatusResponse" },
+              "example": { "items": [
+                { "order_id": "ГР-184213", "status": "paid", "order_date": "2026-07-23T09:10:00+03:00", "total": 1323.20 },
+                { "order_id": "ГР-184001", "status": "cancelled", "order_date": "2026-07-22T14:00:00+03:00", "total": 0 } ] } } }
+          }
+        }
+      }
+    },
+    "/orders/exists": {
+      "get": {
+        "tags": ["orders"],
+        "summary": "Есть ли заказ пользователя после даты",
+        "parameters": [
+          { "name": "user_id", "in": "query", "required": true, "schema": { "type": "string" }, "example": "42817" },
+          { "name": "since", "in": "query", "required": true, "schema": { "type": "string", "format": "date-time" }, "example": "2026-07-23T09:00:00+03:00" }
+        ],
+        "responses": {
+          "200": {
+            "description": "ok",
+            "content": { "application/json": { "schema": { "$ref": "#/components/schemas/OrderExistsResponse" },
+              "example": { "exists": true, "order_id": "ГР-184213", "order_date": "2026-07-23T09:10:00+03:00" } } }
+          }
+        }
+      }
+    }
+  },
+  "components": {
+    "securitySchemes": {
+      "bearerAuth": { "type": "http", "scheme": "bearer" }
+    },
+    "responses": {
+      "Unauthorized": { "description": "нет или неверный токен", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": { "code": "unauthorized", "message": "Требуется авторизация" } } } } },
+      "NotFound": { "description": "не найдено", "content": { "application/json": { "schema": { "$ref": "#/components/schemas/Error" }, "example": { "error": { "code": "not_found", "message": "Корзина не найдена" } } } } }
+    },
+    "schemas": {
+      "PackagingTier": {
+        "type": "object", "required": ["level", "qty"],
+        "properties": {
+          "level": { "type": "string", "enum": ["упак", "кор", "меш"] },
+          "qty": { "type": "integer", "description": "сколько базовых единиц (unit) в этом уровне" }
+        }
+      },
+      "Attribute": {
+        "type": "object", "required": ["name", "value"],
+        "properties": {
+          "name": { "type": "string", "description": "напр. Вкус, Цвет, Размер, Запах" },
+          "value": { "type": "string" }
+        }
+      },
+      "Product": {
+        "type": "object",
+        "required": ["product_id", "name", "category_id", "price", "unit", "product_url", "in_stock"],
+        "properties": {
+          "product_id": { "type": "string", "description": "код/артикул в 1С" },
+          "name": { "type": "string" },
+          "category_id": { "type": "string", "description": "слаг категории, напр. salfetki-bumajnye" },
+          "category_name": { "type": "string" },
+          "price": { "type": "number", "description": "цена за базовую единицу (unit)" },
+          "unit": { "type": "string", "description": "базовая единица: шт, упак, пач и т.п." },
+          "currency": { "type": "string" },
+          "min_order_qty": { "type": "integer", "description": "минимум к заказу в базовых единицах" },
+          "packaging": { "type": "array", "items": { "$ref": "#/components/schemas/PackagingTier" } },
+          "in_stock": { "type": "boolean" },
+          "stock_level": { "type": "string", "enum": ["много", "достаточно", "мало", "нет"] },
+          "attributes": { "type": "array", "items": { "$ref": "#/components/schemas/Attribute" } },
+          "tags": { "type": "array", "items": { "type": "string" } },
+          "image_url": { "type": "string", "nullable": true },
+          "product_url": { "type": "string" },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "CatalogPage": {
+        "type": "object", "required": ["items", "page", "page_size", "total"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Product" } },
+          "page": { "type": "integer" }, "page_size": { "type": "integer" }, "total": { "type": "integer" }
+        }
+      },
+      "IdsRequest": {
+        "type": "object", "required": ["ids"],
+        "properties": { "ids": { "type": "array", "items": { "type": "string" } } }
+      },
+      "ProductsResponse": {
+        "type": "object", "required": ["items"],
+        "properties": {
+          "items": { "type": "array", "items": { "$ref": "#/components/schemas/Product" } },
+          "missing": { "type": "array", "items": { "type": "string" } }
+        }
+      },
+      "CartItem": {
+        "type": "object",
+        "required": ["product_id", "category_id", "price", "qty"],
+        "properties": {
+          "product_id": { "type": "string" },
+          "category_id": { "type": "string" },
+          "name": { "type": "string" },
+          "price": { "type": "number", "description": "цена за базовую единицу" },
+          "unit": { "type": "string" },
+          "qty": { "type": "integer" }
+        }
+      },
+      "Cart": {
+        "type": "object", "required": ["is_empty", "cart_items"],
+        "properties": {
+          "session_id": { "type": "string", "nullable": true },
+          "user_id": { "type": "string", "nullable": true },
+          "email": { "type": "string", "nullable": true },
+          "is_empty": { "type": "boolean" },
+          "cart_items": { "type": "array", "items": { "$ref": "#/components/schemas/CartItem" } },
+          "cart_hash": { "type": "string", "nullable": true },
+          "updated_at": { "type": "string", "format": "date-time" }
+        }
+      },
+      "OrderIdsRequest": {
+        "type": "object", "required": ["order_ids"],
+        "properties": { "order_ids": { "type": "array", "items": { "type": "string" } } }
+      },
+      "OrderStatus": {
+        "type": "object", "required": ["order_id", "status", "order_date"],
+        "properties": {
+          "order_id": { "type": "string" },
+          "status": { "type": "string", "enum": ["new", "paid", "shipped", "cancelled", "returned", "refunded"] },
+          "order_date": { "type": "string", "format": "date-time" },
+          "total": { "type": "number" }
+        }
+      },
+      "OrderStatusResponse": {
+        "type": "object", "required": ["items"],
+        "properties": { "items": { "type": "array", "items": { "$ref": "#/components/schemas/OrderStatus" } } }
+      },
+      "OrderExistsResponse": {
+        "type": "object", "required": ["exists"],
+        "properties": {
+          "exists": { "type": "boolean" },
+          "order_id": { "type": "string", "nullable": true },
+          "order_date": { "type": "string", "format": "date-time", "nullable": true }
+        }
+      },
+      "Error": {
+        "type": "object", "required": ["error"],
+        "properties": { "error": { "type": "object", "required": ["code", "message"], "properties": {
+          "code": { "type": "string" }, "message": { "type": "string" } } } }
+      }
+    }
+  }
+}

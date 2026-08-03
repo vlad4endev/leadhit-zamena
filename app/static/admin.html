@@ -1,0 +1,1473 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>LeadHit — консоль</title>
+<style>
+:root{
+  /* Фирменная палитра Groster: маджента #BC39E5 + золото #FECC00 */
+  --bg:#f7f3fb; --surface:#ffffff; --surface-2:#f4ecfa; --border:#e9dff3;
+  --text:#1c1524; --muted:#736a80; --accent:#a81fcb; --accent-weak:#f6e8fc;
+  --brand:#bc39e5; --gold:#fecc00; --orange:#fc6631;
+  --ok:#12986a; --warn:#c24710; --alert:#e0464b;
+  --sidebar:#1a1024; --side-text:#cfc4dc; --side-muted:#7a6e88; --side-active:#2a1a38;
+  --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
+  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
+  --r:13px; --shadow:0 1px 2px rgba(28,21,36,.05),0 6px 18px rgba(120,60,150,.06);
+}
+.dark{
+  --bg:#120b1a; --surface:#1c1426; --surface-2:#251a33; --border:#352544;
+  --text:#efe7f6; --muted:#9a8ea9; --accent:#c15ae8; --accent-weak:#2a1a3a;
+  --brand:#c15ae8; --gold:#fecc00; --orange:#ff7a4d;
+  --ok:#2eb681; --warn:#fc6631; --alert:#f0575c;
+  --sidebar:#0f0916; --side-text:#cfc4dc; --side-muted:#7a6e88; --side-active:#241633;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.38);
+}
+@media (prefers-color-scheme:dark){:root:not(.light){
+  --bg:#120b1a; --surface:#1c1426; --surface-2:#251a33; --border:#352544;
+  --text:#efe7f6; --muted:#9a8ea9; --accent:#c15ae8; --accent-weak:#2a1a3a;
+  --brand:#c15ae8; --gold:#fecc00; --orange:#ff7a4d;
+  --ok:#2eb681; --warn:#fc6631; --alert:#f0575c;
+  --sidebar:#0f0916; --side-active:#241633;
+  --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.38);
+}}
+*{box-sizing:border-box}
+html,body{margin:0;height:100%}
+body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;
+  -webkit-font-smoothing:antialiased;display:grid;grid-template-columns:236px 1fr}
+.mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
+
+/* Sidebar */
+aside{background:var(--sidebar);color:var(--side-text);display:flex;flex-direction:column;
+  height:100vh;position:sticky;top:0;padding:20px 0}
+.logo{display:flex;align-items:center;gap:11px;padding:0 20px 20px}
+.mark{width:34px;height:34px;border-radius:9px;background:var(--brand);position:relative;flex:0 0 auto}
+.mark::before,.mark::after{content:"";position:absolute;background:var(--gold);border-radius:2px}
+.mark::before{left:9px;right:9px;top:11px;height:2.5px}
+.mark::after{left:9px;top:17px;width:8px;height:2.5px;box-shadow:8px 0 0 color-mix(in srgb,var(--gold) 60%,transparent)}
+.logo b{font-size:15px;font-weight:650;color:#fff;letter-spacing:-.01em}
+.logo span{display:block;font-size:11px;color:var(--side-muted)}
+nav{flex:1;overflow-y:auto;padding:6px 12px}
+.navgroup{color:var(--side-muted);font-size:10.5px;font-weight:700;letter-spacing:.11em;
+  text-transform:uppercase;padding:16px 10px 6px}
+.navlink{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:var(--side-text);
+  text-decoration:none;font-weight:520;font-size:13.5px;cursor:pointer;transition:background .12s;position:relative}
+.navlink:hover{background:rgba(255,255,255,.05)}
+.navlink.active{background:var(--side-active);color:#fff}
+.navlink.active::before{content:"";position:absolute;left:-12px;top:8px;bottom:8px;width:3px;
+  border-radius:0 3px 3px 0;background:var(--accent)}
+.navlink svg{width:17px;height:17px;flex:0 0 auto;opacity:.85}
+.navlink .badge{margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--side-muted)}
+.navlink .sdot{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--ok)}
+.navlink .sdot.off{background:var(--side-muted)}
+.sidefoot{padding:12px 20px 0;border-top:1px solid rgba(255,255,255,.07);margin-top:8px;
+  color:var(--side-muted);font-size:11px}
+
+/* Topbar + main */
+main{min-width:0;display:flex;flex-direction:column;height:100vh;overflow:hidden}
+.topbar{display:flex;align-items:center;gap:14px;padding:16px 28px;border-bottom:1px solid var(--border);
+  background:var(--surface)}
+.burger{display:flex;align-items:center;justify-content:center;width:34px;height:34px;flex:0 0 auto;
+  border:1px solid var(--border);background:var(--bg);color:var(--text);border-radius:9px;cursor:pointer;padding:0}
+.burger:hover{background:var(--surface-2)} .burger svg{width:18px;height:18px}
+.burger:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.crumb{margin-right:auto}
+.crumb h1{font-size:17px;font-weight:650;margin:0;letter-spacing:-.01em}
+.crumb small{color:var(--muted);font-size:12px}
+.updated{color:var(--muted);font-size:12px;white-space:nowrap}
+.themebtn{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg);
+  color:var(--text);border-radius:999px;padding:6px 12px;font:inherit;font-size:12.5px;font-weight:550;cursor:pointer}
+.themebtn:hover{background:var(--surface-2)}
+.themebtn svg{width:15px;height:15px}
+.view{padding:28px;overflow-y:auto;flex:1}
+.loadbar{height:2px;background:transparent;overflow:hidden;flex:0 0 auto}
+.loadbar.on{background:color-mix(in srgb,var(--accent) 22%,transparent)}
+.loadbar.on::after{content:"";display:block;height:100%;width:40%;background:var(--accent);
+  animation:loadslide 1s ease-in-out infinite}
+@keyframes loadslide{0%{margin-left:-40%}100%{margin-left:100%}}
+
+/* Shared components */
+.grid{display:grid;gap:14px}
+.eyebrow{display:flex;align-items:baseline;gap:10px;margin:0 2px 14px}
+.eyebrow h2{font-size:12px;font-weight:700;letter-spacing:.09em;text-transform:uppercase;color:var(--muted);margin:0}
+.eyebrow .rule{flex:1;height:1px;background:var(--border)}
+section+section{margin-top:32px}
+.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);padding:18px}
+.svc-name{font-weight:650;font-size:15px;letter-spacing:-.01em}
+.svc-sub{color:var(--muted);font-size:12px;margin-top:1px}
+.btn{font:inherit;font-weight:600;font-size:13px;cursor:pointer;border-radius:9px;padding:8px 15px;
+  border:1px solid var(--border);background:var(--surface);color:var(--text);transition:background .15s,transform .05s}
+.btn:hover{background:var(--surface-2)} .btn:active{transform:translateY(1px)}
+.btn.primary{background:var(--accent);border-color:var(--accent);color:#fff}
+.btn.primary:hover{filter:brightness(1.06)}
+.btn:disabled{opacity:.45;cursor:not-allowed}
+.btn:focus-visible{outline:2px solid var(--accent);outline-offset:2px}
+.chips{display:flex;flex-wrap:wrap;gap:6px}
+.chip{font-family:var(--mono);font-size:11.5px;color:var(--muted);background:var(--surface-2);border-radius:7px;padding:3px 8px}
+.chip b{color:var(--text);font-weight:600}
+
+.switch{position:relative;display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);user-select:none}
+.switch input{position:absolute;opacity:0;width:0;height:0}
+.track{width:38px;height:22px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);transition:background .18s;flex:0 0 auto}
+.track::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s}
+.switch input:checked+.track{background:var(--ok);border-color:var(--ok)}
+.switch input:checked+.track::after{transform:translateX(16px)}
+.switch input:focus-visible+.track{outline:2px solid var(--accent);outline-offset:2px}
+.switch input:checked~.lbl{color:var(--ok)}
+
+.meter{margin-top:13px}
+.meter-row{display:flex;justify-content:space-between;align-items:baseline;font-size:12.5px;margin-bottom:5px}
+.meter-row .name{color:var(--muted);font-weight:550}
+.meter-row .val{font-family:var(--mono);font-weight:600}
+.meter-row .val .b{color:var(--muted);font-weight:500}
+.rail{height:7px;border-radius:6px;background:var(--surface-2);position:relative;overflow:hidden}
+.fill{height:100%;border-radius:6px;min-width:2px;transition:width .5s cubic-bezier(.2,.7,.3,1)}
+.fill.green{background:var(--ok)} .fill.yellow{background:var(--orange)} .fill.red{background:var(--alert)}
+.tick{position:absolute;top:-2px;bottom:-2px;width:2px;background:var(--text);opacity:.32;left:100%}
+
+.tiles{grid-template-columns:repeat(auto-fit,minmax(165px,1fr))}
+.recgrid{display:grid;grid-template-columns:repeat(auto-fill,minmax(150px,1fr));gap:12px}
+.recitem{border:1px solid var(--border);border-radius:11px;padding:10px;background:var(--bg);position:relative}
+.recitem.dim{opacity:.5}
+.recpos{position:absolute;top:8px;left:8px;width:22px;height:22px;border-radius:6px;background:var(--accent);
+  color:#fff;font-family:var(--mono);font-size:12px;font-weight:700;display:grid;place-items:center}
+.recimg{width:100%;height:96px;object-fit:contain;border-radius:8px;background:var(--surface-2)}
+.recimg.ph{display:grid;place-items:center;color:var(--muted);font-size:11px}
+.recname{font-size:12.5px;font-weight:550;margin:8px 0 3px;line-height:1.3;
+  display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:32px}
+.recprice{font-family:var(--mono);font-weight:600;font-size:13px}
+.recflag{font-size:11px;margin-top:4px}
+.listrow{display:flex;align-items:center;gap:12px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:13px}
+.listrow:last-child{border-bottom:none}
+.listrow.dim{opacity:.5}
+.lr-name{flex:1;font-weight:550;white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.lr-art{color:var(--muted);font-size:12px;width:80px}
+.lr-price{font-weight:600;width:100px;text-align:right}
+.srcbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;padding:13px 18px;margin-bottom:12px}
+.statbar{display:flex;gap:32px;flex-wrap:wrap;padding:16px 18px;margin-bottom:20px}
+.stat{display:flex;flex-direction:column;gap:2px}
+.stat b{font-family:var(--mono);font-size:22px;font-weight:600;letter-spacing:-.02em}
+.stat span{color:var(--muted);font-size:12px}
+.toolbar{display:flex;align-items:center;justify-content:space-between;gap:12px;flex-wrap:wrap;margin-bottom:6px}
+.seg{display:inline-flex;border:1px solid var(--border);border-radius:9px;overflow:hidden;background:var(--surface)}
+.seg button{font:inherit;font-weight:600;font-size:13px;padding:7px 15px;border:none;border-left:1px solid var(--border);
+  background:none;color:var(--muted);cursor:pointer}
+.seg button:first-child{border-left:none}
+.seg button:hover{color:var(--text)}
+.seg button.active{background:var(--accent);color:#fff}
+.tile{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);padding:16px 18px}
+.tile .l{color:var(--muted);font-size:11.5px;text-transform:uppercase;letter-spacing:.06em;font-weight:600}
+.tile .n{font-family:var(--mono);font-size:26px;font-weight:600;letter-spacing:-.02em;margin:6px 0 2px}
+.tile .s{color:var(--muted);font-size:11.5px;font-family:var(--mono)} .tile .s.stale{color:var(--warn)}
+
+.tablewrap{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);box-shadow:var(--shadow);overflow:auto}
+table{border-collapse:collapse;width:100%;font-size:13px}
+th,td{text-align:left;padding:10px 14px;border-bottom:1px solid var(--border);white-space:nowrap}
+th{color:var(--muted);font-size:11px;text-transform:uppercase;letter-spacing:.06em;font-weight:600;position:sticky;top:0;background:var(--surface)}
+tbody tr:last-child td{border-bottom:none} tbody tr:hover{background:var(--surface-2)}
+td.mono{font-family:var(--mono)}
+.pill{display:inline-block;padding:2px 9px;border-radius:999px;font-size:11.5px;font-weight:600;background:var(--surface-2);color:var(--muted)}
+.pill.clicked,.pill.opened{background:var(--accent-weak);color:var(--accent)}
+.pill.sent,.pill.delivered,.pill.live{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
+.pill.bounced,.pill.unsubscribed,.pill.dev{background:color-mix(in srgb,var(--alert) 14%,transparent);color:var(--alert)}
+.pill.queued{background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--warn)}
+.empty{padding:34px;text-align:center;color:var(--muted)}
+.chart{display:flex;align-items:flex-end;gap:10px;height:210px;padding:6px 2px;border-bottom:1px solid var(--border)}
+.chart.dense{gap:3px}
+.chart.dense .bar-val{display:none}
+.chart.dense .bar{border-radius:3px 3px 0 0}
+.bar-col{flex:1;display:flex;flex-direction:column;align-items:center;justify-content:flex-end;height:100%;min-width:0}
+.bar-val{font-family:var(--mono);font-size:11px;color:var(--muted);margin-bottom:5px;white-space:nowrap}
+.bar{width:100%;max-width:46px;background:var(--accent);border-radius:5px 5px 0 0;min-height:3px;transition:height .4s cubic-bezier(.2,.7,.3,1)}
+.bar.weekend{background:color-mix(in srgb,var(--accent) 55%,var(--muted))}
+.bar-lbl{font-size:12px;color:var(--muted);margin-top:7px}
+.bar-lbl.weekend{color:var(--text);font-weight:600}
+.legend{color:var(--muted);font-size:12px;margin:12px 2px 0}
+.legend b.green{color:var(--ok)}.legend b.yellow{color:var(--warn)}.legend b.red{color:var(--alert)}
+.inp{font:inherit;font-family:var(--mono);width:78px;padding:5px 8px;border:1px solid var(--border);border-radius:8px;background:var(--bg);color:var(--text)}
+.inp.wide{width:260px;font-family:var(--sans)}
+.inp:focus{outline:2px solid var(--accent);outline-offset:1px}
+@media (max-width:520px){.inp.wide{width:150px}}
+.field{display:flex;align-items:center;justify-content:space-between;gap:12px;padding:9px 0;border-bottom:1px solid var(--border)}
+.field:last-child{border-bottom:none} .field .k{color:var(--muted);font-size:13px}
+.tabbar{display:flex;gap:6px;border-bottom:1px solid var(--border);margin-bottom:20px}
+.tab{font:inherit;font-weight:600;font-size:13.5px;color:var(--muted);background:none;border:none;
+  padding:9px 14px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px}
+.tab:hover{color:var(--text)}
+.tab.active{color:var(--accent);border-bottom-color:var(--accent)}
+.filters{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.pager{display:flex;align-items:center;gap:14px;justify-content:flex-end;margin-top:12px}
+.pager .svc-sub{margin:0}
+select.inp{width:auto;font-family:var(--sans)}
+.check{display:flex;gap:10px;align-items:flex-start;padding:9px 0;border-bottom:1px solid var(--border)}
+.check:last-child{border-bottom:none}
+.check .mk{width:18px;height:18px;flex:0 0 auto;border-radius:5px;background:var(--surface-2);color:var(--muted);
+  display:grid;place-items:center;font-size:12px;margin-top:1px}
+.check .mk.on{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.check .t{font-size:13px} .check .t small{display:block;color:var(--muted);font-size:12px}
+
+#toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
+  background:var(--text);color:var(--bg);padding:11px 18px;border-radius:11px;font-weight:600;font-size:13px;
+  box-shadow:var(--shadow);transition:opacity .2s,transform .2s;z-index:20}
+#toast.show{opacity:1;transform:translate(-50%,0)}
+
+/* Свёрнутый сайдбар: только иконки */
+body.nav-collapsed{grid-template-columns:64px 1fr}
+.nav-collapsed aside{padding:20px 0}
+.nav-collapsed .logo{justify-content:center;padding:0 0 16px}
+.nav-collapsed .logo>div{display:none}
+.nav-collapsed nav{padding:6px 8px}
+.nav-collapsed .navgroup{display:none}
+.nav-collapsed .navlink{justify-content:center;padding:10px 0;gap:0}
+.nav-collapsed .navlink>span{display:none}
+.nav-collapsed .navlink .sdot{display:block;position:absolute;top:6px;right:8px;margin:0}
+.nav-collapsed .navlink.active::before{left:-8px}
+.nav-collapsed .sidefoot{display:none}
+@media (max-width:820px){body{grid-template-columns:1fr} aside{display:none}}
+@media (prefers-reduced-motion:reduce){*{transition:none!important;animation:none!important}}
+/* Конструктор шаблонов */
+.pal-lbl{font-size:11px;font-weight:700;letter-spacing:.06em;text-transform:uppercase;color:var(--muted);margin:0 0 8px}
+.tpl-pal{display:grid;grid-template-columns:repeat(auto-fill,minmax(84px,1fr));gap:8px;margin-bottom:16px}
+.tpl-pal button{display:flex;flex-direction:column;align-items:center;gap:7px;border:1px solid var(--border);background:var(--surface);border-radius:11px;padding:13px 6px 10px;font-size:11.5px;font-weight:500;cursor:pointer;color:var(--muted);transition:.13s ease}
+.tpl-pal button:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-weak);transform:translateY(-2px);box-shadow:0 4px 12px rgba(0,0,0,.06)}
+.tpl-pal button svg{color:var(--text);transition:.13s}
+.tpl-pal button:hover svg{color:var(--accent)}
+.blk{border:1px solid var(--border);border-radius:11px;margin-bottom:9px;background:var(--surface);overflow:hidden;transition:box-shadow .13s,border-color .13s}
+.blk.sel{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+.blk.drag{opacity:.45}
+.blk.dragover{border-color:var(--accent);border-style:dashed}
+.blk-h{display:flex;align-items:center;gap:10px;padding:11px 12px;cursor:pointer;user-select:none}
+.blk-h .hd{display:flex;align-items:center;cursor:grab;color:var(--muted);opacity:.5}
+.blk-h .hd:active{cursor:grabbing}
+.blk-h .ic{display:flex;align-items:center;color:var(--accent)}
+.blk-h .nm{font-weight:600;font-size:13.5px;flex:1;color:var(--text)}
+.blk-h .sub{font-size:12px;color:var(--muted);max-width:150px;overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+.blk-a{display:flex;gap:1px;opacity:.55;transition:.12s}
+.blk:hover .blk-a,.blk.sel .blk-a{opacity:1}
+.blk-a button{display:flex;align-items:center;border:0;background:none;cursor:pointer;color:var(--muted);padding:5px;border-radius:7px;line-height:0}
+.blk-a button:hover{background:var(--surface-2);color:var(--text)}
+.blk-a button.del:hover{color:#e5484d}
+.blk-a button:disabled{opacity:.25;cursor:default}
+.blk-body{padding:2px 13px 13px;border-top:1px solid var(--border);background:var(--surface-2)}
+.tf{display:block;margin-top:10px}
+.tf>span{display:block;font-size:12px;color:var(--muted);margin-bottom:4px}
+.tf .inp,.tf textarea.inp{width:100%;box-sizing:border-box}
+.tpl-empty{border:1.5px dashed var(--border);border-radius:10px;padding:26px;text-align:center;color:var(--muted);font-size:13px}
+.rt-tb{display:flex;gap:4px;margin-top:10px;flex-wrap:wrap}
+.rt-tb button{border:1px solid var(--border);background:var(--surface);border-radius:6px;padding:5px 9px;font-size:13px;cursor:pointer;color:var(--text);min-width:30px;line-height:1}
+.rt-tb button:hover{border-color:var(--accent);color:var(--accent)}
+.rt{margin-top:8px;border:1px solid var(--border);border-radius:8px;padding:10px 12px;min-height:64px;background:var(--surface);font-size:14px;line-height:1.5;color:var(--text)}
+.rt:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+.rt a{color:var(--accent)}
+.rt:empty::before{content:attr(data-ph);color:var(--muted)}
+.seg.mini button{padding:5px 9px;display:inline-flex;align-items:center;justify-content:center}
+.srow{display:flex;align-items:center;justify-content:space-between;gap:10px;margin-top:10px}
+.srow>span{font-size:12px;color:var(--muted)}
+.lnk{border:0;background:none;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline;padding:2px}
+.lnk:hover{color:var(--accent)}
+/* Библиотека шаблонов — компактный список */
+.tpl-pill{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-weak);color:var(--accent);font-weight:600}
+.tpl-pill.muted{background:var(--surface-2);color:var(--muted)}
+.tgrp{border:1px solid var(--border);border-radius:12px;overflow:hidden;margin-bottom:14px;background:var(--surface)}
+.tgrp-h{display:flex;justify-content:space-between;align-items:center;gap:12px;padding:10px 16px;background:var(--surface-2);border-bottom:1px solid var(--border)}
+.tgrp-h .ti{display:flex;align-items:center;gap:9px;font-size:13.5px;font-weight:700;color:var(--text)}
+.tgrp-h .n{color:var(--muted);font-weight:500}
+.tgrp-h .add{font-size:13px;font-weight:600;color:var(--accent);background:none;border:0;cursor:pointer;padding:5px 8px;border-radius:7px}
+.tgrp-h .add:hover{background:var(--accent-weak)}
+.trow{display:flex;align-items:center;gap:12px;padding:10px 16px;border-top:1px solid var(--border);cursor:pointer;transition:.1s}
+.trow:first-child{border-top:0}
+.trow:hover{background:var(--surface-2)}
+.trow .st{width:14px;flex:0 0 auto;text-align:center;color:var(--accent);font-size:13px}
+.trow .mn{flex:1;min-width:0}
+.trow .nm{font-weight:600;font-size:13.5px;color:var(--text);white-space:nowrap;overflow:hidden;text-overflow:ellipsis}
+.trow .mt{font-size:12px;color:var(--muted);margin-top:1px}
+.trow .ac{display:flex;gap:6px;flex:0 0 auto;opacity:.4;transition:.1s}
+.trow:hover .ac{opacity:1}
+.trow .ac button{font-size:12px;padding:5px 10px;border-radius:7px;border:1px solid var(--border);background:var(--surface);color:var(--text);cursor:pointer;transition:.1s}
+.trow .ac button:hover{border-color:var(--accent);color:var(--accent)}
+.trow .ac button.danger:hover{border-color:#e5484d;color:#e5484d}
+.trow.def{cursor:default}
+.trow.def:hover{background:transparent}
+.trow.def .mt{font-style:normal}
+/* Авторассылки — карточки сценариев */
+.scen{display:flex;justify-content:space-between;align-items:center;gap:16px;border:1px solid var(--border);border-radius:14px;background:var(--surface);padding:18px 20px;margin-bottom:12px;cursor:pointer;transition:.13s}
+.scen:hover{border-color:var(--accent);box-shadow:0 6px 20px rgba(0,0,0,.06)}
+.scen-name{font-weight:700;font-size:17px;color:var(--text)}
+.scen-what{font-size:14px;color:var(--text);margin-top:7px;line-height:1.45}
+.scen-meta{font-size:13px;color:var(--muted);margin-top:9px}
+.scen-meta b{color:var(--text);font-weight:600}
+.scen-status{font-size:11.5px;font-weight:600;padding:2px 10px;border-radius:20px}
+.scen-status.on{background:rgba(34,170,85,.16);color:#22a555}
+.scen-status.off{background:var(--surface-2);color:var(--muted)}
+.scen-intro{border:0;background:var(--accent-weak);margin-bottom:16px}
+.scen-intro b{color:var(--text)}
+.scen-side{display:flex;align-items:center;gap:16px;flex:0 0 auto}
+.grid2{display:grid;grid-template-columns:1fr 1fr;gap:0 18px}
+@media (max-width:560px){.grid2{grid-template-columns:1fr}.scen{flex-direction:column;align-items:stretch}.scen-side{justify-content:space-between}}
+/* Конструктор сценария — условия */
+.cond{display:flex;gap:12px;align-items:flex-start;padding:13px 0;border-top:1px solid var(--border)}
+.cond:first-child{border-top:0}
+.cond-ic{width:26px;height:26px;flex:0 0 auto;border-radius:8px;display:flex;align-items:center;justify-content:center;font-size:14px;line-height:1;font-weight:700}
+.cond.tune .cond-ic{background:var(--accent-weak);color:var(--accent)}
+.cond.fixed .cond-ic{background:rgba(34,170,85,.16);color:#22a555}
+.cond-t{flex:1;font-size:14px;color:var(--text);line-height:2;display:flex;flex-wrap:wrap;gap:6px;align-items:center}
+.cond.fixed .cond-t{color:var(--muted)}
+.cond-inp{width:74px;padding:5px 8px;border:1px solid var(--border);border-radius:7px;background:var(--surface);color:var(--text);font:inherit;text-align:center}
+.cond-inp:focus{outline:0;border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+</style>
+</head>
+<body>
+<aside>
+  <div class="logo"><div class="mark" aria-hidden="true"></div>
+    <div><b>Триггеры</b><span>groster.me</span></div></div>
+  <nav id="nav"></nav>
+  <div class="sidefoot">Замена LeadHit · v1</div>
+</aside>
+
+<main>
+  <div class="topbar">
+    <button class="burger" id="burger" title="Свернуть меню" aria-label="Свернуть меню">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
+    <div class="crumb"><h1 id="title">—</h1><small id="subtitle"></small></div>
+    <span class="updated" id="updated"></span>
+    <button class="themebtn" id="themebtn" title="Сменить тему"></button>
+  </div>
+  <div class="loadbar" id="loadbar"></div>
+  <div class="view" id="view"></div>
+</main>
+<div id="toast"></div>
+
+<script>
+const $ = id => document.getElementById(id);
+let _pending=0;
+const j = (u,o) => { _pending++; document.getElementById('loadbar').classList.add('on');
+  return fetch(u,o).then(r=>r.json()).finally(()=>{ if(--_pending<=0){_pending=0; document.getElementById('loadbar').classList.remove('on');} }); };
+const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
+const pct = v => v==null ? '—' : (v*100).toFixed(v<0.02?2:1)+'%';
+const rub = v => v==null ? '—' : Math.round(v).toLocaleString('ru-RU')+' ₽';
+const num = v => (+v||0).toLocaleString('ru-RU');
+
+const SVC = {
+  best_offer:{ru:'Best Offer', sub:'плановая рассылка топ-5 по категориям'},
+  cart:{ru:'Брошенная корзина', sub:'событийная, near-real-time'},
+  postsale:{ru:'Постпродажа', sub:'отложенное письмо после заказа'},
+};
+
+const NAV = [
+  {id:'overview', t:'Рабочий стол', icon:'grid'},
+  {g:'Лиды'},
+  {id:'leads', t:'Все лиды', icon:'users'},
+  {g:'Инструменты'},
+  {id:'services', t:'Авторассылки', icon:'list'},
+  {id:'feeds', t:'Товарные рекомендации', icon:'feed'},
+  {id:'templates', t:'Шаблоны писем', icon:'layers'},
+  {g:'Отчёты'},
+  {id:'report', t:'Эффективность', icon:'doc'},
+  {id:'analytics', t:'Аналитика', icon:'chart'},
+  {id:'emails', t:'Журнал писем', icon:'mail'},
+  {g:'Система'},
+  {id:'settings', t:'Настройки', icon:'sliders'},
+  {id:'integration', t:'Интеграция', icon:'plug'},
+];
+const ICON = {
+  grid:'<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',
+  zap:'<path d="M13 2 4 14h7l-1 8 9-12h-7z"/>',
+  cart:'<circle cx="9" cy="20" r="1.5"/><circle cx="18" cy="20" r="1.5"/><path d="M2 3h3l2.5 12h11l2-8H6"/>',
+  gift:'<rect x="3" y="8" width="18" height="4" rx="1"/><path d="M5 12v9h14v-9M12 8v13M12 8S9 2 6.5 4 8 8 12 8zM12 8s3-6 5.5-4S16 8 12 8z"/>',
+  chart:'<path d="M4 20V10M10 20V4M16 20v-7M22 20H2"/>',
+  doc:'<path d="M6 2h9l4 4v16H6zM14 2v5h5"/><path d="M9 13h6M9 17h6"/>',
+  layers:'<path d="m12 2 9 5-9 5-9-5 9-5zM3 12l9 5 9-5M3 17l9 5 9-5"/>',
+  list:'<path d="M8 6h13M8 12h13M8 18h13M3 6h.01M3 12h.01M3 18h.01"/>',
+  users:'<path d="M17 21v-2a4 4 0 0 0-4-4H5a4 4 0 0 0-4 4v2M9 11a4 4 0 1 0 0-8 4 4 0 0 0 0 8zM23 21v-2a4 4 0 0 0-3-3.87M16 3.13a4 4 0 0 1 0 7.75"/>',
+  sliders:'<path d="M4 21v-7M4 10V3M12 21v-9M12 8V3M20 21v-5M20 12V3M1 14h6M9 8h6M17 16h6"/>',
+  feed:'<path d="M4 4h16v6H4zM4 14h16v6H4z"/>',
+  mail:'<rect x="3" y="5" width="18" height="14" rx="2"/><path d="m3 7 9 6 9-6"/>',
+  plug:'<path d="M9 2v6M15 2v6M6 8h12v3a6 6 0 0 1-12 0zM12 17v5"/>',
+};
+
+let cache = {};       // config, kpi, feeds, integration
+let toastT;
+function toast(m){ const t=$('toast'); t.textContent=m; t.classList.add('show');
+  clearTimeout(toastT); toastT=setTimeout(()=>t.classList.remove('show'),2200); }
+
+/* Theme */
+function applyTheme(mode){
+  const root=document.documentElement;
+  root.classList.remove('light','dark');
+  if(mode) root.classList.add(mode);
+  const dark = mode==='dark' || (!mode && matchMedia('(prefers-color-scheme:dark)').matches);
+  $('themebtn').innerHTML = dark
+    ? '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><circle cx="12" cy="12" r="5"/><path d="M12 1v2M12 21v2M4 4l1.5 1.5M18.5 18.5 20 20M1 12h2M21 12h2M4 20l1.5-1.5M18.5 5.5 20 4"/></svg> Светлая'
+    : '<svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2"><path d="M21 12.8A9 9 0 1 1 11.2 3a7 7 0 0 0 9.8 9.8z"/></svg> Тёмная';
+}
+function toggleTheme(){
+  const cur = localStorage.theme || (matchMedia('(prefers-color-scheme:dark)').matches?'dark':'light');
+  const next = cur==='dark'?'light':'dark';
+  localStorage.theme=next; applyTheme(next);
+}
+
+/* Nav */
+function buildNav(){
+  $('nav').innerHTML = NAV.map(n=> n.g
+    ? `<div class="navgroup">${esc(n.g)}</div>`
+    : `<a class="navlink" data-id="${n.id}" href="#/${n.id}" title="${esc(n.t)}">
+         <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="1.8" stroke-linecap="round" stroke-linejoin="round">${ICON[n.icon]}</svg>
+         <span>${esc(n.t)}</span>${n.svc?`<span class="sdot" data-sdot="${n.svc}"></span>`:''}</a>`
+  ).join('');
+}
+function markActive(route){
+  document.querySelectorAll('.navlink').forEach(a=>a.classList.toggle('active', a.dataset.id===route));
+}
+
+/* Data */
+async function loadCore(){
+  const [config,kpi,feeds,integration,meta] = await Promise.all([
+    j('/admin/config'), j('/kpi'), j('/admin/feeds-status'), j('/admin/integration'), j('/admin/scenario-meta')]);
+  cache={config,kpi,feeds,integration,meta};
+  config.forEach(s=>{const d=document.querySelector(`[data-sdot="${s.service}"]`); if(d)d.className='sdot'+(s.enabled?'':' off');});
+  $('updated').textContent='обновлено '+new Date().toLocaleTimeString('ru-RU');
+}
+
+/* Components */
+function meter(name,val,bench,status){
+  const ratio=(val!=null&&bench)?Math.max(0,Math.min(val/bench,1)):0;
+  const cls={green:'green',yellow:'yellow',red:'red'}[status]||'green';
+  return `<div class="meter"><div class="meter-row"><span class="name">${name}</span>
+    <span class="val">${pct(val)} <span class="b">/ ${pct(bench)}</span></span></div>
+    <div class="rail"><div class="fill ${cls}" style="width:${(ratio*100).toFixed(0)}%"></div><div class="tick"></div></div></div>`;
+}
+function kpiCard(svc,d){
+  const m=d.metrics,b=d.benchmark||{},st=d.status||{};
+  return `<div class="card"><div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:14px">
+    <div class="svc-name">${esc(SVC[svc]?.ru||svc)}</div>
+    <div style="display:flex;gap:18px;text-align:right">
+      <div><div class="mono" style="font-size:18px;font-weight:600">${num(m.sent)}</div><div class="svc-sub">отпр.</div></div>
+      <div><div class="mono" style="font-size:18px;font-weight:600">${m.avg_check?rub(m.avg_check):'—'}</div><div class="svc-sub">ср. чек</div></div>
+    </div></div>
+    ${meter('Доставляемость',m.deliverability,b.deliverability,st.deliverability)}
+    ${meter('Open rate',m.open,b.open,st.open)}
+    ${meter('CTR',m.ctr,b.ctr,st.ctr)}
+    ${meter('Конверсия',m.conversion,b.conversion,st.conversion)}</div>`;
+}
+function logDate(iso){ return iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'; }
+function logsTable(rows){
+  if(!rows.length) return '<div class="tablewrap"><div class="empty">Писем пока нет.</div></div>';
+  return `<div class="tablewrap"><table><thead><tr>
+    <th>Отправлено</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Товары</th><th>Заказ</th><th>Доход</th></tr></thead><tbody>`+
+    rows.map(e=>`<tr onclick="location.hash='#/lead/'+encodeURIComponent('${esc(e.user_id)}')" style="cursor:pointer">
+      <td class="mono">${esc(logDate(e.sent_at))}</td><td class="mono">${esc(e.user_id)}</td>
+      <td>${esc(SVC[e.service]?.ru||e.service)}</td><td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
+      <td class="mono">${esc((e.product_ids||[]).join(', '))}</td><td class="mono">${esc(e.attributed_order_id||'—')}</td>
+      <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('')+`</tbody></table></div>`;
+}
+function freshInfo(iso){ if(!iso)return{t:'—',stale:true};
+  const d=new Date(iso),h=(Date.now()-d)/36e5;
+  return{t:d.toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}),stale:h>24}; }
+function feedTiles(f){
+  const p=freshInfo(f.products.last_updated),t=freshInfo(f.top5.last_updated),o=freshInfo(f.orders.last_order);
+  return `<div class="grid tiles">
+    <div class="tile"><div class="l">Каталог</div><div class="n">${num(f.products.count)}</div><div class="s ${p.stale?'stale':''}">обновлён ${esc(p.t)}</div></div>
+    <div class="tile"><div class="l">Топ-5 категорий</div><div class="n">${num(f.top5.categories)}</div><div class="s ${t.stale?'stale':''}">обновлён ${esc(t.t)}</div></div>
+    <div class="tile"><div class="l">Заказы</div><div class="n">${num(f.orders.count)}</div><div class="s">последний ${esc(o.t)}</div></div>
+    <div class="tile"><div class="l">Подписчики</div><div class="n">${num(f.subscribers)}</div><div class="s">в базе</div></div></div>`;
+}
+
+/* Views */
+function setTitle(t,s){ $('title').textContent=t; $('subtitle').textContent=s||''; }
+
+async function viewOverview(){
+  setTitle('Рабочий стол','сводка по всем сервисам');
+  await loadCore();
+  const {config,kpi,feeds}=cache;
+  const on=config.filter(s=>s.enabled).length;
+  const totSent=Object.values(kpi).reduce((a,d)=>a+(+d.metrics.sent||0),0);
+  const revenue=Object.values(kpi).reduce((a,d)=>a+(+d.metrics.revenue||0),0);
+  const [logs,q]=await Promise.all([j('/admin/logs?limit=8'),j('/admin/queue')]);
+  const qrows=q.by_service.map(r=>`<tr><td>${esc(SVC[r.service]?.ru||r.service)}</td>
+    <td class="mono">${num(r.scheduled)}</td><td class="mono">${num(r.queued)}</td>
+    <td class="mono">${num(r.sent)}</td><td class="mono">${num(r.cancelled)}</td></tr>`).join('');
+  $('view').innerHTML=`
+    <section><div class="grid tiles">
+      <div class="tile"><div class="l">Активные сервисы</div><div class="n">${on}/${config.length}</div><div class="s">из ${config.length} сценариев</div></div>
+      <div class="tile"><div class="l">Отправлено писем</div><div class="n">${num(totSent)}</div><div class="s">за всё время</div></div>
+      <div class="tile"><div class="l">Привязанный доход</div><div class="n">${rub(revenue)}</div><div class="s">атрибуция кликов</div></div>
+      <div class="tile"><div class="l">В очереди</div><div class="n">${num(q.pending_total)}</div><div class="s">ждут отправки</div></div>
+    </div></section>
+    <section><div class="eyebrow"><h2>Актуальность фидов</h2><span class="rule"></span></div>${feedTiles(feeds)}</section>
+    <section><div class="eyebrow"><h2>Очередь отправки</h2><span class="rule"></span></div>
+      <div class="tablewrap"><table><thead><tr><th>Сервис</th><th>Ждёт</th><th>В очереди</th><th>Отправлено</th><th>Отменено</th></tr></thead>
+      <tbody>${qrows||'<tr><td colspan=5 class="empty">Очередь пуста.</td></tr>'}</tbody></table></div></section>
+    <section><div class="eyebrow"><h2>Последние письма</h2><span class="rule"></span></div>${logsTable(logs)}</section>`;
+}
+
+const dt = iso => iso ? new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}) : '—';
+const SCEN_WHAT={
+  best_offer:'Раз в заданный период сама отправляет клиенту подборку популярных товаров из его категорий.',
+  cart:'Если клиент положил товары в корзину, но ушёл не оформив заказ — присылает письмо-напоминание с этими товарами.',
+  postsale:'Через несколько дней после заказа предлагает клиенту сопутствующие товары к купленному.',
+};
+async function viewServices(){
+  setTitle('Авторассылки','автоматические письма клиентам');
+  let list, tdata={services:[]};
+  try{ [list,tdata]=await Promise.all([j('/admin/services-summary'), j('/admin/templates')]); }
+  catch(e){ $('view').innerHTML='<section><div class="card empty">Не удалось загрузить рассылки — проверьте, что сервер запущен, и обновите страницу.</div></section>'; return; }
+  if(!Array.isArray(list)||!list.length){ $('view').innerHTML='<section><div class="card empty">Рассылки не найдены. Примените схему БД (service_config).</div></section>'; return; }
+  const tmap={}; (tdata.services||[]).forEach(s=>{ const a=(s.templates||[]).find(t=>t.is_active); tmap[s.service]=a?a.name:'Стандартный шаблон'; });
+  const cards=list.map(s=>{
+    const ru=SVC[s.service]?.ru||s.service;
+    return `<div class="scen" onclick="location.hash='#/service/${esc(s.service)}'">
+      <div style="flex:1;min-width:0">
+        <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+          <span class="scen-name">${esc(ru)}</span>
+          <span class="scen-status ${s.enabled?'on':'off'}">${s.enabled?'Работает':'Выключена'}</span></div>
+        <div class="scen-what">${esc(SCEN_WHAT[s.service]||SVC[s.service]?.sub||'')}</div>
+        <div class="scen-meta">Отправлено писем: <b>${num(s.sent)}</b> · шаблон: <b>${esc(tmap[s.service]||'—')}</b></div>
+      </div>
+      <div class="scen-side" onclick="event.stopPropagation()">
+        <label class="switch" title="Включить / выключить рассылку"><input type="checkbox" ${s.enabled?'checked':''} onchange="toggle('${esc(s.service)}',this.checked);viewServices()">
+          <span class="track"></span></label>
+        <a class="btn primary" href="#/service/${esc(s.service)}">Настроить</a>
+      </div></div>`;
+  }).join('');
+  $('view').innerHTML=`<section style="max-width:840px">
+    <div class="card scen-intro">
+      <div style="font-weight:600;color:var(--text)">Как это работает</div>
+      <div class="svc-sub" style="margin-top:4px">Ниже — три письма, которые уходят клиентам <b>автоматически</b>, когда наступает нужное событие. Тумблером включаете нужное, кнопкой «Настроить» — меняете письмо и условия отправки.</div>
+    </div>
+    ${cards}</section>`;
+}
+
+function fieldRow(svc,k,v,fm){
+  const m=fm[k]||{type:'number',label:k};
+  const label=esc(m.label||k);
+  if(m.type==='text')
+    return `<div class="field"><span class="k">${label}</span>
+      <input class="inp wide" type="text" value="${esc(v)}" onchange="saveParam('${svc}','${k}',this.value,'text')"></div>`;
+  if(m.type==='template')
+    return `<div class="field"><span class="k">${label}</span>
+      <select class="inp" onchange="saveParam('${svc}','${k}',this.value,'text')">
+        ${['default','minimal'].map(t=>`<option value="${t}" ${v===t?'selected':''}>${t}</option>`).join('')}</select></div>`;
+  return `<div class="field"><span class="k">${label}</span>
+    <input class="inp" type="number" value="${esc(v)}" onchange="saveParam('${svc}','${k}',this.value,'number')"></div>`;
+}
+async function scenActivate(svc,id){ const r=await j('/admin/template/'+id+'/activate',{method:'POST'}); if(r&&r.ok){ toast('Шаблон активирован'); viewService(svc); } else toast('Ошибка'); }
+async function scenNewTemplate(svc){ const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:svc})}); if(r&&r.ok&&r.id){ toast('Шаблон создан'); location.hash='#/templates/'+r.id; } else toast('Ошибка создания'); }
+function svcSetTab(svc,t){ svcTab=t; viewService(svc); }
+async function viewService(svc){
+  const meta=SVC[svc]; if(!meta){ $('view').innerHTML='<div class="empty">Неизвестный сервис.</div>'; return; }
+  setTitle(meta.ru, meta.sub);
+  await loadCore();
+  const cfg=cache.config.find(s=>s.service===svc)||{enabled:false,params:{}};
+  const fm=cache.meta.field_meta, aud=cache.meta.audience[svc]||[];
+  let tdata={services:[]};
+  try{ tdata=await j('/admin/templates'); }catch(e){}
+  const templates=((tdata.services||[]).find(s=>s.service===svc)||{}).templates||[], active=templates.find(t=>t.is_active);
+  const keys=Object.keys(cfg.params).filter(k=>k!=='template');
+  const senderFields=keys.filter(k=>(fm[k]||{}).group==='sender').map(k=>fieldRow(svc,k,cfg.params[k],fm)).join('');
+  const timingKeys=keys.filter(k=>(fm[k]||{}).group==='timing');
+  const tplSelect=templates.length>1?`<div class="field" style="margin-top:12px"><span class="k">Активный шаблон</span>
+      <select class="inp" onchange="scenActivate('${svc}',this.value)">
+        ${templates.map(t=>`<option value="${t.id}" ${t.is_active?'selected':''}>${esc(t.name)}${t.is_active?' · активный':''}</option>`).join('')}</select></div>`:'';
+  const templatePanel=`<div class="card"><div style="display:flex;gap:18px;flex-wrap:wrap;align-items:center">
+      <iframe title="Предпросмотр" sandbox="" style="width:220px;max-width:100%;height:280px;border:1px solid var(--border);background:#fff;border-radius:10px" src="/admin/template/preview?service=${esc(svc)}"></iframe>
+      <div style="flex:1;min-width:220px">
+        ${active
+          ? `<div class="svc-sub">Активный шаблон</div><div style="font-weight:700;font-size:16px;margin:2px 0;color:var(--accent)">★ ${esc(active.name)}</div>`
+          : `<div style="font-weight:700;font-size:16px;margin:2px 0">Стандартный шаблон <span class="tpl-pill muted">по умолчанию</span></div>`}
+        ${tplSelect}
+        <div style="display:flex;gap:8px;flex-wrap:wrap;margin-top:14px">
+          ${active?`<button class="btn primary" onclick="location.hash='#/templates/${active.id}'">Редактировать</button>`:''}
+          <button class="btn" onclick="scenNewTemplate('${svc}')">+ Новый</button>
+          <a class="btn" href="#/templates">Все шаблоны</a>
+        </div>
+      </div></div></div>`;
+  // Конструктор сценария: триггер + условия (фиксированные ✓ и настраиваемые ⚙)
+  const fixedConds=aud.map(a=>`<div class="cond fixed"><div class="cond-ic">✓</div><div class="cond-t">${esc(a)}</div></div>`).join('');
+  const tuneConds=timingKeys.map(k=>condRow(svc,k,cfg.params[k],fm)).join('');
+  const scenarioPanel=`<div class="card">
+      <div class="svc-sub">Когда срабатывает</div>
+      <div style="font-size:14.5px;color:var(--text);line-height:1.55;margin-top:4px">${esc(TRIGGER_DESC[svc]||meta.sub)}</div></div>
+    <div class="eyebrow" style="margin-top:20px"><h2>Условия и пороги</h2><span class="rule"></span></div>
+    <div class="card">${tuneConds}${fixedConds}
+      <div class="svc-sub" style="margin-top:14px;display:flex;gap:16px;flex-wrap:wrap">
+        <span><span style="color:var(--accent);font-weight:700">⚙</span> настраиваемые — правьте прямо в поле</span>
+        <span><span style="color:#22a555;font-weight:700">✓</span> фиксированы по ТЗ (без ML и трекинга)</span></div></div>
+    <div class="card" style="margin-top:16px;display:flex;align-items:center;justify-content:space-between;gap:14px;flex-wrap:wrap">
+      <div><div class="svc-sub">Охват при текущих порогах</div>
+        <div style="font-size:15px;color:var(--text);margin-top:2px">Сейчас подходит <b id="reachN" style="font-size:20px;color:var(--accent)">…</b> получателей</div></div>
+      <button class="btn" onclick="loadReach('${svc}')">Пересчитать</button></div>`;
+  const messagePanel=`${templatePanel}
+    <div class="eyebrow" style="margin-top:20px"><h2>Тема и отправитель</h2><span class="rule"></span></div>
+    <div class="card"><div class="grid2">${senderFields||'<div class="svc-sub">—</div>'}</div></div>`;
+  const testPanel=`<div class="card">
+      <div style="display:flex;gap:8px;flex-wrap:wrap;align-items:center">
+        <input id="testEmail" class="inp" type="email" placeholder="email для теста" style="flex:1;min-width:200px">
+        <button class="btn primary" onclick="sendTest('${esc(svc)}')">Отправить тест</button>
+        <span class="svc-sub">Охват сейчас: <b id="reachN" class="mono">…</b></span>
+      </div>
+      <div class="svc-sub" style="margin-top:8px">Придёт реальное письмо с активным шаблоном. Метрики — в разделе «Эффективность».</div></div>`;
+  const tab=(v,l)=>`<button class="${svcTab===v?'active':''}" onclick="svcSetTab('${svc}','${v}')">${l}</button>`;
+  const content = svcTab==='message'?messagePanel : svcTab==='test'?testPanel : scenarioPanel;
+  $('view').innerHTML=`<section style="max-width:860px">
+    <div style="margin-bottom:14px"><a class="btn" href="#/services">← Авторассылки</a></div>
+    <div class="card" style="display:flex;justify-content:space-between;align-items:center;gap:12px;flex-wrap:wrap">
+      <div><div class="svc-name">${esc(meta.ru)}</div><div class="svc-sub">${esc(meta.sub)}</div></div>
+      <div style="display:flex;gap:12px;align-items:center">
+        <label class="switch"><input type="checkbox" ${cfg.enabled?'checked':''} onchange="toggle('${svc}',this.checked)">
+          <span class="track"></span><span class="lbl">${cfg.enabled?'активен':'остановлен'}</span></label>
+        <button class="btn primary" onclick="run('${svc}')">Запустить сейчас</button>
+      </div></div>
+    <div class="seg" style="margin:18px 0 16px">${tab('scenario','Условия')}${tab('message','Письмо')}${tab('test','Тест')}</div>
+    ${content}</section>`;
+  loadReach(svc);
+}
+async function loadReach(svc){
+  try{ const r=await j('/admin/scenario/'+encodeURIComponent(svc)+'/reach');
+    const el=$('reachN'); if(el) el.textContent = r.reach==null?'—':num(r.reach);
+  }catch(e){ const el=$('reachN'); if(el) el.textContent='—'; }
+}
+async function sendTest(svc){
+  const email=($('testEmail')||{}).value||'';
+  if(!email){ toast('Укажите email'); return; }
+  const r=await j('/admin/scenario/'+encodeURIComponent(svc)+'/test',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
+  toast(!r.ok?'Ошибка отправки':(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)'));
+}
+
+const DOW=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
+const METRICS={
+  sent:{label:'Отправлено', fmt:num, val:d=>d.sent},
+  open:{label:'Open rate', fmt:pct, val:d=>d.delivered?d.opened/d.delivered:0},
+  ctr:{label:'CTR', fmt:pct, val:d=>d.delivered?d.clicked/d.delivered:0},
+  conversion:{label:'Конверсия', fmt:pct, val:d=>d.delivered?d.orders/d.delivered:0},
+  revenue:{label:'Доход', fmt:rub, val:d=>d.revenue},
+};
+const HOURS=Array.from({length:24},(_,h)=>String(h));
+let trend={service:'', metric:'sent', dim:'weekday'};
+async function renderTrend(){
+  const isHour=trend.dim==='hour';
+  const url=(isHour?'/admin/trends/hour':'/admin/trends/weekday')+(trend.service?('?service='+encodeURIComponent(trend.service)):'');
+  const data=await j(url);
+  const labels=isHour?HOURS:DOW;
+  const lbl=i=>isHour?labels[i]+':00':DOW[i];
+  const M=METRICS[trend.metric];
+  const vals=data.map(M.val);
+  const max=Math.max(...vals,0);
+  const bars=data.map((d,i)=>{
+    const v=vals[i], h=max>0?Math.round(v/max*100):0, wk=(!isHour&&i>=5)?' weekend':'';
+    const tip=`${lbl(i)}: отпр ${num(d.sent)}, откр ${num(d.opened)}, клик ${num(d.clicked)}, заказы ${num(d.orders)}, доход ${rub(d.revenue)}`;
+    return `<div class="bar-col" title="${esc(tip)}">
+      <div class="bar-val">${v?M.fmt(v):''}</div>
+      <div class="bar${wk}" style="height:${h}%"></div>
+      <div class="bar-lbl${wk}"${isHour?' style="font-size:10px"':''}>${labels[i]}</div></div>`;
+  }).join('');
+  const rows=data.map((d,i)=>`<tr><td class="bar-lbl${(!isHour&&i>=5)?' weekend':''}" style="margin:0">${lbl(i)}</td>
+    <td class="mono">${num(d.sent)}</td><td class="mono">${num(d.delivered)}</td>
+    <td class="mono">${d.delivered?pct(d.opened/d.delivered):'—'}</td>
+    <td class="mono">${d.delivered?pct(d.clicked/d.delivered):'—'}</td>
+    <td class="mono">${d.delivered?pct(d.orders/d.delivered):'—'}</td>
+    <td class="mono">${d.revenue?rub(d.revenue):'—'}</td></tr>`).join('');
+  $('trendbox').innerHTML=`
+    <div class="card"><div class="chart${isHour?' dense':''}">${bars}</div></div>
+    <div class="tablewrap" style="margin-top:14px"><table><thead><tr>
+      <th>${isHour?'Час':'День'}</th><th>Отправлено</th><th>Доставлено</th><th>Open</th><th>CTR</th><th>Конверсия</th><th>Доход</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`;
+}
+async function viewAnalytics(){
+  setTitle('Аналитика','показатели и тренды');
+  await loadCore();
+  const svcs=Object.entries(cache.kpi);
+  const kpiBlock=svcs.length?`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${svcs.map(([s,d])=>kpiCard(s,d)).join('')}</div>
+    <p class="legend">Заполнение датчика — доля от бенчмарка, метка — уровень LeadHit. Цвет = просадка: <b class="green">норма</b> · <b class="yellow">&gt;20%</b> · <b class="red">&gt;30%</b>.</p>`
+    :'<div class="card empty">Пока нет данных для сравнения.</div>';
+  const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
+  $('view').innerHTML=`
+    <section><div class="eyebrow"><h2>Показатели vs бенчмарк LeadHit</h2><span class="rule"></span></div>${kpiBlock}</section>
+    <section><div class="eyebrow"><h2>Тренды отправок</h2><span class="rule"></span></div>
+      <div class="filters">
+        <select class="inp" onchange="trend.dim=this.value;renderTrend()">
+          ${opt('weekday','Дни недели',trend.dim)}${opt('hour','Часы',trend.dim)}</select>
+        <select class="inp" onchange="trend.service=this.value;renderTrend()">
+          ${opt('','Все сценарии',trend.service)}${opt('best_offer','Best Offer',trend.service)}${opt('cart','Корзина',trend.service)}${opt('postsale','Постпродажа',trend.service)}</select>
+        <select class="inp" onchange="trend.metric=this.value;renderTrend()">
+          ${Object.entries(METRICS).map(([k,m])=>opt(k,m.label,trend.metric)).join('')}</select>
+      </div>
+      <div id="trendbox"></div>
+      <p class="legend">Метрики сгруппированы по времени отправки письма (зона сервера). Часы помогают выбрать «час отправки» в настройках сценария.</p></section>`;
+  renderTrend();
+}
+
+function priceRu(v){ return v==null?'—':v.toLocaleString('ru-RU',{minimumFractionDigits:(v%1?2:0),maximumFractionDigits:2})+' ₽'; }
+let recCat='', recView='cards', recProblems=false;
+function setRecView(v){ recView=v; viewFeeds(); }
+function recStatusPill(pr){
+  if(!pr.exists) return '<span class="pill unsubscribed">нет в каталоге</span>';
+  if(!pr.in_stock) return '<span class="pill queued">нет в наличии</span>';
+  return '<span class="pill sent">в наличии</span>';
+}
+async function viewFeeds(){
+  setTitle('Товарные рекомендации','топ-5 по категориям из 1С — что идёт в письма');
+  await loadCore();
+  const [rec] = await Promise.all([j('/admin/recommendations')]);
+  const oc=cache.integration.onec_configured;
+  const p=(iso)=>{const f=freshInfo(iso);return f;};
+  const cat=p(cache.feeds.top5.last_updated);
+  const opt=(v,l,c)=>`<option value="${v}" ${c===v?'selected':''}>${l}</option>`;
+  let cats=recCat?rec.categories.filter(c=>c.category_id===recCat):rec.categories;
+  // Фильтр «только проблемные»: оставляем позиции, которые не попадут в письмо.
+  if(recProblems) cats=cats.map(c=>({...c, products:c.products.filter(p=>!p.usable)})).filter(c=>c.products.length);
+  const empty = !cats.length;
+
+  const catCards = cats.map(c=>{
+    const items=c.products.map(pr=>{
+      const dim = pr.usable ? '' : ' dim';
+      const img = pr.image_url
+        ? `<img class="recimg" src="${esc(pr.image_url)}" alt="">`
+        : `<div class="recimg ph">нет фото</div>`;
+      const flag = !pr.exists ? '<div class="recflag" style="color:var(--alert)">нет в каталоге</div>'
+        : !pr.in_stock ? '<div class="recflag" style="color:var(--warn)">нет в наличии</div>'
+        : '<div class="recflag" style="color:var(--ok)">в наличии</div>';
+      return `<div class="recitem${dim}">
+        <div class="recpos">${pr.position}</div>${img}
+        <div class="recname" title="${esc(pr.name||pr.product_id)}">${esc(pr.name||('id '+pr.product_id))}</div>
+        <div class="recprice">${priceRu(pr.price)}</div>${flag}</div>`;
+    }).join('');
+    const usable=c.products.filter(x=>x.usable).length;
+    return `<section><div class="eyebrow">
+        <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${usable}/${c.products.length} в письмах</span></h2>
+        <span class="rule"></span></div>
+      <div class="recgrid">${items}</div></section>`;
+  }).join('');
+
+  // Таблица: плоский список позиций.
+  const trows=cats.flatMap(c=>c.products.map(pr=>`<tr class="${pr.usable?'':'dim'}">
+    <td>${esc(c.category_name)}</td>
+    <td class="mono">${pr.position}</td>
+    <td>${esc(pr.name||('id '+pr.product_id))}</td>
+    <td class="mono">${esc(pr.product_id)}</td>
+    <td class="mono">${priceRu(pr.price)}</td>
+    <td>${recStatusPill(pr)}</td></tr>`)).join('');
+  const recTable=`<section><div class="tablewrap"><table><thead><tr>
+      <th>Категория</th><th>№</th><th>Товар</th><th>Артикул</th><th>Цена</th><th>Статус</th>
+    </tr></thead><tbody>${trows}</tbody></table></div></section>`;
+
+  // Компактный список: плотные строки, категория заголовком.
+  const recList=cats.map(c=>`<section><div class="eyebrow"><h2>${esc(c.category_name)}</h2><span class="rule"></span></div>
+    <div class="card" style="padding:6px 0">${c.products.map(pr=>`<div class="listrow${pr.usable?'':' dim'}">
+      <span class="recpos" style="position:static">${pr.position}</span>
+      <span class="lr-name">${esc(pr.name||('id '+pr.product_id))}</span>
+      <span class="lr-art mono">${esc(pr.product_id)}</span>
+      <span class="lr-price mono">${priceRu(pr.price)}</span>
+      ${recStatusPill(pr)}</div>`).join('')}</div></section>`).join('');
+
+  const seg=(v,l)=>`<button class="${recView===v?'active':''}" onclick="setRecView('${v}')">${l}</button>`;
+  const catOpts=`${opt('','Все категории',recCat)}${rec.categories.map(c=>opt(c.category_id,c.category_name,recCat)).join('')}`;
+  $('view').innerHTML=`<section>
+    <div class="card srcbar">
+      <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
+        <span class="pill ${oc?'live':'dev'}">${oc?'Источник: 1С':'Источник: push-фиды'}</span>
+        <span class="svc-sub">${oc?esc(cache.integration.onec_base_url||''):'1С не подключена'} · топ-5 обновлён ${esc(cat.t)}${cat.stale?' · <b style="color:var(--warn)">устарел &gt;24ч</b>':''}</span>
+      </div>
+      <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
+    </div>
+    <div class="card statbar">
+      <div class="stat"><b>${num(rec.category_count)}</b><span>категорий с топ-5</span></div>
+      <div class="stat"><b>${num(rec.position_count)}</b><span>позиций в топе</span></div>
+      <div class="stat"><b style="color:${rec.usable_count===rec.position_count?'var(--ok)':'var(--warn)'}">${num(rec.usable_count)}</b><span>пойдёт в письма</span></div>
+      <div class="stat"><b>${num(cache.feeds.products.count)}</b><span>товаров в каталоге</span></div>
+    </div>
+    <div class="toolbar">
+      <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+        <select class="inp" onchange="recCat=this.value;viewFeeds()">${catOpts}</select>
+        <label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
+          <span class="track"></span><span class="lbl">только проблемные</span></label>
+      </div>
+      <div class="seg">${seg('cards','Карточки')}${seg('table','Таблица')}${seg('list','Список')}</div>
+    </div>
+    <p class="legend" style="margin:0 2px 4px">Топ-5 из 1С используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции в письмо не попадут.</p>
+  </section>
+  ${!rec.category_count?'<section><div class="tablewrap"><div class="empty">Топ-5 не заданы. Заполните фид на стороне 1С/заказчика и синхронизируйте.</div></div></section>'
+    : empty?'<section><div class="tablewrap"><div class="empty">'+(recProblems?'Проблемных позиций нет — весь топ-5 в наличии. ✓':'Нет позиций.')+'</div></div></section>'
+    : recView==='table'?recTable : recView==='list'?recList : catCards}`;
+}
+async function syncCatalog(){
+  const r=await j('/admin/sync-catalog',{method:'POST'});
+  toast(r.ok?`Каталог: синхронизировано ${r.synced}`:`1С: ${r.reason||'ошибка'}`);
+  if(r.ok)viewFeeds();
+}
+
+function pager(page,hasMore,fn){
+  return `<div class="pager">
+    <button class="btn" ${page<=0?'disabled':''} onclick="${fn}(${page-1})">← Назад</button>
+    <span class="svc-sub">стр. ${page+1}</span>
+    <button class="btn" ${hasMore?'':'disabled'} onclick="${fn}(${page+1})">Вперёд →</button></div>`;
+}
+let logFilter={service:'',status:'',limit:50,page:0};
+function emailsPage(p){ logFilter.page=Math.max(0,p); viewEmails(); }
+async function viewEmails(){
+  setTitle('Журнал писем','полный лог отправок');
+  const lim=+logFilter.limit;
+  const q=new URLSearchParams(); if(logFilter.service)q.set('service',logFilter.service);
+  if(logFilter.status)q.set('status',logFilter.status); q.set('limit',lim); q.set('offset',logFilter.page*lim);
+  const logs=await j('/admin/logs?'+q);
+  const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
+  const reset='logFilter.page=0;';
+  $('view').innerHTML=`<section>
+    <div class="filters">
+      <select class="inp" onchange="${reset}logFilter.service=this.value;viewEmails()">
+        ${opt('','Все сервисы',logFilter.service)}${opt('best_offer','Best Offer',logFilter.service)}${opt('cart','Корзина',logFilter.service)}${opt('postsale','Постпродажа',logFilter.service)}</select>
+      <select class="inp" onchange="${reset}logFilter.status=this.value;viewEmails()">
+        ${['','sent','delivered','opened','clicked','bounced','unsubscribed'].map(s=>opt(s,s||'Все статусы',logFilter.status)).join('')}</select>
+      <select class="inp" onchange="${reset}logFilter.limit=this.value;viewEmails()">
+        ${[50,100,200].map(n=>opt(n,n+' на странице',+logFilter.limit)).join('')}</select>
+    </div>${logs.length?logsTable(logs)+pager(logFilter.page,logs.length>=lim,'emailsPage'):(logFilter.page>0?'<div class="tablewrap"><div class="empty">Больше писем нет.</div></div>'+pager(logFilter.page,false,'emailsPage'):emptyEmails())}</section>`;
+}
+function emptyEmails(){
+  return `<div class="tablewrap"><div class="empty">Писем пока нет.<br>
+    <a href="#/services" style="color:var(--accent);font-weight:600">Запустите сценарий</a>, чтобы появились отправки.</div></div>`;
+}
+
+async function viewIntegration(){
+  setTitle('Интеграция','отправка писем и домен');
+  await loadCore();
+  const g=cache.integration;
+  const check=(on,t,s)=>`<div class="check"><div class="mk ${on?'on':''}">${on?'✓':'!'}</div><div class="t">${t}<small>${s}</small></div></div>`;
+  $('view').innerHTML=`<section><div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
+        <div class="svc-name">Отправка</div>
+        <span class="pill ${g.live?'live':'dev'}">${g.live?'боевой ESP':'dev-лог'}</span></div>
+      <div class="field"><span class="k">Режим</span><span class="mono">${esc(g.mailer)}</span></div>
+      <div class="field"><span class="k">Отправитель</span><span class="mono">${esc(g.mail_from)}</span></div>
+      <div class="field"><span class="k">SMTP-хост</span><span class="mono">${esc(g.smtp_host||'не задан')}</span></div>
+      <div class="field"><span class="k">Окно атрибуции</span><span class="mono">${+g.attribution_window_hours} ч</span></div>
+      ${g.live?'':'<div class="svc-sub" style="margin-top:10px">Заполните SMTP-креды в .env — переключится на боевую отправку без изменения кода.</div>'}
+    </div>
+    <div class="card">
+      <div class="svc-name" style="margin-bottom:8px">Готовность к проду</div>
+      ${check(g.live,'Боевой ESP подключён','SMTP-relay вместо dev-лога')}
+      ${check(!!g.smtp_host,'SMTP-хост задан',esc(g.smtp_host||'—'))}
+      ${check(g.onec_configured,'1С подключена (pull)',esc(g.onec_base_url||'ONEC_BASE_URL не задан'))}
+      ${check(false,'DKIM / SPF / DMARC','настроить на домене отправки')}
+      ${check(false,'Прогрев домена','постепенный рост объёма, 3–4 недели')}
+      ${check(false,'Согласие 152-ФЗ','чекбокс при регистрации/заказе')}
+    </div></div></section>`;
+}
+
+/* Report */
+let rep={from:'',to:'',service:''};
+function repQuery(){ const q=new URLSearchParams();
+  if(rep.from)q.set('from_',rep.from); if(rep.to)q.set('to',rep.to); if(rep.service)q.set('service',rep.service);
+  return q.toString(); }
+async function viewReport(){
+  setTitle('Эффективность','заказы, принесённые рассылками');
+  const data=await j('/admin/report/efficiency?'+repQuery());
+  const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
+  const rows=data.orders.map(o=>`<tr>
+    <td class="mono">${esc(o.order_id)}</td><td class="mono">${esc(o.email||'—')}</td>
+    <td>${esc(SVC[o.service]?.ru||o.service)}</td>
+    <td class="mono">${esc(new Date(o.order_date).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric'}))}</td>
+    <td class="mono">${rub(o.revenue)}</td></tr>`).join('');
+  $('view').innerHTML=`<section>
+    <div class="filters">
+      <label class="k" style="align-self:center">Период</label>
+      <input class="inp wide" type="date" value="${rep.from}" onchange="rep.from=this.value;viewReport()" style="width:150px">
+      <input class="inp wide" type="date" value="${rep.to}" onchange="rep.to=this.value;viewReport()" style="width:150px">
+      <select class="inp" onchange="rep.service=this.value;viewReport()">
+        ${opt('','Все сценарии',rep.service)}${opt('best_offer','Best Offer',rep.service)}${opt('cart','Корзина',rep.service)}${opt('postsale','Постпродажа',rep.service)}</select>
+      <a class="btn" href="/admin/report/efficiency.csv?${repQuery()}">Скачать CSV</a>
+    </div>
+    <div class="card" style="display:flex;gap:40px;margin-bottom:14px">
+      <div><div class="mono" style="font-size:26px;font-weight:600">${num(data.count)}</div><div class="svc-sub">заказов</div></div>
+      <div><div class="mono" style="font-size:26px;font-weight:600">${rub(data.total_revenue)}</div><div class="svc-sub">итого дохода</div></div>
+    </div>
+    ${data.count?`<div class="tablewrap"><table><thead><tr>
+      <th>Заказ</th><th>Email</th><th>Сценарий</th><th>Дата</th><th>Сумма</th></tr></thead>
+      <tbody>${rows}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Нет атрибутированных заказов за период.</div></div>'}
+  </section>`;
+}
+
+/* ── Шаблоны писем: конструктор блоков + оформление ── */
+let tplView='list', tplTab='builder', tplSvc='best_offer', tplDevice='desktop', tplLook=null;
+let tplId=null, tplBlocks=null, tplIsActive=false, tplName='', tplSel=-1, tplDirty=false, tplDrag=-1;
+let tplListTab='best_offer', tplListData=null, tplPreviewOn=true, svcTab='scenario';
+const TRIGGER_DESC={
+  best_offer:'Плановая рассылка: раз в заданный интервал подбирает топ-5 товаров по категории получателя и отправляет письмо.',
+  cart:'Событийный триггер: срабатывает, когда посетитель ушёл с непустой корзиной и не оформил заказ.',
+  postsale:'Отложенное письмо через N дней после заказа — с кросс-селл подборкой к купленному.',
+};
+const COND_TXT={
+  interval_days:['Слать не чаще, чем раз в','дней'],
+  after_purchase_days:['После покупки — через','дней (перебивает основной таймер)'],
+  send_hour:['Отправлять планово в','часов'],
+  max_per_day:['Не более','писем в день (0 — без лимита)'],
+  cooldown_hours:['Одному получателю не чаще, чем раз в','часов'],
+  depart_timeout_sec:['Считать уходом из корзины','секунд без активности'],
+  grace_sec:['Ждать перед отправкой','секунд (вдруг вернётся)'],
+  delay_days:['Отправить через','дней после заказа'],
+};
+function condRow(svc,key,v,fm){
+  const t=COND_TXT[key];
+  const inp=`<input class="cond-inp" type="number" value="${esc(v)}" onchange="condChange('${svc}','${key}',this.value)">`;
+  const body=t?`${t[0]} ${inp} ${t[1]}`:`${esc(fm[key]?.label||key)}: ${inp}`;
+  return `<div class="cond tune"><div class="cond-ic">⚙</div><div class="cond-t">${body}</div></div>`;
+}
+async function condChange(svc,key,val){
+  await saveParam(svc,key,val,'number');
+  const c=(cache.config||[]).find(s=>s.service===svc); if(c) c.params[key]=+val;
+  loadReach(svc);
+}
+
+function ic(inner,sz){return `<svg viewBox="0 0 24 24" width="${sz||18}" height="${sz||18}" fill="none" stroke="currentColor" stroke-width="1.7" stroke-linecap="round" stroke-linejoin="round">${inner}</svg>`;}
+const BICON={
+  heading:'<path d="M6 5v14M18 5v14M6 12h12"/>',
+  text:'<path d="M5 7h14M5 12h14M5 17h9"/>',
+  products:'<rect x="3.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="3.5" width="7" height="7" rx="1.6"/><rect x="3.5" y="13.5" width="7" height="7" rx="1.6"/><rect x="13.5" y="13.5" width="7" height="7" rx="1.6"/>',
+  button:'<rect x="3" y="8" width="18" height="8" rx="4"/><path d="M8.5 12h7"/>',
+  image:'<rect x="3" y="4" width="18" height="16" rx="2.2"/><circle cx="8.5" cy="9" r="1.6"/><path d="M21 14.5l-5-4-11 10"/>',
+  columns:'<rect x="3" y="4" width="7" height="16" rx="1.6"/><rect x="14" y="4" width="7" height="16" rx="1.6"/>',
+  quote:'<path d="M5 6h14v9h-9l-4 4V6z"/><path d="M9.5 10.5h1.5M13.5 10.5H15"/>',
+  promo:'<path d="M4 7h16v3a2 2 0 000 4v3H4v-3a2 2 0 000-4V7z"/><path d="M14.5 7.5v9" stroke-dasharray="1.5 2"/>',
+  social:'<circle cx="6" cy="12" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="18" cy="18" r="2.3"/><path d="M8 11l8-4M8 13l8 4"/>',
+  divider:'<path d="M4 12h16"/><path d="M5 8h2M17 8h2M5 16h2M17 16h2" opacity=".45"/>',
+  spacer:'<path d="M12 4v16"/><path d="M8.5 8L12 4.5 15.5 8M8.5 16L12 19.5 15.5 16"/>',
+};
+const AICON={
+  up:'<path d="M7 14l5-5 5 5"/>', down:'<path d="M7 10l5 5 5-5"/>',
+  dup:'<rect x="9" y="9" width="11" height="11" rx="2.2"/><path d="M5 15V6a2 2 0 012-2h9"/>',
+  del:'<path d="M5 7h14M10 7V4.5h4V7M7 7l1 13h8l1-13"/>',
+  drag:'<circle cx="9" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="6" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="12" r="1" fill="currentColor" stroke="none"/><circle cx="9" cy="18" r="1" fill="currentColor" stroke="none"/><circle cx="15" cy="18" r="1" fill="currentColor" stroke="none"/>',
+};
+const BLOCK_TYPES={
+  heading:{ru:'Заголовок'}, text:{ru:'Текст'}, products:{ru:'Товары'},
+  button:{ru:'Кнопка'}, image:{ru:'Картинка'}, columns:{ru:'2 колонки'},
+  quote:{ru:'Цитата'}, promo:{ru:'Промокод'}, social:{ru:'Соцсети'},
+  divider:{ru:'Разделитель'}, spacer:{ru:'Отступ'},
+};
+function newBlock(t){return {
+  heading:{type:'heading',text:'Новый заголовок'}, text:{type:'text',html:'<b>Текст</b> письма — форматируйте кнопками выше.'},
+  products:{type:'products'}, button:{type:'button',text:'Перейти в каталог',url:'https://groster.me'},
+  image:{type:'image',src:'',alt:'',url:''}, divider:{type:'divider'}, spacer:{type:'spacer',h:16},
+  quote:{type:'quote',text:'Отличный сервис и быстрая доставка!',author:'Клиент Groster'},
+  promo:{type:'promo',code:'GROSTER10',caption:'Скидка 10% на первый заказ'},
+  social:{type:'social',vk:'',telegram:'',whatsapp:'',instagram:''},
+  columns:{type:'columns',left:'Левая колонка',right:'Правая колонка'}}[t];}
+function stripTags(h){return (h||'').replace(/<[^>]*>/g,'').trim();}
+function blkSub(b){
+  if(b.type==='heading')return b.text||''; if(b.type==='text')return stripTags(b.html).slice(0,40);
+  if(b.type==='button')return b.text||''; if(b.type==='products')return 'топ-5 сценария';
+  if(b.type==='spacer')return (b.h||16)+' px'; if(b.type==='image')return b.src?'задана':'нет картинки';
+  if(b.type==='quote')return (b.text||'').slice(0,40); if(b.type==='promo')return b.code||'';
+  if(b.type==='social'){const n=['vk','telegram','whatsapp','instagram'].filter(k=>b[k]).length;return n?n+' ссылок':'нет ссылок';}
+  if(b.type==='columns')return '2 колонки'; return '';}
+
+// Оформление (GET-превью текущего шаблона по id с оверрайдами look)
+function tplPreviewSrc(){
+  const q=new URLSearchParams(tplId?{id:tplId}:{service:tplSvc||'best_offer'});
+  ['brand_color','header','button','footer'].forEach(k=>{ if(tplLook&&tplLook[k]) q.set(k,tplLook[k]); });
+  return '/admin/template/preview?'+q;
+}
+function refreshTplPreview(){ const f=$('tplframe'); if(f) f.src=tplPreviewSrc(); }
+
+async function viewTemplates(){
+  if(!tplLook) tplLook=await j('/admin/template-settings');
+  if(tplView==='list'){ setTitle('Шаблоны писем','библиотека шаблонов'); return renderTemplateList(); }
+  setTitle('Шаблоны писем','редактор шаблона');
+  if(tplBlocks===null){
+    const r=await j('/admin/template/'+encodeURIComponent(tplId));
+    if(!r||!r.ok){ toast('Шаблон не найден'); location.hash='#/templates'; return; }
+    tplBlocks=r.blocks||[]; tplSvc=r.service; tplName=r.name||''; tplIsActive=!!r.is_active; tplSel=-1; tplDirty=false;
+  }
+  const tab=(v,l)=>`<button class="${tplTab===v?'active':''}" onclick="tplSetTab('${v}')">${l}</button>`;
+  const typeSel=`<select class="inp" onchange="attachType(this.value)" title="Тип рассылки, к которому прикреплён шаблон">
+    <option value="" ${!tplSvc?'selected':''}>Тип: не прикреплён</option>
+    ${['best_offer','cart','postsale'].map(s=>`<option value="${s}" ${tplSvc===s?'selected':''}>Тип: ${esc(SVC[s].ru)}</option>`).join('')}</select>`;
+  const activeBtn = !tplSvc ? `<span class="tpl-pill muted">черновик</span>`
+    : (tplIsActive ? `<span class="tpl-pill">★ Активный</span>`
+                   : `<button class="btn" onclick="activateCurrent()">Сделать активным</button>`);
+  $('view').innerHTML=`<section>
+    <div class="toolbar" style="margin-bottom:16px">
+      <div style="display:flex;gap:12px;align-items:center;flex-wrap:wrap">
+        <button class="btn" onclick="location.hash='#/templates'">← Шаблоны</button>
+        <input class="inp" value="${esc(tplName)}" placeholder="Название шаблона" onchange="tplName=this.value;tplTouch()" style="font-weight:600;min-width:160px">
+        ${typeSel}
+        ${activeBtn}
+        <div class="seg">${tab('builder','Конструктор')}${tab('design','Оформление')}</div>
+      </div>
+      <div style="display:flex;gap:10px;align-items:center">
+        <button class="btn" onclick="tplPreviewOn=!tplPreviewOn;viewTemplates()" title="Показать/скрыть предпросмотр" style="display:inline-flex;align-items:center;gap:7px">${ic(tplPreviewOn?'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/>':'<path d="M2 12s4-7 10-7c2.2 0 4 .8 5.5 1.8M22 12s-4 7-10 7c-2.2 0-4-.8-5.5-1.8"/><path d="M4 4l16 16"/>',16)}${tplPreviewOn?'Скрыть превью':'Показать превью'}</button>
+        ${tplPreviewOn?`<div class="seg"><button class="${tplDevice==='desktop'?'active':''}" onclick="tplDevice='desktop';viewTemplates()">Десктоп</button><button class="${tplDevice==='mobile'?'active':''}" onclick="tplDevice='mobile';viewTemplates()">Мобайл</button></div>`:''}</div>
+    </div>
+    <div id="tplBody"></div></section>`;
+  if(tplTab==='builder'){ renderBuilder(); tplPreview(); } else renderLook();
+}
+function tplSetTab(v){ tplTab=v; viewTemplates(); }
+function openTemplate(id){ location.hash='#/templates/'+encodeURIComponent(id); }
+function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; viewTemplates(); }
+async function createTemplate(service){
+  const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
+  if(r&&r.ok&&r.id){ toast('Шаблон создан'); location.hash='#/templates/'+r.id; } else toast('Ошибка создания');
+}
+async function attachType(service){
+  const r=await j('/admin/template/'+tplId+'/attach',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service})});
+  if(r&&r.ok){ toast(service?'Прикреплён к сценарию':'Откреплён (черновик)'); tplBlocks=null; viewTemplates(); }
+  else toast('Ошибка'+(r&&r.reason?': '+r.reason:''));
+}
+async function activateTpl(id){ const r=await j('/admin/template/'+id+'/activate',{method:'POST'}); if(r&&r.ok){ toast('Шаблон активирован'); renderTemplateList(); } else toast('Ошибка'); }
+async function activateCurrent(){ const r=await j('/admin/template/'+tplId+'/activate',{method:'POST'}); if(r&&r.ok){ tplIsActive=true; toast('Шаблон активирован'); viewTemplates(); } else toast('Ошибка'); }
+async function deleteTpl(id, name){ if(!confirm('Удалить шаблон «'+name+'»?')) return; const r=await j('/admin/template/'+id+'/delete',{method:'POST'}); if(r&&r.ok){ toast('Шаблон удалён'); renderTemplateList(); } else toast('Ошибка'); }
+
+async function renderTemplateList(){
+  try{ tplListData=await j('/admin/templates'); }catch(e){ tplListData=null; }
+  drawTemplateList();
+}
+function setListTab(s){ tplListTab=s; drawTemplateList(); }
+function drawTemplateList(){
+  const data=tplListData;
+  if(!data||!Array.isArray(data.services)){ $('view').innerHTML=`<section><div class="tpl-empty">Не удалось загрузить шаблоны.</div></section>`; return; }
+  const svc=data.services.find(s=>s.service===tplListTab)||data.services[0];
+  const fmt=d=>{ if(!d) return '—'; try{ return new Date(d).toLocaleDateString('ru-RU',{day:'2-digit',month:'short'}); }catch(e){ return '—'; } };
+  const q=n=>String(n).replace(/'/g,"\\'");
+  const row=(t,draft)=>{
+    const meta=(draft?'без типа':(t.is_active?'активный':'не активен'))+` · создан ${fmt(t.created_at)} · ${t.used} отпр.`;
+    const act=(!draft&&!t.is_active)?`<button onclick="activateTpl(${t.id})">Активировать</button>`:'';
+    return `<div class="trow ${t.is_active?'active':''}" onclick="openTemplate(${t.id})">
+      <span class="st">${t.is_active?'★':''}</span>
+      <div class="mn"><div class="nm">${esc(t.name)}</div><div class="mt">${meta}</div></div>
+      <div class="ac" onclick="event.stopPropagation()">${act}
+        <button class="danger" onclick="deleteTpl(${t.id},'${q(esc(t.name))}')">Удалить</button></div>
+    </div>`;
+  };
+  const defRow=svc=>`<div class="trow def">
+    <span class="st"></span>
+    <div class="mn"><div class="nm" style="color:var(--muted)">Стандартный шаблон</div>
+      <div class="mt">используется по умолчанию — создайте свой, чтобы заменить</div></div>
+    <div class="ac" style="opacity:1"><button onclick="createTemplate('${svc.service}')">Создать</button></div></div>`;
+  const tabs=data.services.map(s=>`<button class="${s.service===tplListTab?'active':''}" onclick="setListTab('${s.service}')">${esc(s.ru)}${s.templates.length?` · ${s.templates.length}`:''}</button>`).join('');
+  const scenGrp=`<div class="tgrp">
+    <div class="tgrp-h"><div class="ti">${esc(svc.ru)} <span class="n">${svc.templates.length||'—'}</span>
+      ${svc.using_default?'<span class="tpl-pill muted">стандартный</span>':''}</div>
+      <button class="add" onclick="createTemplate('${svc.service}')">+ Новый шаблон</button></div>
+    ${svc.templates.map(t=>row(t,false)).join('')}${svc.using_default?defRow(svc):''}</div>`;
+  const drafts=data.drafts||[];
+  const draftGrp=`<div class="tgrp">
+    <div class="tgrp-h"><div class="ti">Мои шаблоны <span class="n">без типа</span></div>
+      <button class="add" onclick="createTemplate('')">+ Создать шаблон</button></div>
+    ${drafts.length?drafts.map(t=>row(t,true)).join('')
+      :'<div class="trow def"><span class="st"></span><div class="mn"><div class="mt">Черновиков нет. Создайте свой шаблон и прикрепите к любому сценарию.</div></div></div>'}</div>`;
+  $('view').innerHTML=`<section style="max-width:820px">
+    <div class="seg" style="margin-bottom:16px">${tabs}</div>
+    ${scenGrp}${draftGrp}</section>`;
+}
+
+/* Конструктор */
+function renderBuilder(){
+  const dev=tplDevice==='mobile';
+  const pal=Object.keys(BLOCK_TYPES).map(t=>`<button onclick="addBlock('${t}')" title="Добавить: ${BLOCK_TYPES[t].ru}">${ic(BICON[t])}<span>${BLOCK_TYPES[t].ru}</span></button>`).join('');
+  const list=tplBlocks.length? tplBlocks.map((b,i)=>blkCard(b,i)).join('')
+    : `<div class="tpl-empty">Пусто — добавьте блоки из палитры выше.</div>`;
+  const editor=`<div ${tplPreviewOn?'':'style="max-width:660px;margin:0 auto"'}>
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+        <div class="pal-lbl" style="margin:0">Добавить блок</div>
+        <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
+      </div>
+      <div class="tpl-pal">${pal}</div>
+      <div class="pal-lbl">Блоки письма ${tplBlocks.length?`· ${tplBlocks.length}`:''}</div>
+      <div id="tplList">${list}</div>
+      <div style="display:flex;gap:8px;margin-top:14px">
+        <button class="btn primary" style="flex:1" onclick="saveBlocks()">Сохранить шаблон</button>
+        <button class="btn" onclick="resetBlocks()" title="Отменить несохранённые изменения">Отменить</button>
+      </div>
+      <div class="svc-sub" style="margin-top:8px">${tplSvc?`Шаблон применяется к письмам сценария «${esc(SVC[tplSvc].ru)}».`:'Черновик без типа — выберите «Тип» вверху, чтобы прикрепить к сценарию.'} Шапка и футер — из вкладки «Оформление».</div>
+    </div>`;
+  const preview=`<div>
+      <div class="card" style="display:flex;justify-content:center;background:var(--surface-2);padding:16px;position:sticky;top:12px">
+        <iframe id="tplframe" title="Предпросмотр" sandbox="" style="width:${dev?'380px':'100%'};max-width:${dev?'380':'680'}px;height:600px;border:0;background:#fff;border-radius:10px"></iframe>
+      </div>
+    </div>`;
+  $('tplBody').innerHTML = tplPreviewOn
+    ? `<div class="grid" style="grid-template-columns:400px minmax(0,1fr);align-items:start;gap:20px">${editor}${preview}</div>`
+    : editor;
+}
+function blkCard(b,i){
+  const m=BLOCK_TYPES[b.type]||{ru:b.type}; const sel=i===tplSel;
+  const act=(fn,icon,t,dis,cls)=>`<button class="${cls||''}" onclick="event.stopPropagation();${fn}" title="${t}" ${dis?'disabled':''}>${ic(icon,17)}</button>`;
+  return `<div class="blk ${sel?'sel':''}" draggable="true"
+      ondragstart="tplDrag=${i};this.classList.add('drag')" ondragend="this.classList.remove('drag')"
+      ondragover="event.preventDefault();this.classList.add('dragover')" ondragleave="this.classList.remove('dragover')"
+      ondrop="this.classList.remove('dragover');tplDropOn(${i})">
+    <div class="blk-h" onclick="selBlock(${i})">
+      <span class="hd" title="Перетащите для порядка">${ic(AICON.drag,16)}</span>
+      <span class="ic">${ic(BICON[b.type]||BICON.text,17)}</span>
+      <span class="nm">${m.ru}</span><span class="sub">${esc(blkSub(b))}</span>
+      <span class="blk-a">
+        ${act(`moveBlock(${i},-1)`,AICON.up,'Выше',i===0)}
+        ${act(`moveBlock(${i},1)`,AICON.down,'Ниже',i===tplBlocks.length-1)}
+        ${act(`dupBlock(${i})`,AICON.dup,'Дублировать')}
+        ${act(`delBlock(${i})`,AICON.del,'Удалить',false,'del')}
+      </span></div>
+    ${sel?`<div class="blk-body">${blkInspector(b,i)}</div>`:''}
+  </div>`;
+}
+function blkInspector(b,i){
+  const inp=(k,l,v,type)=>`<label class="tf"><span>${l}</span><input class="inp" type="${type||'text'}" value="${esc(v==null?'':v)}" oninput="tplBlocks[${i}]['${k}']=this.value;tplTouch()"></label>`;
+  if(b.type==='heading') return inp('text','Текст заголовка',b.text)
+    +styleRow('Размер',sizeSeg(i,b.size))+styleRow('Выравнивание',alignSeg(i,b.align))
+    +styleRow('Шрифт',fontCtl(i,b.font))+styleRow('Цвет',colorCtl(i,b.color,'#1a1a2e'))+boxRows(i,b);
+  if(b.type==='text') return `<div class="tf"><span>Текст (форматирование)</span>${richTb(i)}
+    <div class="rt" contenteditable="true" data-ph="Введите текст…" oninput="tplBlocks[${i}].html=this.innerHTML;tplTouch()" onblur="renderBuilder()">${b.html||''}</div></div>`
+    +styleRow('Размер',sizeSeg(i,b.size))+styleRow('Интервал',lineSeg(i,b.lh))+styleRow('Выравнивание',alignSeg(i,b.align))
+    +styleRow('Шрифт',fontCtl(i,b.font))+styleRow('Цвет',colorCtl(i,b.color,'#333333'))+boxRows(i,b);
+  if(b.type==='button') return inp('text','Надпись кнопки',b.text)+inp('url','Ссылка',b.url)
+    +styleRow('Выравнивание',alignSeg(i,b.align||'center'))+boxRows(i,b);
+  if(b.type==='quote') return `<label class="tf"><span>Текст цитаты</span><textarea class="inp" rows="2" oninput="tplBlocks[${i}].text=this.value;tplTouch()">${esc(b.text||'')}</textarea></label>`+inp('author','Автор (необязательно)',b.author)+boxRows(i,b);
+  if(b.type==='promo') return inp('code','Промокод',b.code)+inp('caption','Подпись (необязательно)',b.caption)+boxRows(i,b);
+  if(b.type==='social') return inp('vk','ВКонтакте — ссылка',b.vk)+inp('telegram','Telegram — ссылка',b.telegram)+inp('whatsapp','WhatsApp — ссылка',b.whatsapp)+inp('instagram','Instagram — ссылка',b.instagram)+boxRows(i,b);
+  if(b.type==='columns') return `<div class="tf"><span>Левая колонка</span>${richTb(i,'left')}
+      <div class="rt" contenteditable="true" data-ph="Текст…" oninput="tplBlocks[${i}].left=this.innerHTML;tplTouch()" onblur="renderBuilder()">${b.left||''}</div></div>
+    <div class="tf"><span>Правая колонка</span>${richTb(i,'right')}
+      <div class="rt" contenteditable="true" data-ph="Текст…" oninput="tplBlocks[${i}].right=this.innerHTML;tplTouch()" onblur="renderBuilder()">${b.right||''}</div></div>`+boxRows(i,b);
+  if(b.type==='image'){
+    const thumb=b.src?`<img src="${esc(b.src)}" alt="" style="max-width:100%;max-height:130px;border-radius:8px;margin-top:10px;border:1px solid var(--border);display:block">`:'';
+    return `<label class="tf"><span>URL картинки</span>
+        <input class="inp" type="text" value="${esc(b.src||'')}" placeholder="Ссылка или загрузите файл ниже" oninput="tplBlocks[${i}].src=this.value;tplTouch()" onchange="renderBuilder()"></label>
+      <div class="tf"><span>Файл</span>
+        <input type="file" accept="image/png,image/jpeg,image/gif,image/webp" id="tplfile${i}" style="display:none" onchange="tplUpload(${i},this)">
+        <button class="btn" type="button" style="width:100%" onclick="document.getElementById('tplfile${i}').click()">Загрузить изображение</button>
+        ${thumb}</div>`
+      + inp('alt','Alt-текст',b.alt) + inp('url','Ссылка (необязательно)',b.url)
+      + styleRow('Скругление',radiusSeg(i,b.radius)) + boxRows(i,b);
+  }
+  if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
+  if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
+  return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
+}
+function richTb(){
+  const b=(cmd,label,title)=>`<button type="button" title="${title}" onmousedown="event.preventDefault()" onclick="rtCmd('${cmd}')">${label}</button>`;
+  return `<div class="rt-tb">${b('bold','<b>Ж</b>','Жирный')}${b('italic','<i>К</i>','Курсив')}${b('underline','<u>П</u>','Подчёркнутый')}${b('insertUnorderedList','• список','Маркированный список')}<button type="button" title="Ссылка" onmousedown="event.preventDefault()" onclick="rtLink()">🔗 ссылка</button>${b('removeFormat','✕','Убрать формат')}</div>`;
+}
+function afterRt(){ const el=document.activeElement; if(el&&el.classList&&el.classList.contains('rt')) el.dispatchEvent(new Event('input')); }
+function setBlk(i,key,val){ tplBlocks[i][key]=val; tplDirty=true; renderBuilder(); tplPreview(); }
+function alignSeg(i,cur){ const A={left:'<path d="M4 6h16M4 12h10M4 18h13"/>',center:'<path d="M4 6h16M7 12h10M6 18h12"/>',right:'<path d="M4 6h16M10 12h10M7 18h13"/>'};
+  return `<div class="seg mini">${['left','center','right'].map(v=>`<button type="button" class="${(cur||'left')===v?'active':''}" onclick="setBlk(${i},'align','${v}')" title="${v}">${ic(A[v],15)}</button>`).join('')}</div>`; }
+function sizeSeg(i,cur){ return `<div class="seg mini">${[['s',12],['m',14],['l',17]].map(a=>`<button type="button" class="${(cur||'m')===a[0]?'active':''}" onclick="setBlk(${i},'size','${a[0]}')"><span style="font-size:${a[1]}px;line-height:1;font-weight:700">A</span></button>`).join('')}</div>`; }
+function colorCtl(i,cur,def){ const c=cur||def; return `<span style="display:inline-flex;gap:6px;align-items:center"><input type="color" value="${c}" oninput="tplBlocks[${i}].color=this.value;tplTouch()" onchange="renderBuilder()" style="width:36px;height:28px;border:1px solid var(--border);border-radius:7px;padding:2px;background:none;cursor:pointer">${cur?`<button type="button" class="lnk" onclick="setBlk(${i},'color','')">сброс</button>`:''}</span>`; }
+function styleRow(l,ctl){ return `<div class="srow"><span>${l}</span>${ctl}</div>`; }
+function fontCtl(i,cur){ const F=[['','Обычный'],['serif','Серифный'],['mono','Моноширинный'],['rounded','Гротеск']];
+  return `<select class="inp" style="width:auto;min-width:150px;padding:6px 10px" onchange="setBlk(${i},'font',this.value)">${F.map(f=>`<option value="${f[0]}" ${(cur||'')===f[0]?'selected':''}>${f[1]}</option>`).join('')}</select>`; }
+function lineSeg(i,cur){ const L={s:'<path d="M5 8h14M5 12h14M5 16h14"/>',m:'<path d="M5 7h14M5 12h14M5 17h14"/>',l:'<path d="M5 6h14M5 12h14M5 18h14"/>'};
+  return `<div class="seg mini">${['s','m','l'].map(v=>`<button type="button" class="${(cur||'m')===v?'active':''}" onclick="setBlk(${i},'lh','${v}')" title="Интервал">${ic(L[v],15)}</button>`).join('')}</div>`; }
+function bgCtl(i,cur){ return cur
+  ? `<span style="display:inline-flex;gap:6px;align-items:center"><input type="color" value="${cur}" oninput="tplBlocks[${i}].bg=this.value;tplTouch()" onchange="renderBuilder()" style="width:36px;height:28px;border:1px solid var(--border);border-radius:7px;padding:2px;background:none;cursor:pointer"><button type="button" class="lnk" onclick="setBlk(${i},'bg','')">убрать</button></span>`
+  : `<button type="button" class="lnk" onclick="setBlk(${i},'bg','#f5f0fb')">добавить фон</button>`; }
+function borderCtl(i,cur){ return cur
+  ? `<span style="display:inline-flex;gap:6px;align-items:center"><input type="color" value="${cur}" oninput="tplBlocks[${i}].border=this.value;tplTouch()" onchange="renderBuilder()" style="width:36px;height:28px;border:1px solid var(--border);border-radius:7px;padding:2px;background:none;cursor:pointer"><button type="button" class="lnk" onclick="setBlk(${i},'border','')">убрать</button></span>`
+  : `<button type="button" class="lnk" onclick="setBlk(${i},'border','#e6ebf3')">добавить рамку</button>`; }
+function spaceSeg(i,cur){ const O=[['','—'],['s','S'],['m','M'],['l','L']];
+  return `<div class="seg mini">${O.map(o=>`<button type="button" class="${(cur||'')===o[0]?'active':''}" onclick="setBlk(${i},'space','${o[0]}')" title="Отступы сверху/снизу">${o[1]}</button>`).join('')}</div>`; }
+function radiusSeg(i,cur){ const R=[['none','0'],['s','4px'],['l','7px']];
+  return `<div class="seg mini">${R.map(r=>`<button type="button" class="${(cur||'s')===r[0]?'active':''}" onclick="setBlk(${i},'radius','${r[0]}')" title="Скругление"><span style="display:inline-block;width:15px;height:15px;border:2px solid currentColor;border-radius:${r[1]}"></span></button>`).join('')}</div>`; }
+function boxRows(i,b){ return styleRow('Отступы',spaceSeg(i,b.space))+styleRow('Рамка',borderCtl(i,b.border))+styleRow('Фон блока',bgCtl(i,b.bg)); }
+function rtCmd(cmd){ document.execCommand(cmd,false,null); afterRt(); }
+function rtLink(){ const url=prompt('Ссылка (https://…)'); if(url){ document.execCommand('createLink',false,url); afterRt(); } }
+function tplTouch(){ tplDirty=true; const d=$('tplDirtyDot'); if(d)d.style.opacity=1; clearTimeout(window._tpv); window._tpv=setTimeout(tplPreview,300); }
+function reBuild(){ tplDirty=true; renderBuilder(); tplPreview(); }
+function addBlock(t){ const at=(tplSel>=0&&tplSel<tplBlocks.length)?tplSel+1:tplBlocks.length; tplBlocks.splice(at,0,newBlock(t)); tplSel=at; reBuild(); }
+function delBlock(i){ tplBlocks.splice(i,1); if(tplSel>=tplBlocks.length)tplSel=tplBlocks.length-1; reBuild(); }
+function dupBlock(i){ tplBlocks.splice(i+1,0,JSON.parse(JSON.stringify(tplBlocks[i]))); tplSel=i+1; reBuild(); }
+function moveBlock(i,d){ const k=i+d; if(k<0||k>=tplBlocks.length)return; const t=tplBlocks[i];tplBlocks[i]=tplBlocks[k];tplBlocks[k]=t; tplSel=k; reBuild(); }
+function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); tplPreview(); }
+function tplDropOn(i){ if(tplDrag<0||tplDrag===i){tplDrag=-1;return;} const b=tplBlocks.splice(tplDrag,1)[0]; tplBlocks.splice(i,0,b); tplSel=i; tplDrag=-1; reBuild(); }
+async function tplUpload(i,input){
+  const file=input.files&&input.files[0]; if(!file) return;
+  if(file.size>3000000){ toast('Файл больше 3 МБ'); input.value=''; return; }
+  toast('Загрузка…');
+  const data=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(file); });
+  const resp=await j('/admin/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:file.name,data})});
+  if(resp&&resp.ok&&resp.url){ tplBlocks[i].src=resp.url; tplDirty=true; renderBuilder(); tplPreview(); toast('Изображение загружено'); }
+  else { toast('Ошибка загрузки'+(resp&&resp.reason?': '+resp.reason:'')); }
+  input.value='';
+}
+async function tplPreview(){
+  const f=$('tplframe'); if(!f) return;
+  try{ const r=await fetch('/admin/template/render',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({service:tplSvc||'best_offer',blocks:tplBlocks,look:tplLook})}); f.srcdoc=await r.text(); }catch(e){}
+}
+async function saveBlocks(){
+  const r=await j('/admin/template/'+encodeURIComponent(tplId),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks:tplBlocks,name:tplName})});
+  if(r&&r.ok){ tplDirty=false; toast('Шаблон сохранён'); renderBuilder(); } else toast('Ошибка сохранения');
+}
+async function resetBlocks(){
+  if(tplDirty && !confirm('Отменить несохранённые изменения?')) return;
+  tplBlocks=null; tplSel=-1; tplDirty=false; viewTemplates();
+}
+
+/* Оформление (глобальный бренд-стиль) */
+function renderLook(){
+  const dev=tplDevice==='mobile';
+  const fld=(k,label)=>`<div class="field"><span class="k">${label}</span>
+    <input class="inp wide" type="text" value="${esc(tplLook[k]||'')}"
+      oninput="tplLook['${k}']=this.value; clearTimeout(window._tp); window._tp=setTimeout(refreshTplPreview,250)"></div>`;
+  $('tplBody').innerHTML=`<div class="grid" style="grid-template-columns:340px minmax(0,1fr);align-items:start;gap:20px">
+    <div>
+      <div class="card">
+        <div class="field"><span class="k">Цвет бренда</span>
+          <span style="display:flex;gap:8px;align-items:center">
+            <input type="color" value="${esc(tplLook.brand_color)}" style="width:40px;height:30px;border:1px solid var(--border);border-radius:8px;background:none;padding:2px"
+              oninput="tplLook.brand_color=this.value;this.nextElementSibling.value=this.value;refreshTplPreview()">
+            <input class="inp" value="${esc(tplLook.brand_color)}" style="width:96px"
+              oninput="tplLook.brand_color=this.value;refreshTplPreview()"></span></div>
+        ${fld('header','Шапка (логотип)')}
+        ${fld('button','Текст кнопки товара')}
+        ${fld('footer','Текст отписки')}
+        <button class="btn primary" style="margin-top:12px;width:100%" onclick="saveTplLook()">Сохранить оформление</button>
+        <div class="svc-sub" style="margin-top:8px">Шапка, футер и стиль карточек — общие для всех писем всех сценариев.</div>
+      </div>
+      <div class="eyebrow" style="margin-top:18px"><h2>Тест-письмо</h2><span class="rule"></span></div>
+      <div class="card">
+        <div style="display:flex;gap:8px"><input id="tpl_test_to" class="inp wide" type="email" placeholder="email для теста" ${tplSvc?'':'disabled'}>
+          <button class="btn" onclick="tplTest()" ${tplSvc?'':'disabled'}>Отправить</button></div>
+        <div class="svc-sub" style="margin-top:8px">${tplSvc?`Письмо сценария «${esc(SVC[tplSvc].ru)}» с активным шаблоном и оформлением.`:'Прикрепите тип, чтобы отправить тест.'}</div>
+      </div>
+    </div>
+    <div class="card" style="display:flex;justify-content:center;background:var(--surface-2);padding:16px">
+      <iframe id="tplframe" title="Предпросмотр письма" sandbox="" src="${tplPreviewSrc()}"
+        style="width:${dev?'380px':'100%'};max-width:${dev?'380':'680'}px;height:600px;border:0;background:#fff;border-radius:10px"></iframe>
+    </div></div>`;
+}
+async function saveTplLook(){
+  const r=await j('/admin/template-settings',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({brand_color:tplLook.brand_color,header:tplLook.header,button:tplLook.button,footer:tplLook.footer})});
+  toast(r.ok?'Оформление сохранено':'Ошибка сохранения');
+}
+async function tplTest(){
+  const to=($('tpl_test_to')||{}).value||''; if(!to){ toast('Укажите email'); return; }
+  const r=await j('/admin/scenario/'+encodeURIComponent(tplSvc)+'/test',{method:'POST',
+    headers:{'Content-Type':'application/json'},body:JSON.stringify({email:to})});
+  toast(!r.ok?'Ошибка':(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)'));
+}
+
+/* Settings */
+function setField(k,v,m){
+  const hint = m.restart ? ' <span class="svc-sub">(после перезапуска)</span>' : '';
+  if(m.type==='text')
+    return `<div class="field"><span class="k">${esc(m.label)}${hint}</span>
+      <input class="inp wide" type="text" value="${esc(v)}" onchange="saveSetting('${k}',this.value,'text')"></div>`;
+  return `<div class="field"><span class="k">${esc(m.label)}${hint}</span>
+    <input class="inp" type="number" value="${esc(v)}" onchange="saveSetting('${k}',this.value,'number')"></div>`;
+}
+async function saveSetting(k,v,type){
+  await j('/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({[k]: type==='number'?+v:v})});
+  toast('Сохранено');
+}
+let settingsTab='mail';
+function setSettingsTab(t){ settingsTab=t; viewSettings(); }
+async function viewSettings(){
+  setTitle('Настройки','параметры сервиса');
+  const tabs=[['mail','Почта'],['params','Параметры'],['integrations','Интеграции']];
+  const bar=`<div class="tabbar">${tabs.map(([id,l])=>
+    `<button class="tab ${settingsTab===id?'active':''}" onclick="setSettingsTab('${id}')">${l}</button>`).join('')}</div>`;
+  $('view').innerHTML=`<section>${bar}<div id="settingsBody"><div class="card svc-sub">Загрузка…</div></div></section>`;
+
+  if(settingsTab==='mail'){
+    $('settingsBody').innerHTML='<div id="mailbox"><div class="card svc-sub">Загрузка…</div></div>';
+    loadMail(); return;
+  }
+  const s=await j('/admin/settings');
+  if(settingsTab==='params'){
+    const groups={attr:'Атрибуция', workers:'Воркеры', onec:'Синхронизация 1С'};
+    const byGroup={};
+    Object.entries(s.meta).forEach(([k,m])=>(byGroup[m.group]=byGroup[m.group]||[]).push([k,m]));
+    const cards=Object.entries(groups).map(([g,title])=>{
+      const f=(byGroup[g]||[]).map(([k,m])=>setField(k,s.values[k],m)).join('');
+      return f?`<div><div class="eyebrow"><h2>${title}</h2><span class="rule"></span></div><div class="card">${f}</div></div>`:'';
+    }).join('');
+    $('settingsBody').innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">${cards}</div>
+      <p class="legend">Интервалы воркеров и синхронизации 1С применяются после перезапуска процесса воркеров, окно атрибуции — сразу.</p>`;
+  } else {
+    const st=(ok,on,off)=>`<span class="pill ${ok?'live':'dev'}">${ok?esc(on):off}</span>`;
+    $('settingsBody').innerHTML=`<div class="card">
+      <div class="field"><span class="k">Почта (mailer-service)</span>${st(s.readonly.smtp_configured, s.readonly.smtp_host, 'настраивается на вкладке «Почта»')}</div>
+      <div class="field"><span class="k">1С (каталог/корзина/заказы)</span>${st(s.readonly.onec_configured, s.readonly.onec_base_url, 'не задана — push-фиды /feeds/*')}</div>
+      <div class="svc-sub" style="margin-top:10px">Провайдер почты — на вкладке «Почта». Секреты 1С (токен) правятся в .env.</div></div>`;
+  }
+}
+async function loadMail(){
+  const m=await j('/admin/mail/config');
+  const box=$('mailbox'); if(!box) return;
+  if(!m.configured){
+    box.innerHTML=`<div class="card empty">mailer-service не подключён.<br>
+      <span class="svc-sub">Укажите <code>MAILER_SERVICE_URL</code> в .env основного приложения и запустите микросервис.</span></div>`;
+    return;
+  }
+  if(m.error){ box.innerHTML=`<div class="card empty">Сервис недоступен: ${esc(m.error)}<br>
+    <span class="svc-sub">${esc(m.service_url)}</span></div>`; return; }
+  const fld=(k,label,val,type='text')=>`<div class="field"><span class="k">${esc(label)}</span>
+    <input class="inp wide" id="mail_${k}" type="${type}" value="${esc(val==null?'':val)}"></div>`;
+  box.innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+    <div class="card">
+      <div class="field"><span class="k">Микросервис</span><span class="pill live">${esc(m.service_url)}</span></div>
+      <div class="field"><span class="k">Режим</span><span class="pill ${m.provider==='smtp'?'live':'dev'}">${m.provider==='smtp'?'боевой SMTP':'dev-лог'}</span></div>
+      ${fld('smtp_host','SMTP-хост',m.smtp_host)}
+      ${fld('smtp_port','Порт',m.smtp_port,'number')}
+      ${fld('smtp_user','Логин',m.smtp_user)}
+      <div class="field"><span class="k">Пароль</span>
+        <input class="inp wide" id="mail_smtp_password" type="password" placeholder="${m.has_password?'●●●●● (сохранён, оставьте пустым)':'не задан'}"></div>
+      <div class="field"><span class="k">STARTTLS</span>
+        <label class="switch"><input type="checkbox" id="mail_smtp_starttls" ${m.smtp_starttls?'checked':''}>
+          <span class="track"></span></label></div>
+      ${fld('mail_from','Адрес отправителя',m.mail_from)}
+      ${fld('mail_from_name','Имя отправителя',m.mail_from_name)}
+      ${fld('rate_per_min','Лимит писем/мин',m.rate_per_min,'number')}
+      <button class="btn primary" style="margin-top:12px" onclick="saveMail()">Сохранить провайдера</button>
+    </div>
+    <div class="card">
+      <div class="svc-name" style="margin-bottom:8px">Проверка</div>
+      <div class="svc-sub" style="margin-bottom:12px">Отправить тестовое письмо через текущие настройки провайдера.</div>
+      <div style="display:flex;gap:8px">
+        <input id="mail_test_to" class="inp wide" type="email" placeholder="email для теста">
+        <button class="btn" onclick="testMail()">Отправить тест</button>
+      </div>
+      <div id="mail_test_result" class="svc-sub" style="margin-top:10px"></div>
+    </div></div>`;
+}
+async function saveMail(){
+  const g=k=>($('mail_'+k)||{}).value;
+  const patch={smtp_host:g('smtp_host'), smtp_port:+g('smtp_port')||587, smtp_user:g('smtp_user'),
+    smtp_starttls:$('mail_smtp_starttls').checked, mail_from:g('mail_from'),
+    mail_from_name:g('mail_from_name'), rate_per_min:+g('rate_per_min')||120};
+  const pw=g('smtp_password'); if(pw) patch.smtp_password=pw;
+  const r=await j('/admin/mail/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
+  toast(r.ok?'Настройки провайдера сохранены':`Ошибка: ${r.reason||''}`);
+  if(r.ok) loadMail();
+}
+async function testMail(){
+  const to=($('mail_test_to')||{}).value||'';
+  if(!to){ toast('Укажите email'); return; }
+  $('mail_test_result').textContent='Отправка…';
+  const r=await j('/admin/mail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
+  $('mail_test_result').innerHTML = r.ok
+    ? '<span style="color:var(--ok)">✓ Отправлено ('+esc(r.message_id||'')+')</span>'
+    : '<span style="color:var(--alert)">✗ '+esc(r.error||'ошибка')+'</span>';
+}
+
+/* Лиды */
+let leadFilter={q:'',status:'',page:0};
+const LEAD_LIM=50;
+function leadsPage(p){ leadFilter.page=Math.max(0,p); viewLeads(); }
+async function viewLeads(){
+  setTitle('Все лиды','база подписчиков');
+  const qs=new URLSearchParams(); if(leadFilter.q)qs.set('q',leadFilter.q); if(leadFilter.status)qs.set('status',leadFilter.status);
+  qs.set('limit',LEAD_LIM); qs.set('offset',leadFilter.page*LEAD_LIM);
+  const [a,list]=await Promise.all([j('/admin/audience'),j('/admin/leads?'+qs)]);
+  const tile=(l,n,s)=>`<div class="tile"><div class="l">${l}</div><div class="n">${num(n)}</div><div class="s">${s}</div></div>`;
+  const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
+  const rows=list.map(l=>`<tr onclick="location.hash='#/lead/'+encodeURIComponent('${esc(l.user_id)}')" style="cursor:pointer">
+    <td><span style="color:var(--accent);font-weight:600">${esc(l.email||l.user_id)}</span></td>
+    <td><span class="pill ${l.is_unsubscribed?'unsubscribed':'sent'}">${l.is_unsubscribed?'отписан':'подписан'}</span></td>
+    <td class="mono">${esc(l.category||'—')}</td>
+    <td class="mono">${l.last_purchase_at?esc(new Date(l.last_purchase_at).toLocaleDateString('ru-RU')):'—'}</td>
+    <td class="mono">${l.consent_at?esc(new Date(l.consent_at).toLocaleDateString('ru-RU')):'—'}</td></tr>`).join('');
+  $('view').innerHTML=`<section><div class="grid tiles">
+    ${tile('Всего',a.total,'лидов в базе')}
+    ${tile('С email',a.with_email,'можно достать письмом')}
+    ${tile('Отписаны',a.unsubscribed,'исключены из рассылок')}
+    ${tile('Согласие 152-ФЗ',a.consented,'consent зафиксирован')}
+    ${tile('С покупками',a.with_purchase,'есть история заказов')}
+  </div></section>
+  <section><div class="eyebrow"><h2>Список лидов</h2><span class="rule"></span></div>
+    <div class="filters">
+      <input class="inp wide" type="search" placeholder="поиск по email или id" value="${esc(leadFilter.q)}"
+        oninput="leadFilter.q=this.value;leadFilter.page=0; clearTimeout(window._lt); window._lt=setTimeout(viewLeads,300)">
+      <select class="inp" onchange="leadFilter.page=0;leadFilter.status=this.value;viewLeads()">
+        ${opt('','Все',leadFilter.status)}${opt('subscribed','Подписаны',leadFilter.status)}${opt('unsubscribed','Отписаны',leadFilter.status)}</select>
+    </div>
+    ${list.length?`<div class="tablewrap"><table><thead><tr>
+      <th>Лид</th><th>Статус</th><th>Категория покупки</th><th>Последняя покупка</th><th>Согласие</th>
+    </tr></thead><tbody>${rows}</tbody></table></div>`+pager(leadFilter.page,list.length>=LEAD_LIM,'leadsPage'):'<div class="tablewrap"><div class="empty">'+(leadFilter.q||leadFilter.status||leadFilter.page?'Лиды не найдены.':'База лидов пуста.')+'</div></div>'+(leadFilter.page?pager(leadFilter.page,false,'leadsPage'):'')}
+  </section>`;
+}
+
+async function viewLead(uid){
+  setTitle('Карточка лида', uid);
+  let d;
+  try{ d=await j('/admin/lead/'+encodeURIComponent(uid)); }catch(e){ $('view').innerHTML='<section><div class="card empty">Ошибка загрузки.</div></section>'; return; }
+  if(!d.found){ $('view').innerHTML='<section><div class="card empty">Лид не найден.</div></section>'; return; }
+  const p=d.profile;
+  const dt2=iso=>iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+  const f=(k,v)=>`<div class="field"><span class="k">${k}</span><span class="mono">${esc(v)}</span></div>`;
+  const emails=d.emails.map(e=>`<tr>
+    <td>${esc(SVC[e.service]?.ru||e.service)}</td>
+    <td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
+    <td class="mono">${esc((e.product_ids||[]).join(', ')||'—')}</td>
+    <td class="mono">${dt2(e.sent_at)}</td>
+    <td class="mono">${e.order_id?esc(e.order_id):'—'}</td>
+    <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('');
+  const orders=d.orders.map(o=>`<tr>
+    <td class="mono">${esc(o.order_id)}</td>
+    <td><span class="pill ${['cancelled','returned','refunded'].includes((o.status||'').toLowerCase())?'unsubscribed':'sent'}">${esc(o.status)}</span></td>
+    <td class="mono">${dt2(o.order_date)}</td>
+    <td class="mono">${rub(o.total)}</td></tr>`).join('');
+  $('view').innerHTML=`<section>
+    <div class="filters"><a class="btn" href="#/leads">← к списку</a></div>
+    <div class="grid" style="grid-template-columns:1fr 1fr">
+      <div><div class="eyebrow"><h2>Профиль</h2><span class="rule"></span></div><div class="card">
+        ${f('Email', p.email||'—')}
+        ${f('Статус', p.is_unsubscribed?'отписан':'подписан')}
+        ${f('Согласие 152-ФЗ', dt2(p.consent_at))}
+        ${f('Категория покупки', p.category||'—')}
+        ${f('Указатель ротации', p.rotation||'—')}
+      </div></div>
+      <div><div class="eyebrow"><h2>Таймеры отправок</h2><span class="rule"></span></div><div class="card">
+        ${f('Последняя покупка', dt2(p.last_purchase_at))}
+        ${f('Best Offer', dt2(p.last_sent_best_offer))}
+        ${f('Брошенная корзина', dt2(p.last_sent_cart))}
+        ${f('Постпродажа', dt2(p.last_sent_postsale))}
+      </div></div>
+    </div></section>
+    <section><div class="eyebrow"><h2>История писем (${d.emails.length})</h2><span class="rule"></span></div>
+      ${d.emails.length?`<div class="tablewrap"><table><thead><tr><th>Сценарий</th><th>Статус</th><th>Товары</th><th>Отправлено</th><th>Заказ</th><th>Доход</th></tr></thead><tbody>${emails}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Писем не было.</div></div>'}</section>
+    <section><div class="eyebrow"><h2>Заказы (${d.orders.length})</h2><span class="rule"></span></div>
+      ${d.orders.length?`<div class="tablewrap"><table><thead><tr><th>Заказ</th><th>Статус</th><th>Дата</th><th>Сумма</th></tr></thead><tbody>${orders}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Заказов нет.</div></div>'}</section>`;
+}
+
+/* Actions */
+async function toggle(s,en){
+  await j('/admin/config/'+encodeURIComponent(s),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({enabled:en})});
+  toast(`${SVC[s]?.ru||s}: ${en?'активен':'остановлен'}`); route();
+}
+async function saveParam(s,k,v,type){
+  const val = type==='text' ? v : +v;
+  await j('/admin/config/'+encodeURIComponent(s),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({params:{[k]:val}})});
+  toast('Сохранено');
+}
+async function run(s){
+  const r=await j('/admin/run/'+encodeURIComponent(s),{method:'POST'});
+  toast(r.ok?`${SVC[s]?.ru||s}: обработано ${r.processed}`:`Ошибка: ${r.reason||''}`); route();
+}
+
+/* Router */
+const ROUTES={overview:viewOverview,leads:viewLeads,services:viewServices,report:viewReport,analytics:viewAnalytics,feeds:viewFeeds,emails:viewEmails,templates:viewTemplates,settings:viewSettings,integration:viewIntegration};
+async function route(){
+  const h=(location.hash||'#/overview').slice(2);
+  markActive(h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
+  if(h.startsWith('service/')) return viewService(h.split('/')[1]);
+  if(h.startsWith('lead/')) return viewLead(decodeURIComponent(h.slice(5)));
+  if(h==='templates'){ tplView='list'; return viewTemplates(); }
+  if(h.startsWith('templates/')) return openTemplateView(decodeURIComponent(h.split('/')[1]));
+  (ROUTES[h]||viewOverview)();
+}
+window.addEventListener('hashchange',route);
+$('themebtn').onclick=toggleTheme;
+function applyNav(){ document.body.classList.toggle('nav-collapsed', localStorage.navCollapsed==='1'); }
+$('burger').onclick=()=>{ localStorage.navCollapsed = localStorage.navCollapsed==='1'?'0':'1'; applyNav(); };
+applyNav();
+applyTheme(localStorage.theme||null);
+buildNav();
+route();
+setInterval(()=>{ const h=(location.hash||'#/overview').slice(2); if(h==='overview'||h==='analytics')route(); }, 20000);
+</script>
+</body>
+</html>

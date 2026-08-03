@@ -1,0 +1,7 @@
+.venv/
+.env
+__pycache__/
+*.pyc
+.DS_Store
+mailer-service/outbox.db*
+app/static/uploads/

@@ -1,0 +1,28 @@
+[Unit]
+Description=LeadHit-замена — API (фиды, /cart-ping, /esp/webhook, /kpi)
+After=network-online.target postgresql.service
+Wants=network-online.target
+Requires=postgresql.service
+
+[Service]
+Type=simple
+# Подставить под прод:
+User=leadhit
+Group=leadhit
+WorkingDirectory=/opt/leadhit
+EnvironmentFile=/opt/leadhit/.env
+# uvicorn с несколькими воркерами; порт за reverse-proxy (nginx) с TLS.
+ExecStart=/opt/leadhit/.venv/bin/uvicorn app.main:app --host 127.0.0.1 --port 8000 --workers 2
+
+Restart=always
+RestartSec=5
+KillSignal=SIGTERM
+TimeoutStopSec=30
+
+# Базовая изоляция.
+NoNewPrivileges=true
+ProtectSystem=full
+ProtectHome=true
+
+[Install]
+WantedBy=multi-user.target
