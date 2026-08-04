@@ -23,6 +23,7 @@ router = APIRouter(tags=["cart"])
 CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
 
 _TRIGGER_JS = os.path.join(os.path.dirname(__file__), "static", "trigger.js")
+_DEMO_HTML = os.path.join(os.path.dirname(__file__), "static", "demo.html")
 
 
 @router.get("/trigger.js")
@@ -33,6 +34,12 @@ async def trigger_js() -> FileResponse:
         media_type="application/javascript",
         headers={"Cache-Control": "public, max-age=3600"},
     )
+
+
+@router.get("/demo")
+async def demo_page() -> FileResponse:
+    """Dev/reference: эталон разводки cart()/identify() (docs/site_integration.md)."""
+    return FileResponse(_DEMO_HTML, headers={"Cache-Control": "no-cache"})
 
 
 class CartItem(BaseModel):

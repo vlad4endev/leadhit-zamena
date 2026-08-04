@@ -55,6 +55,7 @@ delayed-job; атрибуция — по расписанию.
 |---|---|---|
 | GET | `/health` | статус + пинг БД |
 | GET | `/trigger.js` | триггер-сниппет для встраивания на groster.me (session-ping корзины) |
+| GET | `/demo` | dev/reference: эталон разводки `cart()`/`identify()` (см. docs/site_integration.md) |
 | PUT | `/feeds/{categories,products,top5,subscribers,orders}` | приём фидов |
 | POST | `/cart-ping` | heartbeat корзины (session-ping) |
 | POST | `/esp/webhook` | статусы письма от ESP |
@@ -85,6 +86,10 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
 вкладке и непустой корзине, помнит последнюю личность (cookie-приоритет 3.4). Для
 прода задать `CORS_ORIGINS` в `.env` (домены groster.me). Self-check логики:
 `node scripts/test_trigger.js`.
+
+Полный гайд разводки для витринной команды (события, edge-cases, примеры под
+Битрикс/сервер-рендер/SPA) — [docs/site_integration.md](docs/site_integration.md).
+Рабочий эталон с фейковой корзиной и живым логом — `GET /demo`.
 
 ## Источник данных: 1С (pull) или push-фиды
 - **Прод**: каталог, корзина и статус заказа тянутся из 1С по HTTP — контракт в

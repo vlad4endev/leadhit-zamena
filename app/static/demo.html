@@ -1,0 +1,185 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Демо разводки триггер-сниппета — groster.me</title>
+<style>
+  :root { color-scheme: light dark; }
+  body { font: 15px/1.5 -apple-system, Segoe UI, Roboto, sans-serif; margin: 0; padding: 24px;
+         max-width: 900px; margin: 0 auto; }
+  h1 { font-size: 20px; } h2 { font-size: 15px; margin: 0 0 8px; }
+  .note { background: #fff8e1; border: 1px solid #ffe082; color: #5d4037; padding: 10px 12px;
+          border-radius: 8px; font-size: 13px; }
+  @media (prefers-color-scheme: dark){ .note{ background:#3a2f10; border-color:#5f4d15; color:#f0d98a } }
+  .grid { display: grid; grid-template-columns: 1fr 1fr; gap: 16px; align-items: start; }
+  .card { border: 1px solid #ddd; border-radius: 10px; padding: 14px; }
+  @media (prefers-color-scheme: dark){ .card{ border-color:#444 } .note{} }
+  @media (max-width: 720px){ .grid { grid-template-columns: 1fr; } }
+  button { font: inherit; padding: 5px 10px; border-radius: 7px; border: 1px solid #bbb;
+           background: #f5f5f5; cursor: pointer; }
+  @media (prefers-color-scheme: dark){ button{ background:#2a2a2a; border-color:#555; color:#eee } }
+  button:hover { border-color: #888; }
+  .row { display: flex; align-items: center; gap: 8px; margin: 6px 0; }
+  .row .name { flex: 1; } .qty { min-width: 24px; text-align: center; }
+  input[type=email] { font: inherit; padding: 5px 8px; border-radius: 7px; border: 1px solid #bbb; width: 220px; }
+  code { background: rgba(127,127,127,.15); padding: 1px 5px; border-radius: 4px; }
+  #log { font: 12px/1.45 ui-monospace, SFMono-Regular, Menlo, monospace; background: rgba(127,127,127,.08);
+         border: 1px solid #ddd; border-radius: 8px; padding: 10px; height: 260px; overflow: auto;
+         white-space: pre-wrap; }
+  @media (prefers-color-scheme: dark){ #log{ border-color:#444 } input{ background:#2a2a2a;border-color:#555;color:#eee } }
+  .muted { color: #888; font-size: 12px; }
+</style>
+</head>
+<body>
+<h1>Демо разводки триггер-сниппета</h1>
+<p class="note">
+  Это <b>эталон для витринной команды</b> (dev/reference), а не боевая страница. Он реально шлёт
+  <code>POST /cart-ping</code> на этот же origin и пишет в БД сервиса (<code>cart_sessions</code>, а при
+  согласии — <code>subscribers</code>). Гайд интеграции: <code>docs/site_integration.md</code>.
+  Ниже показаны <b>три точки разводки</b> — изменение корзины, логин, оформление с согласием.
+</p>
+
+<p class="muted">session_id (cookie <code>gr_sid</code>): <span id="sid">…</span></p>
+
+<div class="grid">
+  <div>
+    <div class="card">
+      <h2>1. Корзина → <code>groster.cart(items)</code></h2>
+      <p class="muted">Каталог (клик = добавить/увеличить):</p>
+      <div id="catalog"></div>
+      <hr>
+      <p class="muted">В корзине:</p>
+      <div id="cart"></div>
+      <div class="row"><button id="clear">Очистить корзину</button></div>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>2. Логин → <code>groster.identify({user_id})</code></h2>
+      <div class="row">
+        <span id="auth" class="name">Гость</span>
+        <button id="login">Войти (user_id=42817)</button>
+      </div>
+      <p class="muted">Сниппет по дизайну помнит личность в cookie и не «разлогинивает» — это
+        cookie-приоритет 3.4. Кнопка логина здесь только задаёт user_id.</p>
+    </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>3. Оформление → <code>groster.identify({email, consent})</code></h2>
+      <div class="row"><input type="email" id="email" placeholder="user@example.com"></div>
+      <div class="row">
+        <label><input type="checkbox" id="consent"> согласен на письма (152-ФЗ)</label>
+      </div>
+      <div class="row"><button id="checkout">Оформить</button></div>
+      <p class="muted">Подписчик с <code>consent_at</code> заведётся только при галочке. Корзина должна
+        быть непустой — иначе сниппет не пингует и согласие не долетит (так и в бою).</p>
+    </div>
+  </div>
+
+  <div class="card">
+    <h2>Живой лог отправок <code>/cart-ping</code></h2>
+    <div id="log"></div>
+    <p class="muted">Каждое действие слева, пока вкладка активна и корзина непуста, порождает один POST.</p>
+  </div>
+</div>
+
+<!-- Перехват fetch ДО загрузки сниппета — чтобы поймать его пинги в лог. -->
+<script>
+(function () {
+  var logEl;
+  function line(t) {
+    logEl = logEl || document.getElementById('log');
+    logEl.textContent = '[' + new Date().toLocaleTimeString() + '] ' + t + '\n' + logEl.textContent;
+  }
+  var orig = window.fetch;
+  window.fetch = function (url, opts) {
+    if (typeof url === 'string' && url.indexOf('/cart-ping') !== -1) {
+      var body = opts && opts.body ? JSON.parse(opts.body) : {};
+      line('POST /cart-ping\n' + JSON.stringify(body, null, 2));
+    }
+    return orig.apply(this, arguments);
+  };
+  window.__demoLine = line;
+})();
+</script>
+
+<!-- Сам сниппет (тот, что встраивает витрина). -->
+<script src="/trigger.js"></script>
+
+<!-- Разводка витрины: ровно то, что команда сайта делает у себя. -->
+<script>
+(function () {
+  groster.init({ endpoint: location.origin, intervalSec: 20 });
+  document.getElementById('sid').textContent =
+    (document.cookie.match(/(?:^|; )gr_sid=([^;]*)/) || [])[1] || '(создан)';
+
+  var CATALOG = [
+    { product_id: '0057412', category_id: 'salfetki-bumajnye', name: 'Салфетка «Лилия» 250 л', price: 71.6 },
+    { product_id: '0038921', category_id: 'kasaletki',        name: 'Касалетка 900 мл',        price: 11.8 },
+    { product_id: '0091003', category_id: 'pakety',           name: 'Пакет-майка 30×55',       price: 4.2 },
+  ];
+  var cart = {};  // product_id -> { ...item, qty }
+
+  // Единственная точка контакта корзины со сниппетом: пересобрать позиции и отдать.
+  function pushCart() {
+    var items = Object.keys(cart).map(function (id) {
+      var c = cart[id];
+      return { product_id: c.product_id, category_id: c.category_id, price: c.price, qty: c.qty };
+    });
+    groster.cart(items);
+    window.__demoLine('groster.cart([' + items.length + ' поз.])');
+    renderCart();
+  }
+
+  function add(p) { cart[p.product_id] = cart[p.product_id] || Object.assign({ qty: 0 }, p);
+                    cart[p.product_id].qty++; pushCart(); }
+  function dec(id) { if (!cart[id]) return; if (--cart[id].qty <= 0) delete cart[id]; pushCart(); }
+  function rm(id) { delete cart[id]; pushCart(); }
+
+  function renderCart() {
+    var el = document.getElementById('cart');
+    var ids = Object.keys(cart);
+    if (!ids.length) { el.innerHTML = '<p class="muted">пусто</p>'; return; }
+    el.innerHTML = '';
+    ids.forEach(function (id) {
+      var c = cart[id], row = document.createElement('div'); row.className = 'row';
+      row.innerHTML = '<span class="name">' + c.name + '</span>' +
+        '<button data-dec>−</button><span class="qty">' + c.qty + '</span>' +
+        '<button data-inc>+</button><button data-rm>✕</button>';
+      row.querySelector('[data-dec]').onclick = function () { dec(id); };
+      row.querySelector('[data-inc]').onclick = function () { add(c); };
+      row.querySelector('[data-rm]').onclick = function () { rm(id); };
+      el.appendChild(row);
+    });
+  }
+
+  var cat = document.getElementById('catalog');
+  CATALOG.forEach(function (p) {
+    var row = document.createElement('div'); row.className = 'row';
+    row.innerHTML = '<span class="name">' + p.name + ' — ' + p.price + ' ₽</span>' +
+      '<button>В корзину</button>';
+    row.querySelector('button').onclick = function () { add(p); };
+    cat.appendChild(row);
+  });
+  renderCart();
+
+  document.getElementById('clear').onclick = function () { cart = {}; pushCart(); };
+
+  document.getElementById('login').onclick = function () {
+    groster.identify({ user_id: '42817' });
+    window.__demoLine("groster.identify({ user_id: '42817' })");
+    document.getElementById('auth').textContent = 'user_id = 42817';
+  };
+
+  document.getElementById('checkout').onclick = function () {
+    var email = document.getElementById('email').value.trim();
+    var consent = document.getElementById('consent').checked;
+    if (!email) { alert('Введите email'); return; }
+    groster.identify({ email: email, consent: consent });
+    window.__demoLine('groster.identify({ email: ' + JSON.stringify(email) + ', consent: ' + consent + ' })'
+      + (Object.keys(cart).length ? '' : '\n⚠ корзина пуста → сниппет не пингует, согласие не долетит'));
+  };
+})();
+</script>
+</body>
+</html>
