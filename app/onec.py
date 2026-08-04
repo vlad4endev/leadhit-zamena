@@ -54,10 +54,6 @@ async def fetch_products(ids: list[str]) -> dict:
     return await _call("POST", "/products", body={"ids": ids})
 
 
-async def fetch_cart(session_id: str) -> dict:
-    return await _call("GET", "/cart", {"session_id": session_id})
-
-
 async def order_exists(user_id: str, since: str) -> dict:
     return await _call("GET", "/orders/exists", {"user_id": user_id, "since": since})
 

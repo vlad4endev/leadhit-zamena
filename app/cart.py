@@ -186,20 +186,11 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
            LIMIT 1""",
         s["user_id"], s["email"],
     )
+    # Истина по составу корзины — последний ping сниппета (решение п.2): 1С данные
+    # отдаёт файлом (каталог/топ-5/подписчики), живого запроса корзины по session_id нет.
+    # Пустую/оформленную корзину закрывают gate has_items и проверка заказа ниже.
     items = json.loads(s["cart_items"])
     email = s["email"] or (sub["email"] if sub else None)
-
-    # 1С — источник истины по составу корзины: обновляем перед отправкой.
-    if onec.configured():
-        try:
-            fresh = await onec.fetch_cart(s["session_id"])
-            if fresh.get("is_empty"):
-                items = []
-            elif fresh.get("cart_items") is not None:
-                items = fresh["cart_items"]
-            email = fresh.get("email") or email
-        except Exception as e:  # noqa: BLE001 — при сбое 1С используем состав из ping
-            print(f"[onec] fetch_cart fail: {e}")
 
     within_cooldown = bool(
         sub and sub["last_sent_cart_at"] is not None and
