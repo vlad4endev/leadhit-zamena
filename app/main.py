@@ -21,7 +21,7 @@ async def lifespan(_: FastAPI):
     await db.disconnect()
 
 
-app = FastAPI(title="LeadHit-замена", lifespan=lifespan)
+app = FastAPI(title="GrosterHit", lifespan=lifespan)
 
 # CORS для триггер-сниппета: cart-ping шлётся кросс-доменно с groster.me.
 # credentials не нужны — session_id едет в теле, а не в cookie сервиса.

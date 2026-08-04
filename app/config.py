@@ -5,7 +5,7 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    database_url: str = "postgresql://localhost/leadhit_dev"
+    database_url: str = "postgresql://localhost/grosterhit_dev"
 
     # Внешний mailer-service (микросервис отправки). Задан → письма идут через него.
     mailer_service_url: str = ""

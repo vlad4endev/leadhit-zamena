@@ -1,6 +1,6 @@
 # Dev-команды. Требуется локальный PostgreSQL и Python 3.9+ (прод — 3.11+).
 PY := ./.venv/bin/python
-DB := leadhit_dev
+DB := grosterhit_dev
 
 .PHONY: venv db reset seed run workers test worker-postsale worker-best-offer worker-cart attribution
 
