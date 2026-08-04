@@ -1,0 +1,50 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- Пример файла импорта GrosterHit. Контракт: db/import_contract.md.
+     Секции catalog/top5/subscribers независимы — можно слать любое подмножество. -->
+<grosterhit-import>
+
+  <catalog>
+    <categories>
+      <category id="salfetki-bumajnye" sort="1">Бумажные салфетки</category>
+      <category id="kasaletki" sort="2">Касалетки</category>
+    </categories>
+    <products>
+      <product>
+        <id>0057412</id>
+        <name>Салфетка бумажная 1-слойная 24*24 "Лилия" белая, 250 лист</name>
+        <category>salfetki-bumajnye</category>
+        <price>71.60</price>
+        <in_stock>true</in_stock>
+        <image_url>https://groster.me/upload/iblock/0057412.jpg</image_url>
+        <product_url>https://groster.me/catalog/salfetki-bumajnye/0057412/</product_url>
+      </product>
+      <product>
+        <id>0038921</id>
+        <name>Касалетка 900 мл 222*160*38 алюминиевая без крышки</name>
+        <category>kasaletki</category>
+        <price>11.80</price>
+        <in_stock>false</in_stock>
+        <image_url>https://groster.me/upload/iblock/0038921.jpg</image_url>
+        <product_url>https://groster.me/catalog/kasaletki/0038921/</product_url>
+      </product>
+    </products>
+  </catalog>
+
+  <top5>
+    <category id="salfetki-bumajnye">
+      <product position="1">0057412</product>
+    </category>
+  </top5>
+
+  <subscribers>
+    <subscriber>
+      <user_id>42817</user_id>
+      <email>m.orlova@mail.ru</email>
+      <is_unsubscribed>false</is_unsubscribed>
+      <consent_at>2026-07-20T10:00:00+03:00</consent_at>
+      <last_purchase_at>2026-07-15T12:00:00+03:00</last_purchase_at>
+      <last_purchase_category_id>kasaletki</last_purchase_category_id>
+    </subscriber>
+  </subscribers>
+
+</grosterhit-import>

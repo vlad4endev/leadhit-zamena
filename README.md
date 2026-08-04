@@ -1,4 +1,4 @@
-# LeadHit-замена — триггерные email-сервисы для groster.me
+# GrosterHit — триггерные email-сервисы для groster.me
 
 Собственная замена внешнего LeadHit. Три сценария, дающие 82,8% дохода от триггерных
 рассылок: **Best Offer**, **Брошенная корзина**, **Постпродажа**. Без ML и без сбора
@@ -17,6 +17,7 @@ app/
   config.py      настройки + тайминги сценариев (из .env)
   db.py          пул asyncpg
   feeds.py       приём фидов: categories/products/top5/subscribers/orders
+  import_xml.py  импорт каталога/топ-5/подписчиков из XML-файла (админка)
   mailer.py      Mailer (абстракция) + LogMailer (dev); реальный ESP — одна реализация
   templates.py   общий email-макет (товарный блок + UTM + отписка)
   postsale.py    Сервис 3 — Постпродажа (delayed-job +7д)
@@ -65,6 +66,7 @@ delayed-job; атрибуция — по расписанию.
 | GET/PUT | `/admin/config[/{service}]` | вкл/выкл + интервалы/cooldown (без перезапуска) |
 | GET | `/admin/{logs,feeds-status}` | просмотр логов, мониторинг актуальности фидов |
 | POST | `/admin/run/{service}` | ручной запуск воркера |
+| POST | `/admin/import-xml` | импорт каталога/топ-5/подписчиков из XML-файла (тело = файл) |
 
 ## Триггер на сайте (брошенная корзина)
 Клиентская часть сервиса 2 — «намеренно тупой» сниппет (`app/static/trigger.js`,
@@ -91,13 +93,17 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
 Битрикс/сервер-рендер/SPA) — [docs/site_integration.md](docs/site_integration.md).
 Рабочий эталон с фейковой корзиной и живым логом — `GET /demo`.
 
-## Источник данных: 1С (pull) или push-фиды
-- **Прод**: каталог, корзина и статус заказа тянутся из 1С по HTTP — контракт в
-  [db/1c_contract.md](db/1c_contract.md), клиент в `app/onec.py`. Включается заданием
-  `ONEC_BASE_URL` (+ `ONEC_TOKEN`) в `.env`. Синхронизация каталога — в `worker_loop`
-  раз/сутки; ручной запуск — кнопкой в разделе «Фиды» или `POST /admin/sync-catalog`.
-- **Дев/тест**: `ONEC_BASE_URL` пуст → 1С не используется, данные грузятся push-фидами
-  `PUT /feeds/*` (см. `scripts/seed.py`). Логика корзины/заказов падает на локальную БД.
+## Источник данных
+- **Заказы**: живой HTTP из 1С (`/orders/exists`) — контракт в
+  [db/1c_contract.md](db/1c_contract.md), клиент в `app/onec.py`. Включается `ONEC_BASE_URL`
+  (+ `ONEC_TOKEN`) в `.env`; при сбое/выключенной 1С падаем на локальную таблицу `orders`.
+- **Каталог, топ-5, подписчики**: импорт **файлом** (XML, загрузка в админке `/admin` →
+  «Импорт из файла») — заменяет живой `/catalog` из 1С. Контракт и пример:
+  [db/import_contract.md](db/import_contract.md), [db/import_sample.xml](db/import_sample.xml).
+  Парсер — `app/import_xml.py` (переиспользует upsert'ы `feeds.py`).
+- **Корзина**: из 1С **не запрашивается** — истина на момент отправки берётся из пинга сниппета
+  (`cart_sessions`, решение п.2).
+- **Дев/тест**: push-фиды `PUT /feeds/*` (см. `scripts/seed.py`).
 
 ## Заглушки (по плану, не техдолг)
 - **LogMailer** — печатает письмо в лог. Реальный ESP подключается реализацией

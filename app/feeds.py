@@ -63,22 +63,54 @@ class Subscriber(BaseModel):
     last_purchase_category_id: Optional[str] = None
 
 
+# --- Ядро upsert'ов (принимают соединение) — переиспользуется endpoint'ами и XML-импортом. ---
+
+async def upsert_subscribers_rows(con, rows: list[Subscriber]) -> None:
+    await con.executemany(
+        """INSERT INTO subscribers(user_id, email, is_unsubscribed, consent_at,
+                                   last_purchase_at, last_purchase_category_id)
+           VALUES($1, $2, $3, $4::text::timestamptz, $5::text::timestamptz, $6)
+           ON CONFLICT (user_id) DO UPDATE SET
+             email = EXCLUDED.email,
+             is_unsubscribed = EXCLUDED.is_unsubscribed,
+             consent_at = EXCLUDED.consent_at,
+             last_purchase_at = EXCLUDED.last_purchase_at,
+             last_purchase_category_id = EXCLUDED.last_purchase_category_id""",
+        [(s.user_id, s.email, s.is_unsubscribed, s.consent_at,
+          s.last_purchase_at, s.last_purchase_category_id) for s in rows],
+    )
+
+
+async def upsert_products_rows(con, rows: list[Product]) -> None:
+    await con.executemany(
+        """INSERT INTO products(product_id, name, price, image_url,
+                                category_id, product_url, in_stock, updated_at)
+           VALUES($1, $2, $3, $4, $5, $6, $7, now())
+           ON CONFLICT (product_id) DO UPDATE SET
+             name = EXCLUDED.name, price = EXCLUDED.price,
+             image_url = EXCLUDED.image_url, category_id = EXCLUDED.category_id,
+             product_url = EXCLUDED.product_url, in_stock = EXCLUDED.in_stock,
+             updated_at = now()""",
+        [(p.product_id, p.name, p.price, p.image_url,
+          p.category_id, p.product_url, p.in_stock) for p in rows],
+    )
+
+
+async def upsert_top5_rows(con, rows: list[Top5Row]) -> None:
+    # Полная замена: присылается актуальный срез целиком.
+    async with con.transaction():
+        await con.execute("TRUNCATE top5_by_category")
+        await con.executemany(
+            """INSERT INTO top5_by_category(category_id, position, product_id, updated_at)
+               VALUES($1, $2, $3, now())""",
+            [(r.category_id, r.position, r.product_id) for r in rows],
+        )
+
+
 @router.put("/subscribers")
 async def upsert_subscribers(rows: list[Subscriber]) -> dict:
     async with db.pool().acquire() as con:
-        await con.executemany(
-            """INSERT INTO subscribers(user_id, email, is_unsubscribed, consent_at,
-                                       last_purchase_at, last_purchase_category_id)
-               VALUES($1, $2, $3, $4::text::timestamptz, $5::text::timestamptz, $6)
-               ON CONFLICT (user_id) DO UPDATE SET
-                 email = EXCLUDED.email,
-                 is_unsubscribed = EXCLUDED.is_unsubscribed,
-                 consent_at = EXCLUDED.consent_at,
-                 last_purchase_at = EXCLUDED.last_purchase_at,
-                 last_purchase_category_id = EXCLUDED.last_purchase_category_id""",
-            [(s.user_id, s.email, s.is_unsubscribed, s.consent_at,
-              s.last_purchase_at, s.last_purchase_category_id) for s in rows],
-        )
+        await upsert_subscribers_rows(con, rows)
     return {"upserted": len(rows)}
 
 
@@ -98,32 +130,14 @@ async def upsert_categories(rows: list[Category]) -> dict:
 @router.put("/products")
 async def upsert_products(rows: list[Product]) -> dict:
     async with db.pool().acquire() as con:
-        await con.executemany(
-            """INSERT INTO products(product_id, name, price, image_url,
-                                    category_id, product_url, in_stock, updated_at)
-               VALUES($1, $2, $3, $4, $5, $6, $7, now())
-               ON CONFLICT (product_id) DO UPDATE SET
-                 name = EXCLUDED.name, price = EXCLUDED.price,
-                 image_url = EXCLUDED.image_url, category_id = EXCLUDED.category_id,
-                 product_url = EXCLUDED.product_url, in_stock = EXCLUDED.in_stock,
-                 updated_at = now()""",
-            [(p.product_id, p.name, p.price, p.image_url,
-              p.category_id, p.product_url, p.in_stock) for p in rows],
-        )
+        await upsert_products_rows(con, rows)
     return {"upserted": len(rows)}
 
 
 @router.put("/top5")
 async def upsert_top5(rows: list[Top5Row]) -> dict:
-    # Полная замена фида топ-5: заказчик присылает актуальный срез целиком.
     async with db.pool().acquire() as con:
-        async with con.transaction():
-            await con.execute("TRUNCATE top5_by_category")
-            await con.executemany(
-                """INSERT INTO top5_by_category(category_id, position, product_id, updated_at)
-                   VALUES($1, $2, $3, now())""",
-                [(r.category_id, r.position, r.product_id) for r in rows],
-            )
+        await upsert_top5_rows(con, rows)
     return {"replaced": len(rows)}
 
 

@@ -12,7 +12,7 @@ import os
 import re
 from typing import Optional
 
-from fastapi import APIRouter, Response
+from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
@@ -761,6 +761,20 @@ async def sync_catalog_now() -> dict:
     async with db.pool().acquire() as con:
         n = await onec.sync_catalog(con)
     return {"ok": True, "synced": n}
+
+
+@router.post("/import-xml")
+async def import_xml_upload(request: Request) -> dict:
+    """Импорт каталога/топ-5/подписчиков из XML (сырое тело файла). Атомарно."""
+    from app import import_xml
+    data = await request.body()
+    try:
+        parsed = import_xml.parse(data)
+    except ValueError as e:
+        return {"ok": False, "reason": str(e)}
+    async with db.pool().acquire() as con:
+        counts = await import_xml.import_all(con, parsed)
+    return {"ok": True, "imported": counts}
 
 
 @router.get("/integration")

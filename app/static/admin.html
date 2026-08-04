@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>LeadHit — консоль</title>
+<title>GrosterHit — консоль</title>
 <style>
 :root{
   /* Фирменная палитра Groster: маджента #BC39E5 + золото #FECC00 */
@@ -322,7 +322,7 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
   <div class="logo"><div class="mark" aria-hidden="true"></div>
     <div><b>Триггеры</b><span>groster.me</span></div></div>
   <nav id="nav"></nav>
-  <div class="sidefoot">Замена LeadHit · v1</div>
+  <div class="sidefoot">GrosterHit · v1</div>
 </aside>
 
 <main>
@@ -769,7 +769,11 @@ async function viewFeeds(){
         <span class="pill ${oc?'live':'dev'}">${oc?'Источник: 1С':'Источник: push-фиды'}</span>
         <span class="svc-sub">${oc?esc(cache.integration.onec_base_url||''):'1С не подключена'} · топ-5 обновлён ${esc(cat.t)}${cat.stale?' · <b style="color:var(--warn)">устарел &gt;24ч</b>':''}</span>
       </div>
-      <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
+      <div style="display:flex;gap:8px;align-items:center">
+        <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
+        <input type="file" id="importFile" accept=".xml,text/xml,application/xml" style="display:none" onchange="importXml(this)">
+        <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML)</button>
+      </div>
     </div>
     <div class="card statbar">
       <div class="stat"><b>${num(rec.category_count)}</b><span>категорий с топ-5</span></div>
@@ -795,6 +799,15 @@ async function syncCatalog(){
   const r=await j('/admin/sync-catalog',{method:'POST'});
   toast(r.ok?`Каталог: синхронизировано ${r.synced}`:`1С: ${r.reason||'ошибка'}`);
   if(r.ok)viewFeeds();
+}
+async function importXml(input){
+  const file=input.files&&input.files[0]; input.value='';
+  if(!file)return;
+  const resp=await fetch('/admin/import-xml',{method:'POST',body:file});
+  const r=await resp.json();
+  if(r.ok){ const c=r.imported||{}; const parts=Object.keys(c).map(k=>`${k}: ${c[k]}`).join(', ');
+    toast(`Импорт из файла: ${parts||'пусто'}`); await loadCore(); viewFeeds(); }
+  else toast(`Импорт: ${r.reason||'ошибка'}`);
 }
 
 function pager(page,hasMore,fn){
