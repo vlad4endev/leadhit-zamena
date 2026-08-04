@@ -7,9 +7,11 @@
 from __future__ import annotations
 
 import json
+import os
 from typing import Optional
 
 from fastapi import APIRouter
+from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import app_settings, db, onec, svc_config
@@ -19,6 +21,18 @@ from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 router = APIRouter(tags=["cart"])
 
 CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
+
+_TRIGGER_JS = os.path.join(os.path.dirname(__file__), "static", "trigger.js")
+
+
+@router.get("/trigger.js")
+async def trigger_js() -> FileResponse:
+    """Триггер-сниппет для встраивания на groster.me (session-ping корзины)."""
+    return FileResponse(
+        _TRIGGER_JS,
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
 
 
 class CartItem(BaseModel):
@@ -34,6 +48,13 @@ class Ping(BaseModel):
     email: Optional[str] = None
     cart_items: list[CartItem]
     cart_hash: Optional[str] = None
+    consent: Optional[bool] = None  # явное согласие с оформления (152-ФЗ) → завести подписчика
+
+
+def anon_user_id(email: str) -> str:
+    """Синтетический PK для анонима, согласившегося одним email (без user_id магазина).
+    Детерминирован и регистронезависим → повторное согласие идемпотентно (ON CONFLICT)."""
+    return "anon:" + email.strip().lower()
 
 
 @router.post("/cart-ping")
@@ -55,6 +76,21 @@ async def cart_ping(ping: Ping) -> dict:
                  departed_at = NULL""",
             ping.session_id, ping.user_id, ping.email, items, ping.cart_hash,
         )
+        # Явное согласие с оформления → заводим/обновляем подписчика (152-ФЗ).
+        # Консервативно: первую дату согласия храним, is_unsubscribed НЕ трогаем
+        # (иначе heartbeat «воскресил» бы отписавшегося).
+        if ping.email and ping.consent:
+            # ponytail: anon:email как PK — если тот же email позже придёт с реальным
+            # user_id из фида, будет 2 строки (слияние личностей — отдельная задача).
+            uid = ping.user_id or anon_user_id(ping.email)
+            await con.execute(
+                """INSERT INTO subscribers(user_id, email, consent_at)
+                   VALUES($1, $2, now())
+                   ON CONFLICT (user_id) DO UPDATE SET
+                     email = COALESCE(EXCLUDED.email, subscribers.email),
+                     consent_at = COALESCE(subscribers.consent_at, EXCLUDED.consent_at)""",
+                uid, ping.email,
+            )
     return {"ok": True}
 
 
@@ -239,6 +275,8 @@ def _demo() -> None:
     assert cart_gate(True, True, False, True, False) == "cooldown"
     # Заказ важнее капа и отписки (проверяем приоритет).
     assert cart_gate(True, True, True, True, True) == "order_placed"
+    # Синтетический id анонима: регистронезависим и идемпотентен.
+    assert anon_user_id("Foo@Bar.ru") == anon_user_id(" foo@bar.ru ") == "anon:foo@bar.ru"
     print("cart._demo OK")
 
 

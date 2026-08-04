@@ -40,5 +40,9 @@ class Settings(BaseSettings):
     cart_grace_sec: int = 90
     attribution_window_hours: int = 72
 
+    # CORS для триггер-сниппета (cart-ping идёт кросс-доменно с groster.me).
+    # Пусто → "*" (дев). Прод: "https://groster.me,https://www.groster.me".
+    cors_origins: str = ""
+
 
 settings = Settings()

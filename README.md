@@ -54,6 +54,7 @@ delayed-job; атрибуция — по расписанию.
 | Метод | Путь | Назначение |
 |---|---|---|
 | GET | `/health` | статус + пинг БД |
+| GET | `/trigger.js` | триггер-сниппет для встраивания на groster.me (session-ping корзины) |
 | PUT | `/feeds/{categories,products,top5,subscribers,orders}` | приём фидов |
 | POST | `/cart-ping` | heartbeat корзины (session-ping) |
 | POST | `/esp/webhook` | статусы письма от ESP |
@@ -63,6 +64,27 @@ delayed-job; атрибуция — по расписанию.
 | GET/PUT | `/admin/config[/{service}]` | вкл/выкл + интервалы/cooldown (без перезапуска) |
 | GET | `/admin/{logs,feeds-status}` | просмотр логов, мониторинг актуальности фидов |
 | POST | `/admin/run/{service}` | ручной запуск воркера |
+
+## Триггер на сайте (брошенная корзина)
+Клиентская часть сервиса 2 — «намеренно тупой» сниппет (`app/static/trigger.js`,
+ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбора поведения (152-ФЗ).
+Встраивание на groster.me:
+```html
+<script src="https://trigger.groster.me/trigger.js"
+        data-endpoint="https://trigger.groster.me" data-interval="45"></script>
+<script>
+  // на каждое изменение корзины:
+  groster.cart([{ product_id: 'A1', category_id: 'shoes', price: 4990, qty: 1 }]);
+  // при логине или вводе email на оформлении (идентификация анонима, ROADMAP 3.4).
+  // consent: true — только если пользователь поставил галочку согласия на письма (152-ФЗ).
+  // Backend заводит подписчика с consent_at ТОЛЬКО при consent:true; без него письма не будет.
+  groster.identify({ user_id: '12345', email: 'user@example.com', consent: true });
+</script>
+```
+Сниппет сам держит `session_id` (cookie `gr_sid`, 1 год), пингует только при активной
+вкладке и непустой корзине, помнит последнюю личность (cookie-приоритет 3.4). Для
+прода задать `CORS_ORIGINS` в `.env` (домены groster.me). Self-check логики:
+`node scripts/test_trigger.js`.
 
 ## Источник данных: 1С (pull) или push-фиды
 - **Прод**: каталог, корзина и статус заказа тянутся из 1С по HTTP — контракт в
