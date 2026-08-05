@@ -44,7 +44,7 @@ async def trigger_js() -> FileResponse:
     """Триггер-сниппет для встраивания на groster.me (session-ping корзины)."""
     return FileResponse(
         _TRIGGER_JS,
-        media_type="application/javascript",
+        media_type="application/javascript; charset=utf-8",
         headers={"Cache-Control": "public, max-age=3600"},
     )
 
@@ -60,7 +60,7 @@ async def wheel_js() -> FileResponse:
     """Виджет «Колесо фортуны» для встраивания на groster.me."""
     return FileResponse(
         _WHEEL_JS,
-        media_type="application/javascript",
+        media_type="application/javascript; charset=utf-8",
         headers={"Cache-Control": "public, max-age=3600"},
     )
 
