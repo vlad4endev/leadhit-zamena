@@ -332,6 +332,9 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
     <div class="crumb"><h1 id="title">—</h1><small id="subtitle"></small></div>
     <span class="updated" id="updated"></span>
     <button class="themebtn" id="themebtn" title="Сменить тему"></button>
+    <button class="themebtn" id="logoutbtn" title="Выйти" aria-label="Выйти">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><path d="M9 21H5a2 2 0 0 1-2-2V5a2 2 0 0 1 2-2h4M16 17l5-5-5-5M21 12H9"/></svg>
+    </button>
   </div>
   <div class="loadbar" id="loadbar"></div>
   <div class="view" id="view"></div>
@@ -1612,6 +1615,7 @@ async function route(){
 }
 window.addEventListener('hashchange',route);
 $('themebtn').onclick=toggleTheme;
+$('logoutbtn').onclick=()=>fetch('/logout',{method:'POST'}).finally(()=>location='/login');
 function applyNav(){ document.body.classList.toggle('nav-collapsed', localStorage.navCollapsed==='1'); }
 $('burger').onclick=()=>{ localStorage.navCollapsed = localStorage.navCollapsed==='1'?'0':'1'; applyNav(); };
 applyNav();
