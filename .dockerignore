@@ -1,0 +1,16 @@
+.git/
+.gitignore
+.venv/
+**/__pycache__/
+*.pyc
+.env
+*.db
+*.db-*
+mailer-service/
+app/static/uploads/
+.DS_Store
+scratchpad/
+docs/
+deploy/
+*.md
+ROADMAP*

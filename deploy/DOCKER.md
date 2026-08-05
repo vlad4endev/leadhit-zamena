@@ -1,0 +1,69 @@
+# Деплой в Docker (docker compose)
+
+Стек: `db` (PostgreSQL + volume), `api` (uvicorn), `workers` (worker_loop), `mailer`
+(отправка писем), `nginx` (TLS-терминация + прокси). Определён в [../docker-compose.yml](../docker-compose.yml).
+
+## 1. Подготовка
+```bash
+cd /opt/grosterhit                     # проект на сервере
+cp .env.example .env                   # заполнить секреты (см. ниже)
+```
+Заполнить в `.env` как минимум:
+- `POSTGRES_PASSWORD` — пароль контейнерной БД (обязателен).
+- `CORS_ORIGINS=https://groster.me,https://www.groster.me` — домены витрины.
+- `PUBLIC_BASE_URL=https://groster.skypath.fun` — домен API (ссылки в письмах, embed).
+- `SMTP_HOST/SMTP_USER/SMTP_PASSWORD` (или оставить пустыми → dev-лог вместо отправки).
+- `MAILER_SERVICE_TOKEN` — общий секрет app↔mailer (compose прокинет его как `API_TOKEN`).
+
+`DATABASE_URL` и `MAILER_SERVICE_URL` в Docker задаёт сам compose (сервисы `db`/`mailer`).
+
+## 2. TLS-сертификат (на хосте, один раз)
+nginx-контейнер монтирует серты с хоста (`/etc/letsencrypt`). Выпуск — хостовым certbot:
+```bash
+sudo certbot certonly --webroot -w /var/www/certbot -d groster.skypath.fun
+```
+DNS `groster.skypath.fun` должен указывать на сервер. Авто-продление — хостовым `certbot renew`
+(в cron/timer); nginx перечитает серты при `docker compose exec nginx nginx -s reload`.
+
+## 3. Запуск
+```bash
+docker compose up -d --build
+docker compose ps
+```
+Схема БД применяется автоматически при первом старте (пустой volume `pgdata`).
+
+## 4. Проверка
+```bash
+curl -s https://groster.skypath.fun/trigger.js | head -1     # публичный сниппет
+curl -s https://groster.skypath.fun/health                   # 404 снаружи — так и задумано
+docker compose exec api python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/health').read())"
+```
+
+## 5. Админка / фиды / импорт — доступ по SSH-туннелю
+Наружу служебные эндпоинты НЕ публикуются (безопасность). `api` слушает на хосте `127.0.0.1:8000`:
+```bash
+ssh -L 8000:127.0.0.1:8000 <server>       # с рабочей машины
+# затем в браузере: http://localhost:8000/admin  (импорт каталога — «Импорт из файла»)
+```
+
+## 6. Тестовые данные (dev/staging)
+```bash
+docker compose exec api python scripts/seed.py http://localhost:8000
+```
+
+## Эксплуатация
+```bash
+docker compose logs -f workers            # тики воркеров (в т.ч. корзина)
+docker compose logs -f api mailer
+docker compose restart workers
+docker compose down                       # остановить (volume с данными сохраняется)
+docker compose pull && docker compose up -d --build   # обновление
+```
+
+## Заметки
+- **Схема при обновлениях**: initdb-скрипт срабатывает только на пустом `pgdata`. Изменения схемы
+  после первого запуска применять отдельно (миграция/`psql`), автоперезаливки нет.
+- **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
+- **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
+- **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
+  на уровне маршрутизации (не отдаются наружу), а вебхук ESP аутентифицируется в приложении.

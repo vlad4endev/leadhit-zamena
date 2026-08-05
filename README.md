@@ -105,6 +105,12 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
   (`cart_sessions`, решение п.2).
 - **Дев/тест**: push-фиды `PUT /feeds/*` (см. `scripts/seed.py`).
 
+## Деплой
+- **Docker (рекомендуется)**: весь стек (БД, API, воркеры, mailer, nginx+TLS) — в
+  `docker compose`. Инструкция: [deploy/DOCKER.md](deploy/DOCKER.md). Файлы: `Dockerfile`,
+  `docker-compose.yml`, `deploy/nginx.docker.conf`.
+- **systemd на хосте** (альтернатива): [deploy/README.md](deploy/README.md).
+
 ## Заглушки (по плану, не техдолг)
 - **LogMailer** — печатает письмо в лог. Реальный ESP подключается реализацией
   `Mailer.send()` в `app/mailer.py` (см. `get_mailer`), воркеры не меняются.
