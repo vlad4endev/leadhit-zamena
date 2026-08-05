@@ -27,8 +27,9 @@ services:
       DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
       MAILER_SERVICE_URL: http://mailer:8080
     # Порт только на loopback хоста: наружу — через nginx; admin/feeds — по SSH-туннелю.
+    # Хостовый порт настраивается (API_HOST_PORT) — на случай, если 8000 занят (напр. Portainer).
     ports:
-      - "127.0.0.1:8000:8000"
+      - "127.0.0.1:${API_HOST_PORT:-8000}:8000"
     depends_on:
       db:
         condition: service_healthy
