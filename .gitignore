@@ -5,3 +5,4 @@ __pycache__/
 .DS_Store
 mailer-service/outbox.db*
 app/static/uploads/
+deploy/.htpasswd

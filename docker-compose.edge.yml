@@ -9,6 +9,8 @@ services:
     image: nginx:1.27-alpine
     volumes:
       - ./deploy/nginx.npm.conf:/etc/nginx/conf.d/default.conf:ro
+      # Basic Auth для непубличных путей (admin/feeds/…). Файл — на сервере, не в git.
+      - ./deploy/.htpasswd:/etc/nginx/.htpasswd:ro
     networks:
       default: {}          # grosterhit_default — доступ к сервису api
       edge:                # grosterhit_edge — общая сеть с NPM
