@@ -10,8 +10,11 @@ services:
     volumes:
       - ./deploy/nginx.npm.conf:/etc/nginx/conf.d/default.conf:ro
     networks:
-      - default   # grosterhit_default — доступ к сервису api
-      - edge      # grosterhit_edge   — общая сеть с NPM
+      default: {}          # grosterhit_default — доступ к сервису api
+      edge:                # grosterhit_edge — общая сеть с NPM
+        # Статический IP: NPM резолвит upstream через ПУБЛИЧНЫЙ DNS (resolver 8.8.8.8),
+        # docker-имя контейнера он не знает → 502. Форвардим в NPM на этот IP, не на имя.
+        ipv4_address: 192.168.16.240
     restart: unless-stopped
 
 networks:
