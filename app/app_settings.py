@@ -66,6 +66,43 @@ async def active_template(con, service: str):
     return {"id": row["id"], "blocks": json.loads(blocks) if isinstance(blocks, str) else blocks}
 
 
+# ── Колесо фортуны: конфиг виджета (призы + оформление) одним ключом в app_config ──
+# Зеркалит DEFAULT_PRIZES в wheel.js — там это офлайн-фолбэк, здесь редактируемый источник.
+WHEEL_DEFAULTS = {
+    "enabled": True,
+    "title": 'Колесо фортуны — <span class="acc">скидка до 50%</span>',
+    "subtitle": "Оставьте email, крутаните колесо и забирайте персональный промокод.",
+    "once_days": 7,        # не показывать попап чаще раза в N дней (0 — каждый заход)
+    "auto_delay_sec": 12,  # задержка авто-открытия попапа на сайте
+    "prizes": [
+        {"label": "Скидка 5%",   "code": "GROSTER5",  "weight": 30, "color": "#bc39e5"},
+        {"label": "Скидка 10%",  "code": "GROSTER10", "weight": 22, "color": "#fecc00"},
+        {"label": "Промокод 7%", "code": "LUCKY7",    "weight": 20, "color": "#35cc00"},
+        {"label": "Скидка 15%",  "code": "GROSTER15", "weight": 12, "color": "#fc6631"},
+        {"label": "Подарок 🎁",  "code": "GIFTBOX",   "weight": 8,  "color": "#bc39e5"},
+        {"label": "Скидка 25%",  "code": "GROSTER25", "weight": 5,  "color": "#fecc00"},
+        {"label": "Ещё разок",   "code": "",          "weight": 2,  "color": "#35cc00", "respin": True},
+        {"label": "Скидка 50%",  "code": "JACKPOT50", "weight": 1,  "color": "#fc6631"},
+    ],
+}
+
+
+async def wheel_config(con) -> dict:
+    """Конфиг колеса из app_config (ключ 'wheel') поверх дефолтов."""
+    raw = await con.fetchval("SELECT value FROM app_config WHERE key = 'wheel'")
+    if raw is None:
+        return dict(WHEEL_DEFAULTS)
+    data = json.loads(raw) if isinstance(raw, str) else raw
+    return {**WHEEL_DEFAULTS, **data}
+
+
+async def set_wheel_config(con, cfg: dict) -> None:
+    await con.execute(
+        """INSERT INTO app_config(key, value) VALUES('wheel', $1::jsonb)
+           ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+        json.dumps(cfg))
+
+
 async def set_many(con, patch: dict) -> None:
     """Сохранить настройки. Приводим типы по EDITABLE, чужие ключи игнорируем."""
     for key, val in patch.items():

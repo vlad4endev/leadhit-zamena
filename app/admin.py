@@ -753,6 +753,64 @@ async def mail_test(body: dict) -> dict:
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
 
 
+# ── Колесо фортуны ──
+_HEX_RE = re.compile(r"^#[0-9a-fA-F]{3,8}$")
+
+
+def _normalize_wheel(body: dict) -> dict:
+    """Приводим присланный конфиг к безопасному виду перед записью.
+    Правило секторов: пустой промокод → сектор «крутить ещё» (respin), а не битый приз."""
+    from app.app_settings import WHEEL_DEFAULTS
+    prizes = []
+    for p in (body.get("prizes") or [])[:12]:      # кап 12 секторов — больше не читается на колесе
+        label = str(p.get("label") or "").strip()[:40]
+        if not label:
+            continue                                # сектор без подписи пропускаем
+        code = str(p.get("code") or "").strip()[:32]
+        try:
+            weight = max(0, int(p.get("weight") or 0))
+        except (TypeError, ValueError):
+            weight = 0
+        color = p.get("color") if _HEX_RE.match(str(p.get("color") or "")) else "#bc39e5"
+        prize = {"label": label, "code": code, "weight": weight, "color": color}
+        if not code:
+            prize["respin"] = True                  # без кода нечего выдавать → «Ещё разок»
+        prizes.append(prize)
+
+    def _int(key: str) -> int:
+        try:
+            return max(0, int(body.get(key, WHEEL_DEFAULTS[key])))
+        except (TypeError, ValueError):
+            return WHEEL_DEFAULTS[key]
+
+    return {
+        "enabled": bool(body.get("enabled", True)),
+        "title": str(body.get("title") or "").strip()[:200] or WHEEL_DEFAULTS["title"],
+        "subtitle": str(body.get("subtitle") or "").strip()[:300] or WHEEL_DEFAULTS["subtitle"],
+        "once_days": _int("once_days"),
+        "auto_delay_sec": _int("auto_delay_sec"),
+        "prizes": prizes,
+    }
+
+
+@router.get("/wheel")
+async def get_wheel() -> dict:
+    async with db.pool().acquire() as con:
+        return await app_settings.wheel_config(con)
+
+
+@router.put("/wheel")
+async def put_wheel(body: dict) -> dict:
+    cfg = _normalize_wheel(body)
+    if not cfg["prizes"]:
+        return {"ok": False, "reason": "нужен хотя бы один сектор с подписью"}
+    if sum(p["weight"] for p in cfg["prizes"]) == 0:
+        return {"ok": False, "reason": "у секторов нулевые веса — колесо не сможет выбрать приз"}
+    async with db.pool().acquire() as con:
+        await app_settings.set_wheel_config(con, cfg)
+    return {"ok": True}
+
+
 @router.post("/sync-catalog")
 async def sync_catalog_now() -> dict:
     """Ручная синхронизация каталога из 1С (pull)."""
@@ -801,4 +859,22 @@ _PAGE_PATH = os.path.join(os.path.dirname(__file__), "static", "admin.html")
 @router.get("")
 async def dashboard() -> FileResponse:
     return FileResponse(_PAGE_PATH, headers={"Cache-Control": "no-cache"})
+
+
+def _demo() -> None:
+    # Пустой код → respin; вес и цвет приводятся; сектор без подписи выпадает.
+    out = _normalize_wheel({"prizes": [
+        {"label": "Скидка 5%", "code": " GROSTER5 ", "weight": "10", "color": "#bc39e5"},
+        {"label": "Ещё разок", "code": "", "weight": 2, "color": "oops"},
+        {"label": "", "code": "X", "weight": 5},
+    ]})
+    assert [p["code"] for p in out["prizes"]] == ["GROSTER5", ""]
+    assert out["prizes"][0]["weight"] == 10 and "respin" not in out["prizes"][0]
+    assert out["prizes"][1].get("respin") is True and out["prizes"][1]["color"] == "#bc39e5"
+    assert out["once_days"] == 7 and out["enabled"] is True
+    print("admin._normalize_wheel OK")
+
+
+if __name__ == "__main__":
+    _demo()
 

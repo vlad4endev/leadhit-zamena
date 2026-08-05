@@ -1,0 +1,133 @@
+<!doctype html>
+<html lang="ru">
+<head>
+<meta charset="utf-8">
+<meta name="viewport" content="width=device-width, initial-scale=1">
+<title>Баннер «Колесо фортуны» — groster.me</title>
+<style>
+  /* Превью-страница на белом фоне «как на сайте». Сам баннер — блок .grw-banner ниже;
+     его можно вынести куда угодно (в карусель/на главную), это самодостаточный кусок. */
+  body { margin: 0; padding: 40px 20px; background: #fff;
+    font-family: Montserrat, -apple-system, "Segoe UI", Roboto, Arial, sans-serif; }
+  .wrap { max-width: 1120px; margin: 0 auto; }
+
+  /* ===== БАННЕР (копируется как единый блок) ===== */
+  /* border-box, чтобы width:100% + padding у CTA не выходили за рамку (скоуп — только баннер). */
+  .grw-banner, .grw-banner * { box-sizing: border-box; }
+  .grw-banner {
+    --purple: #bc39e5; --purple-d: #6a12a0;
+    --green: #35cc00; --green-d: #23a000;
+    position: relative; overflow: hidden;
+    display: flex; align-items: center; gap: 24px;
+    border-radius: 28px; padding: 44px 48px; min-height: 260px;
+    color: #fff; text-decoration: none;
+    background:
+      radial-gradient(120% 140% at 88% 18%, #d05cf5 0%, var(--purple) 42%, var(--purple-d) 100%);
+    box-shadow: 0 18px 46px rgba(138, 31, 196, .32);
+    font-family: Montserrat, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
+    isolation: isolate;
+  }
+  /* Фирменный мотив «+» тонкой сеткой (как на брендированной упаковке). */
+  .grw-banner::before {
+    content: ""; position: absolute; inset: 0; z-index: 0; opacity: .16; pointer-events: none;
+    background-image: url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='46'><g fill='none' stroke='white' stroke-width='3' stroke-linecap='round'><path d='M12 6v12M6 12h12'/></g></svg>");
+    background-size: 46px 46px;
+  }
+
+  .grw-copy { position: relative; z-index: 2; flex: 1 1 auto; max-width: 560px; }
+  .grw-kicker {
+    display: inline-block; font-size: 13px; font-weight: 800; letter-spacing: 1.5px;
+    text-transform: uppercase; padding: 6px 14px; border-radius: 50px;
+    background: rgba(255, 255, 255, .18); margin-bottom: 16px;
+  }
+  .grw-title { margin: 0 0 10px; font-size: clamp(28px, 4vw, 44px); font-weight: 900; line-height: 1.04; }
+  .grw-title .grw-accent {
+    color: #fecc00;
+    text-shadow: 0 2px 0 rgba(0, 0, 0, .08);
+  }
+  .grw-sub { margin: 0 0 26px; font-size: clamp(15px, 1.6vw, 18px); font-weight: 500; opacity: .95; }
+  .grw-cta {
+    display: inline-flex; align-items: center; gap: 10px;
+    background: var(--green); color: #fff; font-weight: 800; font-size: 17px;
+    padding: 15px 30px; border-radius: 50px; border: 0; cursor: pointer;
+    box-shadow: 0 10px 22px rgba(35, 160, 0, .4);
+    transition: transform .14s ease, box-shadow .14s ease, background .14s ease;
+  }
+  .grw-cta .grw-arrow { transition: transform .18s ease; }
+  .grw-banner:hover .grw-cta { background: var(--green-d); transform: translateY(-2px); box-shadow: 0 14px 26px rgba(35, 160, 0, .48); }
+  .grw-banner:hover .grw-cta .grw-arrow { transform: translateX(4px); }
+
+  /* Декоративное колесо — секторы одним conic-gradient, крутится бесконечно. */
+  .grw-wheelwrap { position: relative; z-index: 1; flex: 0 0 auto; width: 300px; height: 300px; margin: -8px -6px -8px 0; }
+  .grw-wheel {
+    position: absolute; inset: 0; border-radius: 50%;
+    border: 8px solid #fff;
+    box-shadow: 0 0 0 6px rgba(255, 255, 255, .25), 0 14px 30px rgba(0, 0, 0, .28);
+    background: conic-gradient(
+      var(--purple) 0deg 45deg,      #fecc00 45deg 90deg,
+      var(--green) 90deg 135deg,     #fc6631 135deg 180deg,
+      var(--purple) 180deg 225deg,   #fecc00 225deg 270deg,
+      var(--green) 270deg 315deg,    #fc6631 315deg 360deg);
+    animation: grw-spin 9s linear infinite;
+  }
+  /* Тонкие белые спицы поверх секторов. */
+  .grw-wheel::after {
+    content: ""; position: absolute; inset: 0; border-radius: 50%;
+    background:
+      repeating-conic-gradient(from 0deg, transparent 0deg 44deg, rgba(255,255,255,.9) 44deg 45deg);
+    mix-blend-mode: screen; opacity: .55;
+  }
+  .grw-banner:hover .grw-wheel { animation-duration: 2.2s; } /* навёл — ускорилось */
+  .grw-hub {
+    position: absolute; top: 50%; left: 50%; transform: translate(-50%, -50%);
+    width: 78px; height: 78px; border-radius: 50%; z-index: 3;
+    background: #fff; color: var(--purple); font-weight: 900; font-size: 30px;
+    display: grid; place-items: center; box-shadow: 0 4px 12px rgba(0, 0, 0, .25);
+  }
+  .grw-pointer {
+    position: absolute; top: -10px; left: 50%; transform: translateX(-50%); z-index: 4;
+    width: 0; height: 0; border-left: 13px solid transparent; border-right: 13px solid transparent;
+    border-top: 24px solid #fff; filter: drop-shadow(0 3px 3px rgba(0, 0, 0, .3));
+  }
+  @keyframes grw-spin { to { transform: rotate(360deg); } }
+  @media (prefers-reduced-motion: reduce) { .grw-wheel { animation: none; } }
+
+  /* Мобильная раскладка: колесо сверху, текст по центру, CTA во всю ширину. */
+  @media (max-width: 640px) {
+    .grw-banner { flex-direction: column-reverse; text-align: center; padding: 32px 22px; }
+    .grw-copy { max-width: none; }
+    .grw-cta { width: 100%; justify-content: center; }
+    .grw-wheelwrap { width: 230px; height: 230px; margin: 0 auto 6px; }
+  }
+</style>
+</head>
+<body>
+  <div class="wrap">
+    <!-- ↓↓↓ БАННЕР: самодостаточный блок. Клик открывает попап (если подключён wheel.js),
+         иначе — переход на /wheel как fallback ↓↓↓ -->
+    <a class="grw-banner" id="grwBanner" href="/wheel">
+      <div class="grw-copy">
+        <span class="grw-kicker">🎡 Розыгрыш скидок</span>
+        <h2 class="grw-title">Крути колесо — лови <span class="grw-accent">скидку до 50%</span></h2>
+        <p class="grw-sub">Оставь email, крутани колесо фортуны и забирай персональный промокод на заказ в Гростер.</p>
+        <span class="grw-cta">Крутить колесо <span class="grw-arrow">→</span></span>
+      </div>
+      <div class="grw-wheelwrap" aria-hidden="true">
+        <div class="grw-pointer"></div>
+        <div class="grw-wheel"></div>
+        <div class="grw-hub">%</div>
+      </div>
+    </a>
+    <!-- ↑↑↑ /БАННЕР ↑↑↑ -->
+  </div>
+  <script>
+    // Если на странице подключён wheel.js — клик по баннеру открывает попап без перехода.
+    document.getElementById('grwBanner').addEventListener('click', function (e) {
+      if (window.grosterWheel && grosterWheel.open) {
+        e.preventDefault();
+        grosterWheel.open({ force: true }); // призы/тексты из админки
+      }
+    });
+  </script>
+</body>
+</html>

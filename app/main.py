@@ -29,7 +29,7 @@ _origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()] or
 app.add_middleware(
     CORSMiddleware,
     allow_origins=_origins,
-    allow_methods=["POST", "OPTIONS"],
+    allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )
 

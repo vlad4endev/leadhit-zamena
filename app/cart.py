@@ -8,9 +8,10 @@ from __future__ import annotations
 
 import json
 import os
+import re
 from typing import Optional
 
-from fastapi import APIRouter
+from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
@@ -22,8 +23,19 @@ router = APIRouter(tags=["cart"])
 
 CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
 
-_TRIGGER_JS = os.path.join(os.path.dirname(__file__), "static", "trigger.js")
-_DEMO_HTML = os.path.join(os.path.dirname(__file__), "static", "demo.html")
+_STATIC = os.path.join(os.path.dirname(__file__), "static")
+_TRIGGER_JS = os.path.join(_STATIC, "trigger.js")
+_DEMO_HTML = os.path.join(_STATIC, "demo.html")
+_WHEEL_JS = os.path.join(_STATIC, "wheel.js")
+_WHEEL_HTML = os.path.join(_STATIC, "wheel.html")
+
+# Простая проверка email на границе доверия: не строгий RFC, а «есть чему слать письмо».
+# Настоящая верификация — доставка письма; тут отсекаем явный мусор (без @, без домена).
+_EMAIL_RE = re.compile(r"^[^@\s]+@[^@\s]+\.[^@\s]+$")
+
+
+def valid_email(email: Optional[str]) -> bool:
+    return bool(email) and _EMAIL_RE.match(email.strip()) is not None and len(email) <= 254
 
 
 @router.get("/trigger.js")
@@ -40,6 +52,76 @@ async def trigger_js() -> FileResponse:
 async def demo_page() -> FileResponse:
     """Dev/reference: эталон разводки cart()/identify() (docs/site_integration.md)."""
     return FileResponse(_DEMO_HTML, headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/wheel.js")
+async def wheel_js() -> FileResponse:
+    """Виджет «Колесо фортуны» для встраивания на groster.me."""
+    return FileResponse(
+        _WHEEL_JS,
+        media_type="application/javascript",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/wheel")
+async def wheel_page() -> FileResponse:
+    """Готовая страница-лендинг колеса (email-gate → скидка)."""
+    return FileResponse(_WHEEL_HTML, headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/wheel-banner")
+async def wheel_banner() -> FileResponse:
+    """Готовый баннер-блок для встраивания на сайт (клик → попап колеса)."""
+    return FileResponse(os.path.join(_STATIC, "wheel-banner.html"),
+                        headers={"Cache-Control": "no-cache"})
+
+
+@router.get("/wheel-config")
+async def wheel_config() -> dict:
+    """Публичный конфиг виджета (призы + тексты). Виджет тянет его при открытии,
+    поэтому правки из админки видны без передеплоя фронта."""
+    async with db.pool().acquire() as con:
+        return await app_settings.wheel_config(con)
+
+
+class WheelLead(BaseModel):
+    email: str
+    consent: bool = False          # галочка «согласен на обработку ПД / письма» (152-ФЗ)
+    session_id: Optional[str] = None
+
+
+@router.post("/wheel-lead")
+async def wheel_lead(lead: WheelLead) -> dict:
+    """Захват лида ДО выдачи скидки: валидный email + явное согласие → подписчик.
+
+    Гейт «1 прокрут на пользователя»: помечаем wheel_spun_at атомарно. Повтор того же
+    email → 409 (клиент блокирует колесо). Бонус-сектор «Ещё разок» повторный POST не шлёт,
+    так что сервер честно считает одну попытку на email вне зависимости от бонус-прокрутов.
+    """
+    if not lead.consent:
+        raise HTTPException(status_code=422, detail="consent_required")
+    email = lead.email.strip()
+    if not valid_email(email):
+        raise HTTPException(status_code=422, detail="invalid_email")
+    uid = anon_user_id(email)
+    async with db.pool().acquire() as con:
+        # Одна инструкция: ставит метку И определяет «уже крутил» (пустой RETURNING → 409).
+        # WHERE ... IS NULL не даёт перезаписать метку у повторного захода — гонки нет.
+        row = await con.fetchrow(
+            """INSERT INTO subscribers(user_id, email, consent_at, wheel_spun_at)
+               VALUES($1, $2, now(), now())
+               ON CONFLICT (user_id) DO UPDATE SET
+                 email = COALESCE(EXCLUDED.email, subscribers.email),
+                 consent_at = COALESCE(subscribers.consent_at, EXCLUDED.consent_at),
+                 wheel_spun_at = now()
+               WHERE subscribers.wheel_spun_at IS NULL
+               RETURNING wheel_spun_at""",
+            uid, email,
+        )
+    if row is None:  # конфликт с уже крутившим email
+        raise HTTPException(status_code=409, detail="already_spun")
+    return {"ok": True}
 
 
 class CartItem(BaseModel):
@@ -275,6 +357,10 @@ def _demo() -> None:
     assert cart_gate(True, True, True, True, True) == "order_placed"
     # Синтетический id анонима: регистронезависим и идемпотентен.
     assert anon_user_id("Foo@Bar.ru") == anon_user_id(" foo@bar.ru ") == "anon:foo@bar.ru"
+    # valid_email: отсекаем мусор на границе доверия, пропускаем нормальные адреса.
+    assert valid_email("a@b.ru") and valid_email(" user.name+x@mail.example.com ")
+    assert not valid_email(None) and not valid_email("") and not valid_email("noatsign")
+    assert not valid_email("a@b") and not valid_email("a b@c.ru") and not valid_email("a@@b.ru")
     print("cart._demo OK")
 
 
