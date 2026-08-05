@@ -68,7 +68,10 @@ class SmtpMailer:
 
     def _send_sync(self, to: str, subject: str, html: str, from_email: str, from_name: str) -> None:
         msg = EmailMessage()
-        msg["From"] = f"{from_name or settings.mail_from_name} <{from_email or settings.mail_from}>"
+        # From = авторизованный ящик (mail_from): релеи режут чужой From (550). Адрес → Reply-To.
+        msg["From"] = f"{from_name or settings.mail_from_name} <{settings.mail_from}>"
+        if from_email and from_email != settings.mail_from:
+            msg["Reply-To"] = from_email
         msg["To"] = to
         msg["Subject"] = subject
         msg.set_content("Для просмотра письма включите HTML.")

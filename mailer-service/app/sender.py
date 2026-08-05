@@ -22,7 +22,12 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
 
     msg = EmailMessage()
     msg["Message-ID"] = message_id
-    msg["From"] = f"{from_name or cfg['mail_from_name']} <{from_email or cfg['mail_from']}>"
+    # From всегда = авторизованный ящик (mail_from): SMTP-релеи (Яндекс, Mail.ru и др.) отклоняют
+    # чужой From — «550 not local sender». Адрес отправителя сценария кладём в Reply-To, чтобы
+    # ответы клиентов уходили на него, а не на технический ящик.
+    msg["From"] = f"{from_name or cfg['mail_from_name']} <{cfg['mail_from']}>"
+    if from_email and from_email != cfg["mail_from"]:
+        msg["Reply-To"] = from_email
     msg["To"] = to
     msg["Subject"] = subject
     msg.set_content("Для просмотра письма включите HTML.")

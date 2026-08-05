@@ -112,6 +112,17 @@ async def send_one(m: Message, authorization: Optional[str] = Header(default=Non
     return {"id": mid, "status": "queued"}
 
 
+@app.post("/v1/send/sync")
+async def send_one_sync(m: Message, authorization: Optional[str] = Header(default=None)) -> dict:
+    """Синхронная отправка одного письма (тест-кнопки): минуя очередь, с реальным ответом ESP."""
+    _auth(authorization)
+    try:
+        mid = await sender.send(m.to, m.subject, m.html, m.from_email, m.from_name)
+        return {"ok": True, "message_id": mid}
+    except Exception as e:  # noqa: BLE001 — показываем ошибку провайдера оператору
+        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+
+
 @app.post("/v1/send/batch")
 async def send_batch(b: Batch, authorization: Optional[str] = Header(default=None)) -> dict:
     _auth(authorization)
