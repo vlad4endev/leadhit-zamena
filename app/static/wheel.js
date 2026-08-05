@@ -58,6 +58,13 @@
 
   function validEmail(v) { return !!v && EMAIL_RE.test(String(v).trim()) && v.length <= 254; }
 
+  // Экранирование для вставки в innerHTML (email — пользовательский ввод → защита от XSS).
+  function esc(s) {
+    return String(s == null ? '' : s).replace(/[&<>"']/g, function (c) {
+      return { '&': '&amp;', '<': '&lt;', '>': '&gt;', '"': '&quot;', "'": '&#39;' }[c];
+    });
+  }
+
   // Все стили виджета живут здесь (single source): на чужом сайте нет wheel.html,
   // поэтому CSS инжектится сам, один раз. Классы с префиксом gw- не конфликтуют с сайтом.
   var STYLE = `
@@ -314,39 +321,53 @@
 
     // Письмо с промокодом на захваченный email. Best-effort: код и так на экране,
     // поэтому сбой почты не ломает выдачу — просто не покажем «отправлено».
+    // Отправка приза письмом. Успех → «отправлено на почту». Сбой → показываем код на
+    // экране (фолбэк), иначе при спрятанном коде человек остался бы ни с чем.
     function sendPrize(prize) {
       if (!prize.code || endpoint === false) return;
+      var fallback = function () { showCode(prize, 'Не удалось отправить письмо — вот ваш промокод, скопируйте:'); };
       root.fetch((endpoint || '') + '/wheel-prize', {
         method: 'POST', headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({ email: emailEl.value.trim(), code: prize.code, label: prize.label }),
       }).then(function (r) {
-        if (!r.ok) return;
-        var h = result.querySelector('.gw-hint');
-        if (h) h.textContent = '📧 Промокод отправлен на ' + emailEl.value.trim();
-      }).catch(function () { /* best-effort */ });
+        if (!r.ok) { fallback(); return; }
+        result.innerHTML =
+          '<div class="gw-won">🎁 Приз отправлен на почту!</div>' +
+          '<div class="gw-hint">Промокод уже летит на ' + esc(emailEl.value.trim()) + ' — проверьте входящие.</div>';
+      }).catch(fallback);
     }
 
     function showResult(prize) {
       result.className = 'gw-result gw-show';
       if (!prize.code) { // «пустой» сектор (напр. «Ещё разок»)
-        result.innerHTML = '<div class="gw-won">' + prize.label + '</div>' +
+        result.innerHTML = '<div class="gw-won">' + esc(prize.label) + '</div>' +
           '<div class="gw-hint">Крутаните ещё раз 🎡</div>';
         return;
       }
+      // Демо без бэка — показываем код (письма не будет). Прод — код прячем, уходит письмом.
+      if (endpoint === false) { showCode(prize, 'Промокод скопируется по клику'); return; }
       result.innerHTML =
-        '<div class="gw-won">🎉 Ваш приз: <b>' + prize.label + '</b></div>' +
+        '<div class="gw-won">🎉 Поздравляем!</div>' +
+        '<div class="gw-hint">Отправляем ваш приз на ' + esc(emailEl.value.trim()) + '…</div>';
+    }
+
+    // Показать промокод на экране (демо или фолбэк, если письмо не дошло — чтобы не потерять приз).
+    function showCode(prize, hint) {
+      result.className = 'gw-result gw-show';
+      result.innerHTML =
+        '<div class="gw-won">🎉 Ваш приз: <b>' + esc(prize.label) + '</b></div>' +
         '<div class="gw-code" role="button" tabindex="0" title="Нажмите, чтобы скопировать">' +
-          prize.code + '<span class="gw-copy">копировать</span></div>' +
-        '<div class="gw-hint">Промокод скопируется по клику</div>';
+          esc(prize.code) + '<span class="gw-copy">копировать</span></div>' +
+        '<div class="gw-hint">' + hint + '</div>';
       var codeEl = result.querySelector('.gw-code');
       function copy() {
-        var done = function () {
+        var mark = function () {
           codeEl.classList.add('gw-copied');
           codeEl.querySelector('.gw-copy').textContent = 'скопировано ✓';
         };
         if (navigator.clipboard && navigator.clipboard.writeText) {
-          navigator.clipboard.writeText(prize.code).then(done, function () {});
-        } else { done(); } // нет Clipboard API — просто подсветим, код виден
+          navigator.clipboard.writeText(prize.code).then(mark, function () {});
+        } else { mark(); } // нет Clipboard API — просто подсветим, код виден
       }
       codeEl.addEventListener('click', copy);
       codeEl.addEventListener('keydown', function (e) { if (e.key === 'Enter' || e.key === ' ') { e.preventDefault(); copy(); } });
