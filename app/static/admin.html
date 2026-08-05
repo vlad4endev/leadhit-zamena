@@ -3,7 +3,7 @@
 <head>
 <meta charset="utf-8">
 <meta name="viewport" content="width=device-width, initial-scale=1">
-<title>GrosterHit — консоль</title>
+<title>GrosterHIT — консоль</title>
 <style>
 :root{
   /* Фирменная палитра Groster: маджента #BC39E5 + золото #FECC00 */
@@ -11,7 +11,8 @@
   --text:#1c1524; --muted:#736a80; --accent:#a81fcb; --accent-weak:#f6e8fc;
   --brand:#bc39e5; --gold:#fecc00; --orange:#fc6631;
   --ok:#12986a; --warn:#c24710; --alert:#e0464b;
-  --sidebar:#1a1024; --side-text:#cfc4dc; --side-muted:#7a6e88; --side-active:#2a1a38;
+  --sidebar:#f3ecfa; --side-text:#463c53; --side-muted:#948aa3; --side-active:#e3d2f3;
+  --side-hover:#ebe0f6; --side-border:#e4d7f1;
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
   --r:13px; --shadow:0 1px 2px rgba(28,21,36,.05),0 6px 18px rgba(120,60,150,.06);
@@ -22,6 +23,7 @@
   --brand:#c15ae8; --gold:#fecc00; --orange:#ff7a4d;
   --ok:#2eb681; --warn:#fc6631; --alert:#f0575c;
   --sidebar:#0f0916; --side-text:#cfc4dc; --side-muted:#7a6e88; --side-active:#241633;
+  --side-hover:rgba(255,255,255,.05); --side-border:rgba(255,255,255,.07);
   --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.38);
 }
 @media (prefers-color-scheme:dark){:root:not(.light){
@@ -30,6 +32,7 @@
   --brand:#c15ae8; --gold:#fecc00; --orange:#ff7a4d;
   --ok:#2eb681; --warn:#fc6631; --alert:#f0575c;
   --sidebar:#0f0916; --side-active:#241633;
+  --side-hover:rgba(255,255,255,.05); --side-border:rgba(255,255,255,.07);
   --shadow:0 1px 2px rgba(0,0,0,.35),0 8px 22px rgba(0,0,0,.38);
 }}
 *{box-sizing:border-box}
@@ -40,28 +43,27 @@ body{background:var(--bg);color:var(--text);font-family:var(--sans);font-size:14
 
 /* Sidebar */
 aside{background:var(--sidebar);color:var(--side-text);display:flex;flex-direction:column;
-  height:100vh;position:sticky;top:0;padding:20px 0}
-.logo{display:flex;align-items:center;gap:11px;padding:0 20px 20px}
-.mark{width:34px;height:34px;border-radius:9px;background:var(--brand);position:relative;flex:0 0 auto}
-.mark::before,.mark::after{content:"";position:absolute;background:var(--gold);border-radius:2px}
-.mark::before{left:9px;right:9px;top:11px;height:2.5px}
-.mark::after{left:9px;top:17px;width:8px;height:2.5px;box-shadow:8px 0 0 color-mix(in srgb,var(--gold) 60%,transparent)}
-.logo b{font-size:15px;font-weight:650;color:#fff;letter-spacing:-.01em}
+  height:100vh;position:sticky;top:0;padding:20px 0;border-right:1px solid var(--side-border)}
+.logo{display:flex;align-items:center;gap:11px;padding:0 20px 20px;border-bottom:1px solid var(--side-border);margin-bottom:4px}
+.mark{width:36px;height:36px;border-radius:10px;flex:0 0 auto;display:grid;place-items:center;
+  background:linear-gradient(135deg,var(--brand),var(--accent));box-shadow:0 4px 10px color-mix(in srgb,var(--brand) 34%,transparent)}
+.mark svg{width:20px;height:20px;color:#fff}
+.logo b{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-.01em}
 .logo span{display:block;font-size:11px;color:var(--side-muted)}
 nav{flex:1;overflow-y:auto;padding:6px 12px}
 .navgroup{color:var(--side-muted);font-size:10.5px;font-weight:700;letter-spacing:.11em;
   text-transform:uppercase;padding:16px 10px 6px}
 .navlink{display:flex;align-items:center;gap:10px;padding:8px 10px;border-radius:9px;color:var(--side-text);
   text-decoration:none;font-weight:520;font-size:13.5px;cursor:pointer;transition:background .12s;position:relative}
-.navlink:hover{background:rgba(255,255,255,.05)}
-.navlink.active{background:var(--side-active);color:#fff}
+.navlink:hover{background:var(--side-hover)}
+.navlink.active{background:var(--side-active);color:var(--accent);font-weight:650}
 .navlink.active::before{content:"";position:absolute;left:-12px;top:8px;bottom:8px;width:3px;
   border-radius:0 3px 3px 0;background:var(--accent)}
 .navlink svg{width:17px;height:17px;flex:0 0 auto;opacity:.85}
 .navlink .badge{margin-left:auto;font-size:11px;font-family:var(--mono);color:var(--side-muted)}
 .navlink .sdot{margin-left:auto;width:7px;height:7px;border-radius:50%;background:var(--ok)}
 .navlink .sdot.off{background:var(--side-muted)}
-.sidefoot{padding:12px 20px 0;border-top:1px solid rgba(255,255,255,.07);margin-top:8px;
+.sidefoot{padding:12px 20px 0;border-top:1px solid var(--side-border);margin-top:8px;
   color:var(--side-muted);font-size:11px}
 
 /* Topbar + main */
@@ -319,10 +321,11 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
 </head>
 <body>
 <aside>
-  <div class="logo"><div class="mark" aria-hidden="true"></div>
-    <div><b>Триггеры</b><span>groster.me</span></div></div>
+  <div class="logo"><div class="mark" aria-hidden="true">
+      <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7.5 9 6 9-6"/></svg></div>
+    <div><b>GrosterHIT</b><span>groster.me</span></div></div>
   <nav id="nav"></nav>
-  <div class="sidefoot">GrosterHit · v1</div>
+  <div class="sidefoot">GrosterHIT · v1</div>
 </aside>
 
 <main>

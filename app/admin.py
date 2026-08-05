@@ -848,6 +848,10 @@ async def integration() -> dict:
     from app.config import settings
     from app.mailer import get_mailer
     mailer = type(get_mailer()).__name__
+    async with db.pool().acquire() as con:
+        last_ping = await con.fetchval("SELECT max(last_ping_at) FROM cart_sessions")
+        sessions_today = await con.fetchval(
+            "SELECT count(*) FROM cart_sessions WHERE last_ping_at >= date_trunc('day', now())")
     return {
         "mailer": mailer,
         "live": mailer != "LogMailer",
@@ -857,6 +861,9 @@ async def integration() -> dict:
         "attribution_window_hours": settings.attribution_window_hours,
         "onec_configured": onec.configured(),
         "onec_base_url": settings.onec_base_url or None,
+        # Сигнал «сайт на связи»: свежий пинг = track.js реально шлёт события.
+        "last_ping_at": _iso(last_ping),
+        "sessions_today": int(sessions_today or 0),
     }
 
 
