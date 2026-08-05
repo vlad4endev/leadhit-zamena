@@ -305,7 +305,21 @@
       onWin(prize, idx);
       // «Ещё разок» → бонус-прокрут (попытка не израсходована); иначе колесо заблокировано.
       if (prize.respin) { bonus = true; done = false; btn.disabled = false; }
-      else { bonus = false; done = true; btn.disabled = true; }
+      else { bonus = false; done = true; btn.disabled = true; sendPrize(prize); }
+    }
+
+    // Письмо с промокодом на захваченный email. Best-effort: код и так на экране,
+    // поэтому сбой почты не ломает выдачу — просто не покажем «отправлено».
+    function sendPrize(prize) {
+      if (!prize.code || endpoint === false) return;
+      root.fetch((endpoint || '') + '/wheel-prize', {
+        method: 'POST', headers: { 'Content-Type': 'application/json' },
+        body: JSON.stringify({ email: emailEl.value.trim(), code: prize.code, label: prize.label }),
+      }).then(function (r) {
+        if (!r.ok) return;
+        var h = result.querySelector('.gw-hint');
+        if (h) h.textContent = '📧 Промокод отправлен на ' + emailEl.value.trim();
+      }).catch(function () { /* best-effort */ });
     }
 
     function showResult(prize) {

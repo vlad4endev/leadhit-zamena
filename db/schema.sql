@@ -50,6 +50,7 @@ CREATE TABLE subscribers (
     is_unsubscribed            BOOLEAN NOT NULL DEFAULT FALSE,
     consent_at                 TIMESTAMPTZ,                 -- 152-ФЗ: фиксация согласия
     wheel_spun_at              TIMESTAMPTZ,                 -- колесо фортуны: 1 прокрут на email
+    wheel_prize_code           TEXT,                        -- выданный промокод (идемпотентность письма)
     last_purchase_at           TIMESTAMPTZ,
     last_purchase_category_id  TEXT REFERENCES categories(category_id),
     rotation_pointer_category_id TEXT REFERENCES categories(category_id),

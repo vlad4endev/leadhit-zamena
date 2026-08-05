@@ -16,6 +16,7 @@ from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
 from app import app_settings, db, onec, svc_config
+from app.config import settings
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -121,6 +122,71 @@ async def wheel_lead(lead: WheelLead) -> dict:
         )
     if row is None:  # конфликт с уже крутившим email
         raise HTTPException(status_code=409, detail="already_spun")
+    return {"ok": True}
+
+
+class WheelPrize(BaseModel):
+    email: str
+    code: str
+    label: Optional[str] = None
+
+
+def _wheel_prize_html(code: str, label: Optional[str]) -> str:
+    """Простое брендированное письмо с промокодом. Без каталога — только код и CTA."""
+    site = settings.public_base_url.rstrip("/")
+    title = label or "Ваш приз"
+    return f"""\
+<div style="font-family:Montserrat,Arial,sans-serif;max-width:520px;margin:0 auto;color:#3a1152">
+  <div style="background:linear-gradient(135deg,#bc39e5,#6a12a0);border-radius:20px;padding:28px;text-align:center;color:#fff">
+    <div style="font-size:22px;font-weight:800">🎉 {title}</div>
+    <p style="margin:10px 0 18px;opacity:.92">Ваш персональный промокод на заказ в Гростер:</p>
+    <div style="display:inline-block;background:#fff;color:#3a1152;font:800 22px/1 monospace;
+                letter-spacing:2px;padding:14px 22px;border-radius:12px;border:2px dashed #fecc00">{code}</div>
+    <p style="margin:18px 0 0"><a href="{site}" style="color:#fecc00;font-weight:700">Перейти в магазин →</a></p>
+  </div>
+  <p style="font-size:12px;color:#888;text-align:center;margin-top:14px">
+    Письмо отправлено, потому что вы согласились на рассылку при участии в розыгрыше.</p>
+</div>"""
+
+
+@router.post("/wheel-prize")
+async def wheel_prize(p: WheelPrize) -> dict:
+    """Отправка выигранного промокода на email, указанный при прокруте.
+
+    Код уже показан на экране (клиент выбирает сектор), так что письмо — копия для
+    удобства, а не новая тайна. Шлём только тем, кто реально крутил (wheel_spun_at),
+    и один раз (wheel_prize_code как идемпотентный «слот» — не спамим на ретраях/гонке).
+    """
+    email = p.email.strip()
+    if not valid_email(email):
+        raise HTTPException(status_code=422, detail="invalid_email")
+    code = (p.code or "").strip()
+    if not code:
+        raise HTTPException(status_code=422, detail="no_code")
+    uid = anon_user_id(email)
+    async with db.pool().acquire() as con:
+        sub = await con.fetchrow(
+            "SELECT wheel_spun_at, wheel_prize_code FROM subscribers WHERE user_id = $1", uid)
+        if sub is None or sub["wheel_spun_at"] is None:
+            raise HTTPException(status_code=409, detail="not_spun")  # приз без прокрута не шлём
+        if sub["wheel_prize_code"]:
+            return {"ok": True, "already_sent": True}                # идемпотентно
+        # Атомарно занимаем слот отправки: гонка/ретрай не дадут второго письма.
+        claimed = await con.fetchval(
+            """UPDATE subscribers SET wheel_prize_code = $2
+               WHERE user_id = $1 AND wheel_prize_code IS NULL
+               RETURNING TRUE""",
+            uid, code)
+        if not claimed:
+            return {"ok": True, "already_sent": True}
+    ok = await get_mailer().send(
+        email, "Ваш промокод от Гростер 🎡", _wheel_prize_html(code, p.label),
+        settings.mail_from, settings.mail_from_name, meta={"kind": "wheel_prize", "code": code})
+    if not ok:
+        # Письмо не ушло — освобождаем слот, чтобы клиент мог повторить.
+        async with db.pool().acquire() as con:
+            await con.execute("UPDATE subscribers SET wheel_prize_code = NULL WHERE user_id = $1", uid)
+        raise HTTPException(status_code=502, detail="mail_failed")
     return {"ok": True}
 
 
