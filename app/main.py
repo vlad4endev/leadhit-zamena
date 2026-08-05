@@ -6,7 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import db
+from app import auth, db
 from app.config import settings
 from app.admin import router as admin_router
 from app.analytics import router as analytics_router
@@ -33,6 +33,16 @@ app.add_middleware(
     allow_headers=["Content-Type"],
 )
 
+# Гейт админки: /admin* доступен только с валидной сессией (см. app/auth.py).
+# Пустой ADMIN_PASSWORD → вход отключён, пропускаем всё (дев / за NPM Basic Auth).
+@app.middleware("http")
+async def admin_gate(request, call_next):
+    if request.url.path.startswith("/admin") and not auth.valid_session(request):
+        return auth.unauthorized(request)
+    return await call_next(request)
+
+
+app.include_router(auth.router)
 app.include_router(feeds_router)
 app.include_router(cart_router)
 app.include_router(analytics_router)

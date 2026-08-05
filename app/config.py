@@ -47,5 +47,11 @@ class Settings(BaseSettings):
     # Публичный адрес сервиса (для ссылок в письмах, напр. отписки). Без хвостового /.
     public_base_url: str = "https://groster.skypath.fun"
 
+    # Авторизация админки. Пустой ADMIN_PASSWORD → вход отключён (дев/за NPM Basic Auth).
+    # SESSION_SECRET пуст → подпись куки выводится из пароля (смена пароля рвёт сессии).
+    admin_username: str = "admin"
+    admin_password: str = ""
+    session_secret: str = ""
+
 
 settings = Settings()

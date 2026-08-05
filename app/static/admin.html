@@ -342,7 +342,8 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
 const $ = id => document.getElementById(id);
 let _pending=0;
 const j = (u,o) => { _pending++; document.getElementById('loadbar').classList.add('on');
-  return fetch(u,o).then(r=>r.json()).finally(()=>{ if(--_pending<=0){_pending=0; document.getElementById('loadbar').classList.remove('on');} }); };
+  return fetch(u,o).then(r=>{ if(r.status===401){ location='/login'; throw new Error('unauthorized'); } return r.json(); })
+    .finally(()=>{ if(--_pending<=0){_pending=0; document.getElementById('loadbar').classList.remove('on');} }); };
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = v => v==null ? '—' : (v*100).toFixed(v<0.02?2:1)+'%';
 const rub = v => v==null ? '—' : Math.round(v).toLocaleString('ru-RU')+' ₽';
