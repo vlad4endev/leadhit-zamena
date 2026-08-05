@@ -1,0 +1,23 @@
+# Edge-прослойка для деплоя ЗА Nginx Proxy Manager (NPM).
+# Запуск (в дополнение к базовому стеку):
+#   docker compose -f docker-compose.edge.yml up -d
+# NPM (в сети grosterhit_edge) форвардит на grosterhit-edge-1:80; TLS/ACME — на стороне NPM.
+# Базовый nginx из docker-compose.yml в этом сценарии НЕ поднимается (80/443 держит NPM).
+
+services:
+  edge:
+    image: nginx:1.27-alpine
+    volumes:
+      - ./deploy/nginx.npm.conf:/etc/nginx/conf.d/default.conf:ro
+    networks:
+      - default   # grosterhit_default — доступ к сервису api
+      - edge      # grosterhit_edge   — общая сеть с NPM
+    restart: unless-stopped
+
+networks:
+  default:
+    name: grosterhit_default
+    external: true
+  edge:
+    name: grosterhit_edge
+    external: true
