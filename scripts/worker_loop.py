@@ -34,6 +34,7 @@ async def main() -> None:
     # Интервалы из настроек БД (поверх .env). Правки применяются при перезапуске воркеров.
     async with db.pool().acquire() as con:
         cfg = await app_settings.get(con)
+        await onec.load_overrides(con)  # base_url/token из админки (app_config) поверх .env
     print("worker_loop: старт "
           f"(cart={cfg['cart_tick_sec']}s, postsale={cfg['postsale_tick_sec']}s, "
           f"attribution={cfg['attribution_tick_sec']}s, best_offer={cfg['best_offer_tick_sec']}s)")

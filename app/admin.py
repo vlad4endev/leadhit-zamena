@@ -52,13 +52,19 @@ async def get_settings() -> dict:
     from app.config import settings as env
     async with db.pool().acquire() as con:
         values = await app_settings.get(con)
+        await onec.load_overrides(con)
+        onec_token_set = bool(
+            await con.fetchval("SELECT value FROM app_config WHERE key = 'onec_token'")) \
+            or bool(env.onec_token)
     meta = {k: {"type": m[0], "group": m[1], "label": m[2], "restart": m[3]}
             for k, m in app_settings.EDITABLE.items()}
     return {
         "values": values, "meta": meta,
         "readonly": {
             "smtp_host": env.smtp_host or None, "smtp_configured": bool(env.smtp_host),
-            "onec_base_url": env.onec_base_url or None, "onec_configured": bool(env.onec_base_url),
+            # base_url/token правятся в админке (app_config) поверх .env; токен наружу не отдаём.
+            "onec_base_url": onec.base_url() or None, "onec_configured": onec.configured(),
+            "onec_token_set": onec_token_set,
         },
     }
 
@@ -68,6 +74,45 @@ async def put_settings(patch: dict) -> dict:
     async with db.pool().acquire() as con:
         await app_settings.set_many(con, patch)
     return {"ok": True}
+
+
+@router.post("/onec-config")
+async def put_onec_config(body: dict) -> dict:
+    """Подключение к 1С (base_url + token) в app_config поверх .env. Токен write-only.
+
+    Пустой base_url → удаляем оверрайд (фолбэк на .env). Токен меняем только если передан.
+    """
+    base_url = (body.get("base_url") or "").strip()
+    token = body.get("token") or ""
+    async with db.pool().acquire() as con:
+        if base_url:
+            await con.execute(
+                """INSERT INTO app_config(key, value) VALUES('onec_base_url', $1::jsonb)
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+                json.dumps(base_url))
+        else:
+            await con.execute("DELETE FROM app_config WHERE key = 'onec_base_url'")
+        if token:
+            await con.execute(
+                """INSERT INTO app_config(key, value) VALUES('onec_token', $1::jsonb)
+                   ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
+                json.dumps(token))
+        await onec.load_overrides(con)
+    return {"ok": True, "onec_configured": onec.configured()}
+
+
+@router.post("/onec-test")
+async def onec_test() -> dict:
+    """Проверка связи с 1С: минимальный запрос каталога сохранённым base_url/token."""
+    async with db.pool().acquire() as con:
+        await onec.load_overrides(con)
+    if not onec.configured():
+        return {"ok": False, "reason": "Base URL не задан (ни в админке, ни в .env)"}
+    try:
+        data = await onec.fetch_catalog(page=1, page_size=1)
+    except Exception as e:  # noqa: BLE001 — причину показываем в UI (401, таймаут, DNS…)
+        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+    return {"ok": True, "base_url": onec.base_url(), "total": data.get("total")}
 
 
 @router.get("/queue")
@@ -443,9 +488,20 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service, [])
     html = render_blocks(blocks, products, "test", service, look)
     mailer = get_mailer()
-    ok = await mailer.send(body.email, "[ТЕСТ] " + cfg["subject"], html,
-                           cfg["sender_email"], cfg["sender_name"])
-    return {"ok": ok, "live": type(mailer).__name__ != "LogMailer"}
+    subject = "[ТЕСТ] " + cfg["subject"]
+    if type(mailer).__name__ == "HttpMailer":
+        # Через mailer-service шлём СИНХРОННО (/v1/send/sync): тест-кнопка должна показывать
+        # реальный результат ESP, а не «queued» (иначе UI пишет «отправлен», а письмо падает в воркере).
+        try:
+            res = await asyncio.to_thread(_mailer_svc, "POST", "/v1/send/sync", {
+                "to": body.email, "subject": subject, "html": html,
+                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]})
+        except Exception as e:  # noqa: BLE001 — сервис недоступен
+            return {"ok": False, "error": f"{type(e).__name__}: {e}", "live": True}
+        return {"ok": bool(res.get("ok")), "error": res.get("error"),
+                "live": await _mailer_is_live(mailer)}
+    ok = await mailer.send(body.email, subject, html, cfg["sender_email"], cfg["sender_name"])
+    return {"ok": ok, "live": await _mailer_is_live(mailer)}
 
 
 @router.get("/scenario/{service}/reach")
@@ -735,6 +791,24 @@ def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
         return json.loads(r.read().decode())
 
 
+async def _mailer_is_live(mailer) -> bool:
+    """live = письмо реально уйдёт в ESP, а не осядет в dev-логе.
+
+    Учитывает dev-режим самого mailer-service: HttpMailer != LogMailer ещё не значит,
+    что сервис отправит — у него может быть пустой smtp_host (provider='dev').
+    """
+    name = type(mailer).__name__
+    if name == "LogMailer":
+        return False
+    if name == "HttpMailer":
+        try:
+            cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
+            return cfg.get("provider") == "smtp"
+        except Exception:  # noqa: BLE001 — сервис недоступен → не рисуем ложный «отправлено»
+            return False
+    return True   # SmtpMailer — шлёт напрямую в SMTP-relay
+
+
 @router.get("/mail/config")
 async def mail_config() -> dict:
     """Настройки почтового провайдера (из mailer-service). Пароль не отдаётся."""
@@ -861,6 +935,7 @@ async def integration() -> dict:
     from app.mailer import get_mailer
     mailer = type(get_mailer()).__name__
     async with db.pool().acquire() as con:
+        await onec.load_overrides(con)
         last_ping = await con.fetchval("SELECT max(last_ping_at) FROM cart_sessions")
         sessions_today = await con.fetchval(
             "SELECT count(*) FROM cart_sessions WHERE last_ping_at >= date_trunc('day', now())")
@@ -872,7 +947,7 @@ async def integration() -> dict:
         "smtp_host": settings.smtp_host or None,
         "attribution_window_hours": settings.attribution_window_hours,
         "onec_configured": onec.configured(),
-        "onec_base_url": settings.onec_base_url or None,
+        "onec_base_url": onec.base_url() or None,
         # Сигнал «сайт на связи»: свежий пинг = track.js реально шлёт события.
         "last_ping_at": _iso(last_ping),
         "sessions_today": int(sessions_today or 0),

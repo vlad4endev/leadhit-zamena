@@ -676,7 +676,7 @@ async function sendTest(svc){
   if(!email){ toast('Укажите email'); return; }
   const r=await j('/admin/scenario/'+encodeURIComponent(svc)+'/test',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-  toast(!r.ok?'Ошибка отправки':(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)'));
+  toast(r.error?('Ошибка ESP: '+r.error):(!r.ok?'Ошибка отправки':(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)')));
 }
 
 const DOW=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
@@ -1360,7 +1360,7 @@ async function tplTest(){
   const to=($('tpl_test_to')||{}).value||''; if(!to){ toast('Укажите email'); return; }
   const r=await j('/admin/scenario/'+encodeURIComponent(tplSvc)+'/test',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({email:to})});
-  toast(!r.ok?'Ошибка':(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)'));
+  toast(r.error?('Ошибка ESP: '+r.error):(!r.ok?'Ошибка':(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)')));
 }
 
 /* Settings */
@@ -1539,11 +1539,42 @@ async function viewSettings(){
       <p class="legend">Интервалы воркеров и синхронизации 1С применяются после перезапуска процесса воркеров, окно атрибуции — сразу.</p>`;
   } else {
     const st=(ok,on,off)=>`<span class="pill ${ok?'live':'dev'}">${ok?esc(on):off}</span>`;
-    $('settingsBody').innerHTML=`<div class="card">
-      <div class="field"><span class="k">Почта (mailer-service)</span>${st(s.readonly.smtp_configured, s.readonly.smtp_host, 'настраивается на вкладке «Почта»')}</div>
-      <div class="field"><span class="k">1С (каталог/корзина/заказы)</span>${st(s.readonly.onec_configured, s.readonly.onec_base_url, 'не задана — push-фиды /feeds/*')}</div>
-      <div class="svc-sub" style="margin-top:10px">Провайдер почты — на вкладке «Почта». Секреты 1С (токен) правятся в .env.</div></div>`;
+    const ro=s.readonly;
+    $('settingsBody').innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
+      <div class="card">
+        <div class="svc-name" style="margin-bottom:8px">Почта</div>
+        <div class="field"><span class="k">mailer-service</span>${st(ro.smtp_configured, ro.smtp_host, 'на вкладке «Почта»')}</div>
+        <div class="svc-sub" style="margin-top:10px">Провайдер и SMTP — на вкладке «Почта».</div>
+      </div>
+      <div class="card">
+        <div class="svc-name" style="margin-bottom:8px">1С (каталог / заказы)</div>
+        <div class="field"><span class="k">Статус (pull)</span>${st(ro.onec_configured, 'подключена', 'не задана — push-фиды /feeds/*')}</div>
+        <div class="field"><span class="k">Base URL</span>
+          <input class="inp wide" id="onec_base_url" type="text" placeholder="https://1c.groster.me/base/hs/grosterhit/v1" value="${esc(ro.onec_base_url||'')}"></div>
+        <div class="field"><span class="k">Токен (Bearer)</span>
+          <input class="inp wide" id="onec_token" type="password" placeholder="${ro.onec_token_set?'●●●●● (сохранён, оставьте пустым)':'не задан'}"></div>
+        <div style="display:flex;gap:8px;margin-top:12px">
+          <button class="btn primary" onclick="saveOnec()">Сохранить подключение</button>
+          <button class="btn" onclick="testOnec()">Проверить связь</button>
+        </div>
+        <div id="onec_test_result" class="svc-sub" style="margin-top:10px"></div>
+        <div class="svc-sub" style="margin-top:6px">Пустой Base URL → берётся значение из .env; пусто и там → push-фиды /feeds/*. Токен хранится только на сервере и наружу не отдаётся. Проверка связи использует сохранённое подключение — сначала сохраните. Ручная «Синхронизировать из 1С» подхватывает правки сразу; периодическая — после перезапуска воркеров.</div>
+      </div></div>`;
   }
+}
+async function saveOnec(){
+  const patch={base_url:(($('onec_base_url')||{}).value||'').trim()};
+  const tk=($('onec_token')||{}).value; if(tk) patch.token=tk;
+  const r=await j('/admin/onec-config',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
+  toast(r.ok?'Подключение к 1С сохранено':`Ошибка: ${r.reason||''}`);
+  if(r.ok) viewSettings();
+}
+async function testOnec(){
+  const box=$('onec_test_result'); if(box) box.textContent='Проверка связи…';
+  const r=await j('/admin/onec-test',{method:'POST'});
+  if(box) box.innerHTML = r.ok
+    ? `<span style="color:var(--ok)">✓ Связь есть${r.total!=null?` · товаров в базе: ${num(r.total)}`:''}</span>`
+    : `<span style="color:var(--alert)">✗ ${esc(r.reason||'ошибка')}</span>`;
 }
 async function loadMail(){
   const m=await j('/admin/mail/config');

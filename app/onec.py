@@ -14,18 +14,39 @@ import urllib.request
 from app.config import settings
 
 
+# base_url/token правятся в админке (app_config) поверх .env. Кэш заполняет load_overrides
+# (в sync_catalog — каждый тик, и в админ-эндпоинтах). Пустое значение → фолбэк на .env.
+_overrides: dict = {}
+
+
+async def load_overrides(con) -> None:
+    global _overrides
+    rows = await con.fetch(
+        "SELECT key, value FROM app_config WHERE key IN ('onec_base_url', 'onec_token')")
+    _overrides = {r["key"]: (json.loads(r["value"]) if isinstance(r["value"], str) else r["value"])
+                  for r in rows}
+
+
+def base_url() -> str:
+    return _overrides.get("onec_base_url") or settings.onec_base_url
+
+
+def _token() -> str:
+    return _overrides.get("onec_token") or settings.onec_token
+
+
 def configured() -> bool:
-    return bool(settings.onec_base_url)
+    return bool(base_url())
 
 
 def _http_sync(method: str, path: str, params: dict | None, body: dict | None) -> dict:
-    url = settings.onec_base_url.rstrip("/") + path
+    url = base_url().rstrip("/") + path
     if params:
         url += "?" + urllib.parse.urlencode(params)
     data = json.dumps(body).encode() if body is not None else None
     headers = {"Content-Type": "application/json"}
-    if settings.onec_token:
-        headers["Authorization"] = f"Bearer {settings.onec_token}"
+    if _token():
+        headers["Authorization"] = f"Bearer {_token()}"
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
     with urllib.request.urlopen(req, timeout=30) as r:
         return json.loads(r.read().decode())
@@ -95,6 +116,7 @@ async def _ensure_categories(con, items: list[dict]) -> None:
 
 async def sync_catalog(con, changed_since: str | None = None) -> int:
     """Тянет каталог из 1С постранично и апсертит в products. Возвращает число товаров."""
+    await load_overrides(con)  # подхватываем правки base_url/token из админки на каждом тике
     if not configured():
         return 0
     total, page = 0, 1
