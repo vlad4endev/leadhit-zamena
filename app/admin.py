@@ -91,6 +91,7 @@ async def leads(q: Optional[str] = None, status: Optional[str] = None,
     rows = await db.pool().fetch(
         """SELECT s.user_id, s.email, s.is_unsubscribed, s.consent_at,
                   s.last_purchase_at, s.last_purchase_category_id,
+                  s.wheel_spun_at, s.wheel_prize_code,
                   (SELECT count(*) FROM orders o WHERE o.user_id = s.user_id) AS orders_count,
                   (SELECT COALESCE(SUM(
                        (SELECT COALESCE(SUM((i->>'price')::numeric*(i->>'qty')::int),0)
@@ -100,8 +101,12 @@ async def leads(q: Optional[str] = None, status: Optional[str] = None,
                      WHERE e.user_id = s.user_id AND e.sent_at IS NOT NULL) AS emails_count
            FROM subscribers s
            WHERE ($1::text IS NULL OR s.email ILIKE '%'||$1||'%' OR s.user_id ILIKE '%'||$1||'%')
-             AND ($2::text IS NULL OR s.is_unsubscribed = ($2 = 'unsubscribed'))
-           ORDER BY (s.last_purchase_at IS NOT NULL) DESC, s.last_purchase_at DESC NULLS LAST, s.user_id
+             AND ($2::text IS NULL
+                  OR ($2 = 'subscribed'   AND NOT s.is_unsubscribed)
+                  OR ($2 = 'unsubscribed' AND s.is_unsubscribed)
+                  OR ($2 = 'wheel'        AND s.wheel_spun_at IS NOT NULL))
+           ORDER BY (s.last_purchase_at IS NOT NULL) DESC, s.last_purchase_at DESC NULLS LAST,
+                    s.wheel_spun_at DESC NULLS LAST, s.user_id
            LIMIT $3 OFFSET $4""",
         q or None, status or None, min(limit, 500), max(offset, 0),
     )
@@ -110,6 +115,9 @@ async def leads(q: Optional[str] = None, status: Optional[str] = None,
              "consent_at": _iso(r["consent_at"]),
              "last_purchase_at": _iso(r["last_purchase_at"]),
              "category": r["last_purchase_category_id"],
+             "source": "wheel" if r["wheel_spun_at"] else "",  # источник лида (пока знаем только колесо)
+             "wheel_spun_at": _iso(r["wheel_spun_at"]),
+             "wheel_prize": r["wheel_prize_code"],
              "orders_count": r["orders_count"],
              "total_spent": float(r["total_spent"] or 0),
              "emails_count": r["emails_count"]} for r in rows]
@@ -122,7 +130,8 @@ async def lead(user_id: str) -> dict:
         s = await con.fetchrow(
             """SELECT user_id, email, is_unsubscribed, consent_at, last_purchase_at,
                       last_purchase_category_id, rotation_pointer_category_id,
-                      last_sent_best_offer_at, last_sent_cart_at, last_sent_postsale_at
+                      last_sent_best_offer_at, last_sent_cart_at, last_sent_postsale_at,
+                      wheel_spun_at, wheel_prize_code
                FROM subscribers WHERE user_id = $1""", user_id)
         if s is None:
             return {"found": False}
@@ -144,6 +153,9 @@ async def lead(user_id: str) -> dict:
             "last_sent_best_offer": _iso(s["last_sent_best_offer_at"]),
             "last_sent_cart": _iso(s["last_sent_cart_at"]),
             "last_sent_postsale": _iso(s["last_sent_postsale_at"]),
+            "source": "wheel" if s["wheel_spun_at"] else "",
+            "wheel_spun_at": _iso(s["wheel_spun_at"]),
+            "wheel_prize": s["wheel_prize_code"],
         },
         "emails": [{"id": e["id"], "service": e["service"], "status": e["status"],
                     "product_ids": list(e["product_ids"] or []),

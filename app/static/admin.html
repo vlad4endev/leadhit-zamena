@@ -1583,6 +1583,7 @@ async function viewLeads(){
   const rows=list.map(l=>`<tr onclick="location.hash='#/lead/'+encodeURIComponent('${esc(l.user_id)}')" style="cursor:pointer">
     <td><span style="color:var(--accent);font-weight:600">${esc(l.email||l.user_id)}</span></td>
     <td><span class="pill ${l.is_unsubscribed?'unsubscribed':'sent'}">${l.is_unsubscribed?'отписан':'подписан'}</span></td>
+    <td>${l.source==='wheel'?`<span class="pill live">🎡 Колесо</span>${l.wheel_prize?` <span class="mono" style="color:var(--muted)">${esc(l.wheel_prize)}</span>`:''}`:'<span class="mono" style="color:var(--muted)">—</span>'}</td>
     <td class="mono">${esc(l.category||'—')}</td>
     <td class="mono">${l.last_purchase_at?esc(new Date(l.last_purchase_at).toLocaleDateString('ru-RU')):'—'}</td>
     <td class="mono">${l.consent_at?esc(new Date(l.consent_at).toLocaleDateString('ru-RU')):'—'}</td></tr>`).join('');
@@ -1598,10 +1599,10 @@ async function viewLeads(){
       <input class="inp wide" type="search" placeholder="поиск по email или id" value="${esc(leadFilter.q)}"
         oninput="leadFilter.q=this.value;leadFilter.page=0; clearTimeout(window._lt); window._lt=setTimeout(viewLeads,300)">
       <select class="inp" onchange="leadFilter.page=0;leadFilter.status=this.value;viewLeads()">
-        ${opt('','Все',leadFilter.status)}${opt('subscribed','Подписаны',leadFilter.status)}${opt('unsubscribed','Отписаны',leadFilter.status)}</select>
+        ${opt('','Все',leadFilter.status)}${opt('subscribed','Подписаны',leadFilter.status)}${opt('unsubscribed','Отписаны',leadFilter.status)}${opt('wheel','🎡 Колесо фортуны',leadFilter.status)}</select>
     </div>
     ${list.length?`<div class="tablewrap"><table><thead><tr>
-      <th>Лид</th><th>Статус</th><th>Категория покупки</th><th>Последняя покупка</th><th>Согласие</th>
+      <th>Лид</th><th>Статус</th><th>Источник</th><th>Категория покупки</th><th>Последняя покупка</th><th>Согласие</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`+pager(leadFilter.page,list.length>=LEAD_LIM,'leadsPage'):'<div class="tablewrap"><div class="empty">'+(leadFilter.q||leadFilter.status||leadFilter.page?'Лиды не найдены.':'База лидов пуста.')+'</div></div>'+(leadFilter.page?pager(leadFilter.page,false,'leadsPage'):'')}
   </section>`;
 }
@@ -1633,6 +1634,7 @@ async function viewLead(uid){
         ${f('Email', p.email||'—')}
         ${f('Статус', p.is_unsubscribed?'отписан':'подписан')}
         ${f('Согласие 152-ФЗ', dt2(p.consent_at))}
+        ${p.source==='wheel'?f('Участие в колесе', dt2(p.wheel_spun_at))+f('Приз (промокод)', p.wheel_prize||'—'):''}
         ${f('Категория покупки', p.category||'—')}
         ${f('Указатель ротации', p.rotation||'—')}
       </div></div>
