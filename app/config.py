@@ -44,5 +44,8 @@ class Settings(BaseSettings):
     # Пусто → "*" (дев). Прод: "https://groster.me,https://www.groster.me".
     cors_origins: str = ""
 
+    # Публичный адрес сервиса (для ссылок в письмах, напр. отписки). Без хвостового /.
+    public_base_url: str = "https://groster.skypath.fun"
+
 
 settings = Settings()

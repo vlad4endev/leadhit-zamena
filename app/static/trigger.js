@@ -4,8 +4,8 @@
  * клики, история) — только heartbeat «вкладка жива + корзина непуста» (152-ФЗ).
  *
  * Подключение (авто-init из data-атрибутов тега):
- *   <script src="https://trigger.groster.me/trigger.js"
- *           data-endpoint="https://trigger.groster.me" data-interval="45"></script>
+ *   <script src="https://groster.skypath.fun/trigger.js"
+ *           data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
  *
  * Сайт кормит сниппет двумя вызовами:
  *   groster.cart([{product_id, category_id, price, qty}])  // на каждое изменение корзины

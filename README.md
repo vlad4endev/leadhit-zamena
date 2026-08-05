@@ -73,8 +73,8 @@ delayed-job; атрибуция — по расписанию.
 ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбора поведения (152-ФЗ).
 Встраивание на groster.me:
 ```html
-<script src="https://trigger.groster.me/trigger.js"
-        data-endpoint="https://trigger.groster.me" data-interval="45"></script>
+<script src="https://groster.skypath.fun/trigger.js"
+        data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
 <script>
   // на каждое изменение корзины:
   groster.cart([{ product_id: 'A1', category_id: 'shoes', price: 4990, qty: 1 }]);

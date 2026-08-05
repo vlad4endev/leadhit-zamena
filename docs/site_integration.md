@@ -10,11 +10,11 @@
 
 ## Подключение (один раз, в `<head>` или перед `</body>`)
 ```html
-<script src="https://trigger.groster.me/trigger.js"
-        data-endpoint="https://trigger.groster.me" data-interval="45"></script>
+<script src="https://groster.skypath.fun/trigger.js"
+        data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
 ```
 `data-endpoint` — адрес сервиса триггеров (не витрины). Тег с `data-endpoint` авто-инициализируется.
-Альтернатива без data-атрибутов: `groster.init({ endpoint: 'https://trigger.groster.me' })`.
+Альтернатива без data-атрибутов: `groster.init({ endpoint: 'https://groster.skypath.fun' })`.
 
 Инициализация делается **один раз** за загрузку. В SPA переинициализация при смене роута не нужна.
 
@@ -109,12 +109,11 @@ onSubmit(() => groster.identify({ email, consent }));
   только при смене состава либо по таймеру).
 - **HTTPS** — витрина по https не постучится на http-endpoint; сервис триггеров должен быть за TLS.
 
-## Зависимость: `session_id ↔ 1С` (открытый вопрос п.2)
-Бэкенд перед отправкой уточняет корзину у 1С по **нашему** `session_id` (`onec.fetch_cart`,
-см. [`db/1c_contract.md`](../db/1c_contract.md), открытый вопрос в конце файла). Чтобы «1С как источник
-истины» работало, витрина должна **прокидывать наш `gr_sid`** (cookie сниппета) в корзину 1С — либо
-согласовать иной общий ключ. Без этого связка деградирует до состава из ping'а (не фатально, но точность
-теряется). **Согласовать с заказчиком.**
+## Истина по корзине (п.2 — закрыт)
+Состав корзины на момент отправки письма берётся из **последнего пинга сниппета**
+(`cart_sessions`), а не запросом в 1С. Поэтому прокидывать наш `session_id` в 1С не нужно —
+никакой связки `session_id ↔ 1С` витрине настраивать не требуется. Достаточно вовремя звать
+`groster.cart(...)` при изменениях корзины (в т.ч. `cart([])` при очистке).
 
 ## Как проверить
 1. `make run`, открыть `http://localhost:8000/demo`.

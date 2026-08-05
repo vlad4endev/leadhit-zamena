@@ -11,7 +11,9 @@
    ```bash
    cd /opt/grosterhit
    python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
-   cp .env.example .env   # заполнить DATABASE_URL, SMTP_*, интервалы
+   cp .env.example .env   # заполнить DATABASE_URL, SMTP_*, интервалы,
+                          # CORS_ORIGINS (домены витрины groster.me),
+                          # PUBLIC_BASE_URL=https://groster.skypath.fun (домен API — ссылки в письмах)
    ```
 2. Создать системного пользователя (без логина):
    ```bash
@@ -41,13 +43,18 @@ sudo systemctl stop grosterhit-workers       # мягкая остановка �
 sudo cp deploy/grosterhit_proxy.inc /etc/nginx/grosterhit_proxy.inc
 sudo cp deploy/nginx.conf /etc/nginx/sites-available/grosterhit
 sudo ln -s /etc/nginx/sites-available/grosterhit /etc/nginx/sites-enabled/
-sudo certbot certonly --webroot -w /var/www/certbot -d mail.groster.me   # TLS-сертификат
+sudo certbot certonly --webroot -w /var/www/certbot -d groster.skypath.fun   # TLS-сертификат
 sudo nginx -t && sudo systemctl reload nginx
 ```
+Публичный домен API — `groster.skypath.fun` (embed сниппета + ссылки в письмах). Отправка
+писем идёт с `mail.groster.me` (DKIM/SPF/DMARC) — это разные домены.
+
 Доступ по эндпоинтам:
-- `/cart-ping` — публичный (браузер).
+- `/cart-ping`, `/trigger.js` — публичные (браузер с витрины: пинг + загрузка сниппета).
+- `/unsubscribe` — публичный (ссылка из футера писем, 152-ФЗ).
 - `/esp/webhook` — публичный, но ограничить `allow` на IP ESP (в конфиге закомментировано — заполнить).
-- `/feeds/*`, `/kpi`, `/health` — только внутренняя сеть/VPN (`allow 10.0.0.0/8`).
+- `/feeds/*`, `/admin/*`, `/kpi`, `/health` — только внутренняя сеть/VPN (`allow 10.0.0.0/8`).
+  Импорт каталога — `/admin/import-xml` (лимит тела 50 МБ). `/demo` наружу не отдаётся (dev-only).
 
 ## Заметки
 - Рестарт при крахе — `Restart=always` (сам loop от одной ошибки тика не падает).

@@ -8,7 +8,11 @@ from __future__ import annotations
 import html as _htmllib
 from html.parser import HTMLParser
 
-UNSUB_BASE = "https://mail.groster.me/unsubscribe"
+from app.config import settings
+
+# Публичный адрес сервиса из конфига (не хардкод домена) — ссылка отписки должна вести
+# туда, где реально отвечает /unsubscribe.
+UNSUB_BASE = settings.public_base_url.rstrip("/") + "/unsubscribe"
 
 # Разрешённый набор тегов для rich-text (текст/колонки). Всё остальное вырезается.
 _RT_TAGS = {"b", "strong", "i", "em", "u", "s", "a", "br", "p", "ul", "ol", "li", "h3", "h4", "span"}
