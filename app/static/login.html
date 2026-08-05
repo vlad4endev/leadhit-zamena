@@ -6,14 +6,20 @@
 <title>GrosterHIT — вход</title>
 <style>
 :root{
-  --bg:#f7f3fb; --surface:#ffffff; --border:#e9dff3; --text:#1c1524; --muted:#736a80;
+  --bg:#f2edf9; --surface:rgba(255,255,255,.66); --glass-border:rgba(255,255,255,.75);
+  --border:rgba(120,60,150,.14); --text:#191223; --muted:#6d6479; --blur:18px;
   --brand:#bc39e5; --gold:#fecc00; --alert:#e0464b;
-  --sans:-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,Inter,system-ui,sans-serif;
-  --r:13px; --shadow:0 1px 2px rgba(28,21,36,.05),0 10px 30px rgba(120,60,150,.12);
+  --grad:linear-gradient(135deg,#c33be1 0%,#8b3ff0 55%,#6a5cf5 100%);
+  --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
+  --r:18px; --shadow:0 2px 6px rgba(28,21,36,.05),0 24px 60px rgba(120,50,160,.20);
+  --glow:0 6px 22px rgba(168,31,203,.34);
 }
 @media (prefers-color-scheme:dark){:root{
-  --bg:#120b1a; --surface:#1c1426; --border:#352544; --text:#efe7f6; --muted:#9a8ea9;
-  --brand:#c15ae8; --alert:#f0575c; --shadow:0 1px 2px rgba(0,0,0,.35),0 12px 34px rgba(0,0,0,.45);
+  --bg:#0b0812; --surface:rgba(28,20,40,.6); --glass-border:rgba(255,255,255,.12);
+  --border:rgba(255,255,255,.09); --text:#f0e8f7; --muted:#a89eb8;
+  --brand:#c15ae8; --alert:#f0575c;
+  --grad:linear-gradient(135deg,#d24bf0 0%,#9a55f5 55%,#7b6cf8 100%);
+  --shadow:0 2px 8px rgba(0,0,0,.45),0 28px 64px rgba(0,0,0,.6); --glow:0 6px 26px rgba(207,107,239,.4);
 }}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
@@ -23,11 +29,12 @@ body{background:
     var(--bg);
   color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.5;
   -webkit-font-smoothing:antialiased;display:grid;place-items:center;padding:24px}
-.card{background:var(--surface);border:1px solid var(--border);border-radius:var(--r);
-  box-shadow:var(--shadow);width:100%;max-width:360px;padding:32px 28px}
+.card{background:var(--surface);border:1px solid var(--glass-border);border-radius:var(--r);
+  box-shadow:var(--shadow);width:100%;max-width:370px;padding:34px 30px;
+  backdrop-filter:blur(var(--blur)) saturate(1.4);-webkit-backdrop-filter:blur(var(--blur)) saturate(1.4)}
 .logo{display:flex;align-items:center;gap:11px;margin-bottom:22px}
-.mark{width:40px;height:40px;border-radius:11px;flex:0 0 auto;display:grid;place-items:center;
-  background:linear-gradient(135deg,var(--brand),#a81fcb);box-shadow:0 6px 16px color-mix(in srgb,var(--brand) 34%,transparent)}
+.mark{width:42px;height:42px;border-radius:13px;flex:0 0 auto;display:grid;place-items:center;
+  background:var(--grad);box-shadow:var(--glow)}
 .mark svg{width:22px;height:22px;color:#fff}
 .logo b{font-size:16px;font-weight:700;letter-spacing:-.01em}
 .logo span{display:block;font-size:11.5px;color:var(--muted)}
@@ -37,9 +44,9 @@ label{display:block;font-size:12px;font-weight:600;color:var(--muted);margin:14p
 input{width:100%;padding:10px 12px;border:1px solid var(--border);border-radius:10px;
   background:var(--bg);color:var(--text);font-size:14px;font-family:inherit;transition:border-color .12s,box-shadow .12s}
 input:focus{outline:none;border-color:var(--brand);box-shadow:0 0 0 3px color-mix(in srgb,var(--brand) 20%,transparent)}
-button{width:100%;margin-top:22px;padding:11px;border:0;border-radius:10px;background:var(--brand);color:#fff;
-  font-size:14px;font-weight:640;font-family:inherit;cursor:pointer;transition:filter .12s,opacity .12s}
-button:hover{filter:brightness(1.05)}
+button{width:100%;margin-top:22px;padding:12px;border:0;border-radius:12px;background:var(--grad);color:#fff;
+  font-size:14px;font-weight:640;font-family:inherit;cursor:pointer;box-shadow:var(--glow);transition:filter .12s,transform .1s,box-shadow .15s}
+button:hover{filter:brightness(1.07);transform:translateY(-1px)}
 button:disabled{opacity:.6;cursor:default}
 .err{margin-top:16px;padding:9px 12px;border-radius:9px;font-size:13px;display:none;
   background:color-mix(in srgb,var(--alert) 14%,transparent);color:var(--alert)}
