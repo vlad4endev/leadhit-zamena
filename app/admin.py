@@ -276,6 +276,13 @@ async def recommendations() -> dict:
             "position_count": total, "usable_count": total_usable}
 
 
+@router.get("/kpi")
+async def kpi() -> dict:
+    """Гейтованный алиас публичного /kpi: админка ходит сюда, чтобы за edge (whitelist
+    /admin*) метрики оставались приватными — публичный /kpi наружу не отдаётся."""
+    return await analytics.kpi()
+
+
 @router.get("/scenario-meta")
 async def scenario_meta() -> dict:
     """Метаданные полей редактора + правила аудитории (read-only) для UI."""

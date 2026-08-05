@@ -8,7 +8,53 @@
 > Платформа витрины не подтверждена. Примеры ниже иллюстративны — **сверить с реальной темой
 > groster.me** (имена событий/DOM-хуки могут отличаться).
 
-## Подключение (один раз, в `<head>` или перед `</body>`)
+## Два способа подключения
+
+### A. Один тег «всё сразу» — `track.js` (аналог track.leadhit.io, рекомендуется)
+Универсальный загрузчик: вставляешь один тег с `clid`, он сам грузит `trigger.js`/`wheel.js`
+и **авто-захватывает email из форм** (submit/blur → `identify({email})`). Логика живёт на
+сервере — тег на сайте больше не меняется.
+```html
+<script>
+  window.grConfig = { clid: 'ВАШ_ID', wheel: true };
+  (function(){ var s=document.createElement('script'); s.async=true;
+    s.src='https://groster.skypath.fun/track.js?ver='+Math.floor(Date.now()/1e8);
+    var f=document.getElementsByTagName('script')[0]; f.parentNode.insertBefore(s,f); })();
+</script>
+```
+`grConfig`: `clid` — id кабинета (сейчас бэкенд однотенантный, принимается «на вырост»);
+`endpoint` — если API на другом домене (иначе берётся из origin самого `track.js`);
+`wheel: true|{onceDays,force}` — включить попап колеса; `autoform: false` — выключить авто-захват.
+
+**152-ФЗ:** авто-захват шлёт `identify({email})` **без** `consent` — email садится в
+`cart_sessions` для идентификации, но **письма не будет** (подписчик заводится только при
+явной галочке на оформлении/колесе).
+
+#### Корзина на кастомной витрине — через `grDataLayer` (рекомендуется)
+Состав корзины `track.js` сам не скрейпит из вёрстки (хрупко). Для кастома используйте
+dataLayer-конвенцию: сайт пушит событие в массив `window.grDataLayer` — одной строкой в том
+же месте, где обновляете бейдж корзины. Работает даже если пуш случился **до** загрузки
+`track.js` (очередь дренится на старте):
+```html
+<!-- инициализировать массив ДО тега track.js, чтобы ранние пуши не потерялись -->
+<script>window.grDataLayer = window.grDataLayer || [];</script>
+```
+```js
+// на любое изменение корзины (add/remove/qty):
+grDataLayer.push({ event: 'cart', items: [
+  { product_id: '0057412', category_id: 'salfetki-bumajnye', price: 71.6, qty: 2 },
+]});
+grDataLayer.push({ event: 'clear' });                          // очистка корзины
+grDataLayer.push({ event: 'identify', user_id: '42817' });     // логин
+grDataLayer.push({ event: 'identify', email, consent });       // email + галочка на оформлении
+```
+Схема позиции — тот же контракт `Ping.CartItem` (см. «Три точки разводки»). `identify`
+передаёт только те ключи, что указал (не затирает известный email в `null`). Своё имя
+массива — `grConfig.datalayer: 'myLayer'`; выключить — `datalayer: false`.
+
+Без `track.js` тот же результат даёт прямой вызов `groster.cart(...)` — см. способ B ниже.
+
+### B. Ручное подключение `trigger.js` (полный контроль)
 ```html
 <script src="https://groster.skypath.fun/trigger.js"
         data-endpoint="https://groster.skypath.fun" data-interval="45"></script>

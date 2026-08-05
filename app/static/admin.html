@@ -345,7 +345,8 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
 const $ = id => document.getElementById(id);
 let _pending=0;
 const j = (u,o) => { _pending++; document.getElementById('loadbar').classList.add('on');
-  return fetch(u,o).then(r=>{ if(r.status===401){ location='/login'; throw new Error('unauthorized'); } return r.json(); })
+  return fetch(u,o).then(r=>{ if(r.status===401){ location='/login'; throw new Error('unauthorized'); }
+      if(!r.ok) throw new Error(`${(o&&o.method)||'GET'} ${u} → HTTP ${r.status}`); return r.json(); })
     .finally(()=>{ if(--_pending<=0){_pending=0; document.getElementById('loadbar').classList.remove('on');} }); };
 const esc = s => String(s==null?'':s).replace(/[&<>"']/g,c=>({'&':'&amp;','<':'&lt;','>':'&gt;','"':'&quot;',"'":'&#39;'}[c]));
 const pct = v => v==null ? '—' : (v*100).toFixed(v<0.02?2:1)+'%';
@@ -428,7 +429,7 @@ function markActive(route){
 /* Data */
 async function loadCore(){
   const [config,kpi,feeds,integration,meta] = await Promise.all([
-    j('/admin/config'), j('/kpi'), j('/admin/feeds-status'), j('/admin/integration'), j('/admin/scenario-meta')]);
+    j('/admin/config'), j('/admin/kpi'), j('/admin/feeds-status'), j('/admin/integration'), j('/admin/scenario-meta')]);
   cache={config,kpi,feeds,integration,meta};
   config.forEach(s=>{const d=document.querySelector(`[data-sdot="${s.service}"]`); if(d)d.className='sdot'+(s.enabled?'':' off');});
   $('updated').textContent='обновлено '+new Date().toLocaleTimeString('ru-RU');
@@ -1607,11 +1608,16 @@ const ROUTES={overview:viewOverview,leads:viewLeads,services:viewServices,report
 async function route(){
   const h=(location.hash||'#/overview').slice(2);
   markActive(h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
-  if(h.startsWith('service/')) return viewService(h.split('/')[1]);
-  if(h.startsWith('lead/')) return viewLead(decodeURIComponent(h.slice(5)));
-  if(h==='templates'){ tplView='list'; return viewTemplates(); }
-  if(h.startsWith('templates/')) return openTemplateView(decodeURIComponent(h.split('/')[1]));
-  (ROUTES[h]||viewOverview)();
+  try {
+    if(h.startsWith('service/')) return await viewService(h.split('/')[1]);
+    if(h.startsWith('lead/')) return await viewLead(decodeURIComponent(h.slice(5)));
+    if(h==='templates'){ tplView='list'; return await viewTemplates(); }
+    if(h.startsWith('templates/')) return await openTemplateView(decodeURIComponent(h.split('/')[1]));
+    await (ROUTES[h]||viewOverview)();
+  } catch(e){
+    if((e&&e.message)==='unauthorized') return;   // j() уже редиректит на /login
+    $('view').innerHTML=`<section><div class="tablewrap"><div class="empty">Не удалось загрузить раздел.<br><span class="mono">${esc((e&&e.message)||e)}</span><br>Обновите страницу; если повторяется — проверьте, что запрос проходит через edge (whitelist /admin*).</div></div></section>`;
+  }
 }
 window.addEventListener('hashchange',route);
 $('themebtn').onclick=toggleTheme;

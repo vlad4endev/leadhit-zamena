@@ -238,7 +238,8 @@
     emailEl.addEventListener('input', function () { errEl.textContent = ''; syncBtn(); });
     consentEl.addEventListener('change', function () { errEl.textContent = ''; syncBtn(); });
 
-    // Отправка лида на бэк. cb(ok, detail). detail прокидываем сырым для разбора в onSpin.
+    // Отправка лида на бэк. cb(ok, detail, status). status: HTTP-код или 0 при обрыве связи —
+    // помогает отличить «сервер недоступен/не задеплоен» от валидационных отказов.
     function postLead(email, cb) {
       var base = endpoint === false ? null : endpoint; // '' → same-origin
       if (base === null) { cb(true); return; }          // офлайн-демо: пропускаем захват
@@ -247,8 +248,8 @@
         body: JSON.stringify({ email: email, consent: true }),
       }).then(function (r) {
         if (r.ok) { cb(true); return; }
-        return r.json().catch(function () { return {}; }).then(function (j) { cb(false, j.detail); });
-      }).catch(function () { cb(false, null); }); // сеть легла
+        return r.json().catch(function () { return {}; }).then(function (j) { cb(false, j.detail, r.status); });
+      }).catch(function () { cb(false, null, 0); }); // сеть легла / CORS / сервер недоступен
     }
 
     // Клик по «Крутить»: гейт → (первый раз) захват+проверка на бэке → физический спин.
@@ -258,7 +259,7 @@
       if (!gateOk()) { errEl.textContent = 'Введите email и отметьте согласие'; syncBtn(); return; }
       if (captured) { doSpin(); return; }
       btn.disabled = true; errEl.textContent = '';
-      postLead(emailEl.value.trim(), function (ok, detail) {
+      postLead(emailEl.value.trim(), function (ok, detail, status) {
         if (ok) {
           captured = true;
           emailEl.disabled = true; consentEl.disabled = true; // фиксируем личность
@@ -270,8 +271,11 @@
           errEl.textContent = 'С этого email колесо уже крутили 🎡';
           return;
         }
-        errEl.textContent = detail === 'invalid_email' ? 'Проверьте email'
-          : detail === 'consent_required' ? 'Нужно согласие'
+        errEl.textContent =
+            detail === 'invalid_email' ? 'Проверьте email'
+          : detail === 'consent_required' ? 'Нужно отметить согласие'
+          : status === 0 ? 'Нет связи с сервером. Проверьте интернет и попробуйте ещё раз.'
+          : status === 404 ? 'Сервис временно недоступен. Попробуйте позже.'
           : 'Не удалось отправить. Попробуйте ещё раз.';
         btn.disabled = false;
       });

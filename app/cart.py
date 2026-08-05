@@ -26,6 +26,7 @@ CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
 
 _STATIC = os.path.join(os.path.dirname(__file__), "static")
 _TRIGGER_JS = os.path.join(_STATIC, "trigger.js")
+_TRACK_JS = os.path.join(_STATIC, "track.js")
 _DEMO_HTML = os.path.join(_STATIC, "demo.html")
 _WHEEL_JS = os.path.join(_STATIC, "wheel.js")
 _WHEEL_HTML = os.path.join(_STATIC, "wheel.html")
@@ -44,6 +45,17 @@ async def trigger_js() -> FileResponse:
     """Триггер-сниппет для встраивания на groster.me (session-ping корзины)."""
     return FileResponse(
         _TRIGGER_JS,
+        media_type="application/javascript; charset=utf-8",
+        headers={"Cache-Control": "public, max-age=3600"},
+    )
+
+
+@router.get("/track.js")
+async def track_js() -> FileResponse:
+    """Универсальный загрузчик-трекер (аналог track.leadhit.io): один тег с clid грузит
+    trigger.js/wheel.js и включает авто-захват email из форм. См. docs/site_integration.md."""
+    return FileResponse(
+        _TRACK_JS,
         media_type="application/javascript; charset=utf-8",
         headers={"Cache-Control": "public, max-age=3600"},
     )
