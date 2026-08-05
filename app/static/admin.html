@@ -362,6 +362,7 @@ const NAV = [
   {id:'services', t:'Авторассылки', icon:'list'},
   {id:'feeds', t:'Товарные рекомендации', icon:'feed'},
   {id:'templates', t:'Шаблоны писем', icon:'layers'},
+  {id:'wheel', t:'Колесо фортуны', icon:'gift'},
   {g:'Отчёты'},
   {id:'report', t:'Эффективность', icon:'doc'},
   {id:'analytics', t:'Аналитика', icon:'chart'},
@@ -1277,6 +1278,142 @@ async function saveSetting(k,v,type){
 }
 let settingsTab='mail';
 function setSettingsTab(t){ settingsTab=t; viewSettings(); }
+/* Колесо фортуны */
+let wheelCfg=null, wheelPrevT;
+function ensureWheelLib(){ return new Promise(res=>{
+  if(window.grosterWheel) return res();
+  const s=document.createElement('script'); s.src='/wheel.js'; s.onload=res; s.onerror=res;
+  document.head.appendChild(s);
+}); }
+
+async function viewWheel(){
+  setTitle('Колесо фортуны','виджет захвата email в обмен на скидку');
+  await ensureWheelLib();
+  wheelCfg = await j('/admin/wheel');            // всегда свежий из БД (несохранённые правки не переживают уход со страницы)
+  renderWheel();
+}
+
+function wheelTotal(){ return (wheelCfg.prizes||[]).reduce((s,p)=>s+Math.max(0,+p.weight||0),0); }
+
+function renderWheel(){
+  const c=wheelCfg, total=wheelTotal();
+  const origin=location.origin;
+  const snippet=`<script src="${origin}/wheel.js"\n        data-endpoint="${origin}"\n        data-auto="${+c.auto_delay_sec||0}"\n        data-once-days="${+c.once_days||0}"><\/script>`;
+  const rows=(c.prizes||[]).map((p,i)=>{
+    const prob=total>0?((Math.max(0,+p.weight||0)/total)*100):0;
+    const respin=!((p.code||'').trim());
+    return `<tr>
+      <td><input class="inp wide" value="${esc(p.label||'')}" maxlength="40"
+            oninput="wheelPrizeField(${i},'label',this.value)"></td>
+      <td><input class="inp" style="width:130px;font-family:ui-monospace,Menlo,monospace" value="${esc(p.code||'')}"
+            maxlength="32" placeholder="пусто = «Ещё разок»" oninput="wheelPrizeField(${i},'code',this.value)"></td>
+      <td><input class="inp" style="width:72px" type="number" min="0" value="${+p.weight||0}"
+            oninput="wheelPrizeField(${i},'weight',this.value)"></td>
+      <td class="mono" style="width:64px"><span class="wprob" data-i="${i}">${prob.toFixed(1)}%</span></td>
+      <td><input type="color" value="${/^#[0-9a-fA-F]{6}$/.test(p.color||'')?p.color:'#bc39e5'}"
+            style="width:44px;height:32px;border:1px solid var(--border);border-radius:8px;background:none;cursor:pointer;padding:2px"
+            onchange="wheelPrizeField(${i},'color',this.value)">
+          ${respin?'<span class="pill dev" style="margin-left:6px">спин</span>':''}</td>
+      <td><button class="btn" title="Удалить сектор" onclick="wheelDelPrize(${i})" ${(c.prizes||[]).length<=2?'disabled':''}>✕</button></td>
+    </tr>`;}).join('');
+
+  $('view').innerHTML=`<section>
+    <div class="filters" style="justify-content:space-between">
+      <label class="switch" style="display:flex;align-items:center;gap:10px">
+        <input type="checkbox" id="wheelEnabled" ${c.enabled?'checked':''} onchange="wheelCfg.enabled=this.checked">
+        <span class="track"></span><span class="k">Колесо включено</span></label>
+      <button class="btn primary" onclick="saveWheel()">Сохранить</button>
+    </div>
+  </section>
+  <section class="grid" style="grid-template-columns:minmax(0,1.35fr) minmax(320px,1fr);gap:20px;align-items:start">
+    <div>
+      <div class="eyebrow"><h2>Оформление попапа</h2><span class="rule"></span></div>
+      <div class="card">
+        <div class="field"><span class="k">Заголовок</span>
+          <input class="inp wide" id="wheelTitle" value="${esc(c.title||'')}" maxlength="200"
+            oninput="wheelCfg.title=this.value"></div>
+        <div class="field"><span class="k">Подзаголовок</span>
+          <input class="inp wide" id="wheelSub" value="${esc(c.subtitle||'')}" maxlength="300"
+            oninput="wheelCfg.subtitle=this.value"></div>
+        <div class="grid2">
+          <div class="field"><span class="k">Показ не чаще, дней</span>
+            <input class="inp" type="number" min="0" value="${+c.once_days||0}"
+              oninput="wheelCfg.once_days=+this.value||0" title="0 — показывать каждый заход"></div>
+          <div class="field"><span class="k">Авто-открытие, сек</span>
+            <input class="inp" type="number" min="0" value="${+c.auto_delay_sec||0}"
+              oninput="wheelCfg.auto_delay_sec=+this.value||0" title="задержка перед авто-показом попапа"></div>
+        </div>
+        <p class="legend">Заголовок допускает HTML: <code>&lt;span class="acc"&gt;…&lt;/span&gt;</code> подсветит жёлтым.</p>
+      </div>
+
+      <div class="eyebrow" style="margin-top:20px"><h2>Секторы и шансы</h2><span class="rule"></span>
+        <button class="btn" onclick="wheelAddPrize()">+ сектор</button></div>
+      <div class="tablewrap"><table><thead><tr>
+        <th>Подпись</th><th>Промокод</th><th>Вес</th><th>Шанс</th><th>Цвет</th><th></th>
+      </tr></thead><tbody>${rows}</tbody></table></div>
+      <p class="legend">«Шанс» = вес сектора ÷ сумма весов. Пустой промокод делает сектор бонусным
+        («Ещё разок» — даёт повторный прокрут, приз не выдаётся).</p>
+
+      <div class="eyebrow" style="margin-top:20px"><h2>Интеграция с сайтом</h2><span class="rule"></span></div>
+      <div class="card">
+        <div class="svc-sub" style="margin-bottom:8px">Вставьте перед <code>&lt;/body&gt;</code> на страницах groster.me — попап откроется сам через заданную задержку:</div>
+        <textarea class="inp wide" readonly rows="4" id="wheelSnippet"
+          style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;resize:vertical">${esc(snippet)}</textarea>
+        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+          <button class="btn" onclick="copyWheelSnippet()">Копировать код</button>
+          <a class="btn" href="/wheel" target="_blank">Открыть страницу-лендинг</a>
+          <a class="btn" href="/wheel-banner" target="_blank">Готовый баннер</a>
+        </div>
+        <p class="legend">Кнопку/баннер на сайте можно повесить на <code>grosterWheel.open()</code> — призы и тексты
+          виджет берёт отсюда, менять код на сайте не нужно.</p>
+      </div>
+    </div>
+
+    <div>
+      <div class="eyebrow"><h2>Предпросмотр</h2><span class="rule"></span></div>
+      <div class="card" style="background:radial-gradient(120% 120% at 50% -10%,#d05cf5 0%,#bc39e5 44%,#6a12a0 100%);border:0">
+        <div id="wheelPreview"></div>
+      </div>
+      <p class="legend">Живой виджет на текущих секторах (офлайн-режим, email не сохраняется). Введите любой
+        email и отметьте согласие, чтобы прокрутить.</p>
+    </div>
+  </section>`;
+  mountWheelPreview();
+}
+
+function mountWheelPreview(){
+  const host=$('wheelPreview'); if(!host||!window.grosterWheel) return;
+  // respin выводим из пустого кода — так же, как это сделает сервер при сохранении.
+  const prizes=(wheelCfg.prizes||[]).map(p=>({label:p.label,code:(p.code||'').trim(),
+    weight:Math.max(0,+p.weight||0),color:p.color,respin:!((p.code||'').trim())}));
+  try{ grosterWheel.mount(host,{prizes,endpoint:false}); }catch(e){ host.textContent='—'; }
+}
+function refreshWheelPreview(){ clearTimeout(wheelPrevT); wheelPrevT=setTimeout(()=>{ mountWheelPreview(); syncWheelSnippet(); },400); }
+function syncWheelProb(){ const total=wheelTotal();
+  document.querySelectorAll('.wprob').forEach(el=>{ const p=wheelCfg.prizes[+el.dataset.i];
+    el.textContent=(total>0?((Math.max(0,+p.weight||0)/total)*100):0).toFixed(1)+'%'; }); }
+function syncWheelSnippet(){ const t=$('wheelSnippet'); if(!t) return; const o=location.origin;
+  t.value=`<script src="${o}/wheel.js"\n        data-endpoint="${o}"\n        data-auto="${+wheelCfg.auto_delay_sec||0}"\n        data-once-days="${+wheelCfg.once_days||0}"><\/script>`; }
+
+function wheelPrizeField(i,k,v){ const p=wheelCfg.prizes[i]; if(!p) return;
+  p[k] = k==='weight' ? (Math.max(0,+v||0)) : v;
+  if(k==='weight'||k==='code') syncWheelProb();
+  refreshWheelPreview(); }
+function wheelAddPrize(){ if((wheelCfg.prizes||[]).length>=12){ toast('Максимум 12 секторов'); return; }
+  const pal=['#bc39e5','#fecc00','#35cc00','#fc6631'];
+  wheelCfg.prizes.push({label:'Новый приз',code:'',weight:5,color:pal[wheelCfg.prizes.length%4]});
+  renderWheel(); }
+function wheelDelPrize(i){ if((wheelCfg.prizes||[]).length<=2){ toast('Нужно минимум 2 сектора'); return; }
+  wheelCfg.prizes.splice(i,1); renderWheel(); }
+function copyWheelSnippet(){ const t=$('wheelSnippet'); if(!t) return;
+  const done=()=>toast('Код скопирован');
+  if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t.value).then(done,()=>{t.select();done();});
+  else { t.select(); done(); } }
+async function saveWheel(){
+  const r=await j('/admin/wheel',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(wheelCfg)});
+  if(r.ok){ toast('Колесо сохранено — изменения уже на сайте'); wheelCfg=await j('/admin/wheel'); renderWheel(); }
+  else toast('Ошибка: '+(r.reason||'')); }
+
 async function viewSettings(){
   setTitle('Настройки','параметры сервиса');
   const tabs=[['mail','Почта'],['params','Параметры'],['integrations','Интеграции']];
@@ -1462,7 +1599,7 @@ async function run(s){
 }
 
 /* Router */
-const ROUTES={overview:viewOverview,leads:viewLeads,services:viewServices,report:viewReport,analytics:viewAnalytics,feeds:viewFeeds,emails:viewEmails,templates:viewTemplates,settings:viewSettings,integration:viewIntegration};
+const ROUTES={overview:viewOverview,leads:viewLeads,services:viewServices,report:viewReport,analytics:viewAnalytics,feeds:viewFeeds,emails:viewEmails,templates:viewTemplates,wheel:viewWheel,settings:viewSettings,integration:viewIntegration};
 async function route(){
   const h=(location.hash||'#/overview').slice(2);
   markActive(h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
