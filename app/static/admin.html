@@ -1309,10 +1309,14 @@ function blkInspector(b,i){
   }
   if(b.type==='html') return `<div class="tf"><span>HTML-код письма</span>
       <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].html=this.value;tplTouch()">${esc(b.html||'')}</textarea>
-      <div class="svc-sub" style="margin-top:6px">Вставьте готовый HTML целиком (или загрузите файл кнопкой «Импорт HTML»). Если это единственный блок — письмо уйдёт «как есть», без шапки и футера конструктора. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div></div>`;
+      <div class="svc-sub" style="margin-top:6px">Вставьте готовый HTML целиком (или загрузите файл кнопкой «Импорт HTML»). Если это единственный блок — письмо уйдёт «как есть», без шапки и футера конструктора. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div>
+      <button class="btn" type="button" style="width:100%;margin-top:8px" onclick="decomposeBlock(${i})">Разобрать на блоки конструктора</button>
+      <div class="svc-sub" style="margin-top:4px">Разбор нужен только для визуальной правки: вёрстка станет одностолбцовой, исходный дизайн не сохранится.</div></div>`;
   if(b.type==='mjml') return `<div class="tf"><span>MJML-код письма</span>
       <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].mjml=this.value;tplTouch()">${esc(b.mjml||'')}</textarea>
-      <div class="svc-sub" style="margin-top:6px">MJML компилируется в HTML на сервере. Товары подставляются автоматически через <code>get_recommendations()</code>, отписка — через <code>{{ unsubscribe_url }}</code>. Шапка и футер конструктора не применяются — вёрстка целиком из MJML.</div></div>`;
+      <div class="svc-sub" style="margin-top:6px">MJML компилируется в HTML на сервере. Товары подставляются автоматически через <code>get_recommendations()</code>, отписка — через <code>{{ unsubscribe_url }}</code>. Шапка и футер конструктора не применяются — вёрстка целиком из MJML (1-в-1 как оригинал).</div>
+      <button class="btn" type="button" style="width:100%;margin-top:8px" onclick="decomposeBlock(${i})">Разобрать на блоки конструктора</button>
+      <div class="svc-sub" style="margin-top:4px">Разбор нужен только для визуальной правки: вёрстка станет одностолбцовой, исходный дизайн не сохранится.</div></div>`;
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
   if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
   return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
@@ -1412,21 +1416,30 @@ function htmlToBlocks(html){
   walk(root);
   return blocks;
 }
-// Файл → массив блоков. MJML сперва компилируем в HTML через /template/render.
-async function parseImport(name,text,service){
+// Файл → цельный блок. По умолчанию импорт ТОЧНЫЙ (1-в-1, как оригинал; MJML — с живой
+// подстановкой товаров). Разбор на блоки конструктора — по кнопке в редакторе (decomposeBlock),
+// потому что он схлопывает многоколоночную вёрстку в один столбец и теряет исходный дизайн.
+function fileToBlock(name,text){
   const isMjml=/\.mjml$/i.test(name)||/<mjml[\s>]/i.test(text.slice(0,2000));
-  let html=text;
-  if(isMjml){
+  return isMjml?{type:'mjml',mjml:text}:{type:'html',html:text};
+}
+// Разобрать html/mjml-блок на нативные блоки конструктора (опционально, для правки вёрстки).
+async function decomposeBlock(i){
+  const b=tplBlocks[i]; if(!b) return;
+  let html=b.html||'';
+  if(b.type==='mjml'){
     toast('Компиляция MJML…');
     try{ const r=await fetch('/admin/template/render',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({service:service||'best_offer',blocks:[{type:'mjml',mjml:text}]})}); html=await r.text(); }
-    catch(e){ html=''; }
+      body:JSON.stringify({service:tplSvc||'best_offer',blocks:[{type:'mjml',mjml:b.mjml}]})}); html=await r.text(); }
+    catch(e){ toast('Не удалось скомпилировать MJML'); return; }
   }
-  let blocks=htmlToBlocks(html);
-  if(!blocks.length) blocks=[isMjml?{type:'mjml',mjml:text}:{type:'html',html:text}];  // не разобрали → цельным блоком
-  return blocks;
+  const parts=htmlToBlocks(html);
+  if(!parts.length){ toast('Не удалось разобрать'); return; }
+  if(!confirm(`Разобрать на ${parts.length} блоков? Вёрстка станет одностолбцовой в стиле конструктора (дизайн оригинала не сохранится), зато всё можно будет править визуально.`)) return;
+  tplBlocks.splice(i,1,...parts); tplSel=-1; tplDirty=true; renderBuilder(); tplPreview();
+  toast(`Разобрано на ${parts.length} блоков`);
 }
-// Импорт из библиотеки: файл → новый шаблон (разобранный на блоки) → открываем в редакторе.
+// Импорт из библиотеки: файл → новый шаблон (точный рендер) → открываем в редакторе.
 function pickImport(service){
   const inp=document.createElement('input');
   inp.type='file'; inp.accept='.html,.htm,.mjml,text/html';
@@ -1439,11 +1452,11 @@ async function importHtmlNew(input,service){
   const text=await file.text();
   const name=file.name.replace(/\.(html?|mjml)$/i,'');
   toast('Импорт…');
-  const blocks=await parseImport(file.name,text,service);
+  const blocks=[fileToBlock(file.name,text)];
   const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
   if(!(r&&r.ok&&r.id)){ toast('Ошибка создания'); return; }
   const s=await j('/admin/template/'+r.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks,name})});
-  if(s&&s.ok){ toast(`Импортировано · ${blocks.length} блоков`); location.hash='#/templates/'+r.id; }
+  if(s&&s.ok){ toast('Шаблон импортирован'); location.hash='#/templates/'+r.id; }
   else toast('Ошибка сохранения');
 }
 async function importHtml(input){
@@ -1451,11 +1464,9 @@ async function importHtml(input){
   if(file.size>2000000){ toast('Файл больше 2 МБ'); input.value=''; return; }
   if(tplBlocks.length && !confirm('Заменить текущее содержимое импортированным файлом?')){ input.value=''; return; }
   const text=await file.text();
-  toast('Импорт…');
-  const blocks=await parseImport(file.name,text,tplSvc);
-  tplBlocks=blocks; tplSel=-1;
+  tplBlocks=[fileToBlock(file.name,text)]; tplSel=-1;
   if(!tplName) tplName=file.name.replace(/\.(html?|mjml)$/i,'');
-  input.value=''; tplDirty=true; viewTemplates(); toast(`Разобрано на ${blocks.length} блоков — «Сохранить шаблон»`);
+  input.value=''; tplDirty=true; viewTemplates(); toast('Импортировано — «Сохранить шаблон»');
 }
 async function tplUpload(i,input){
   const file=input.files&&input.files[0]; if(!file) return;
