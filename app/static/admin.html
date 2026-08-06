@@ -1112,6 +1112,12 @@ function newBlock(t){return {
   html:{type:'html',html:'<!-- Вставьте HTML письма. Плейсхолдер {{unsubscribe_url}} — ссылка отписки -->'},
   mjml:{type:'mjml',mjml:'<mjml>\n  <mj-body>\n    <mj-section><mj-column>\n      <mj-text>Текст письма</mj-text>\n    </mj-column></mj-section>\n  </mj-body>\n</mjml>'}}[t];}
 function stripTags(h){return (h||'').replace(/<[^>]*>/g,'').trim();}
+// Кнопки разбиения импортированного html/mjml-блока (в инспекторе).
+function splitBtns(i){return `<div style="display:flex;gap:8px;margin-top:8px">
+    <button class="btn" type="button" style="flex:1" onclick="decomposeSections(${i})" title="Каждая секция письма — отдельный блок, вид сохранится 1-в-1">Разбить на секции</button>
+    <button class="btn" type="button" style="flex:1" onclick="decomposeBlock(${i})" title="На простые блоки конструктора — редактируемо, но вёрстка станет одностолбцовой">Разобрать на блоки</button>
+  </div>
+  <div class="svc-sub" style="margin-top:4px">«Секции» — вид как в оригинале, блоки можно двигать/удалять. «Блоки» — для визуальной правки текста/картинок (дизайн упростится).</div>`;}
 function blkSub(b){
   if(b.type==='heading')return b.text||''; if(b.type==='text')return stripTags(b.html).slice(0,40);
   if(b.type==='button')return b.text||''; if(b.type==='products')return 'топ-5 сценария';
@@ -1310,13 +1316,11 @@ function blkInspector(b,i){
   if(b.type==='html') return `<div class="tf"><span>HTML-код письма</span>
       <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].html=this.value;tplTouch()">${esc(b.html||'')}</textarea>
       <div class="svc-sub" style="margin-top:6px">Вставьте готовый HTML целиком (или загрузите файл кнопкой «Импорт HTML»). Если это единственный блок — письмо уйдёт «как есть», без шапки и футера конструктора. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div>
-      <button class="btn" type="button" style="width:100%;margin-top:8px" onclick="decomposeBlock(${i})">Разобрать на блоки конструктора</button>
-      <div class="svc-sub" style="margin-top:4px">Разбор нужен только для визуальной правки: вёрстка станет одностолбцовой, исходный дизайн не сохранится.</div></div>`;
+      ${splitBtns(i)}</div>`;
   if(b.type==='mjml') return `<div class="tf"><span>MJML-код письма</span>
       <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].mjml=this.value;tplTouch()">${esc(b.mjml||'')}</textarea>
       <div class="svc-sub" style="margin-top:6px">MJML компилируется в HTML на сервере. Товары подставляются автоматически через <code>get_recommendations()</code>, отписка — через <code>{{ unsubscribe_url }}</code>. Шапка и футер конструктора не применяются — вёрстка целиком из MJML (1-в-1 как оригинал).</div>
-      <button class="btn" type="button" style="width:100%;margin-top:8px" onclick="decomposeBlock(${i})">Разобрать на блоки конструктора</button>
-      <div class="svc-sub" style="margin-top:4px">Разбор нужен только для визуальной правки: вёрстка станет одностолбцовой, исходный дизайн не сохранится.</div></div>`;
+      ${splitBtns(i)}</div>`;
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
   if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
   return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
@@ -1416,6 +1420,38 @@ function htmlToBlocks(html){
   walk(root);
   return blocks;
 }
+// Разбить письмо на СЕКЦИИ: каждый верхнеуровневый блок вёрстки → отдельный html-блок,
+// вид сохраняется 1-в-1 (внутри секции — родной HTML). Набор html-блоков бэкенд рендерит
+// без брендовой обёртки, поэтому шапка/футер письма остаются его собственными.
+function htmlToSections(html){
+  let doc; try{ doc=new DOMParser().parseFromString(html,'text/html'); }catch(e){ return []; }
+  const body=doc.body; if(!body) return [];
+  // MJML/mrml: секции — div с max-width:600px; берём только верхнеуровневые (не вложенные).
+  let secs=[...body.querySelectorAll('div')].filter(d=>/max-width:\s*600px/.test(_styleOf(d)));
+  secs=secs.filter(d=>!secs.some(o=>o!==d&&o.contains(d)));
+  if(!secs.length) secs=[...body.children].filter(n=>n.nodeType===1);   // произвольный HTML → прямые дети
+  const out=[];
+  secs.forEach(s=>{ if(_hidden(s))return; const h=s.outerHTML;
+    if(stripTags(h).replace(/[\s⠀]/g,'').trim()||/<img/i.test(h)) out.push({type:'html',html:h}); });
+  return out;
+}
+async function _compiled(b){                     // html/mjml-блок → готовый HTML
+  if(b.type!=='mjml') return b.html||'';
+  toast('Компиляция MJML…');
+  const r=await fetch('/admin/template/render',{method:'POST',headers:{'Content-Type':'application/json'},
+    body:JSON.stringify({service:tplSvc||'best_offer',blocks:[{type:'mjml',mjml:b.mjml}]})});
+  return await r.text();
+}
+// Разбить на секции (вид сохраняется).
+async function decomposeSections(i){
+  const b=tplBlocks[i]; if(!b) return;
+  let html; try{ html=await _compiled(b); }catch(e){ toast('Не удалось скомпилировать MJML'); return; }
+  const parts=htmlToSections(html);
+  if(!parts.length){ toast('Не удалось разбить на секции'); return; }
+  if(!confirm(`Разбить на ${parts.length} секций? Вид сохранится 1-в-1, каждую секцию можно двигать/удалять/дублировать.`+(b.type==='mjml'?' Товары MJML станут статичными.':''))) return;
+  tplBlocks.splice(i,1,...parts); tplSel=-1; tplDirty=true; renderBuilder(); tplPreview();
+  toast(`Разбито на ${parts.length} секций`);
+}
 // Файл → цельный блок. По умолчанию импорт ТОЧНЫЙ (1-в-1, как оригинал; MJML — с живой
 // подстановкой товаров). Разбор на блоки конструктора — по кнопке в редакторе (decomposeBlock),
 // потому что он схлопывает многоколоночную вёрстку в один столбец и теряет исходный дизайн.
@@ -1426,13 +1462,7 @@ function fileToBlock(name,text){
 // Разобрать html/mjml-блок на нативные блоки конструктора (опционально, для правки вёрстки).
 async function decomposeBlock(i){
   const b=tplBlocks[i]; if(!b) return;
-  let html=b.html||'';
-  if(b.type==='mjml'){
-    toast('Компиляция MJML…');
-    try{ const r=await fetch('/admin/template/render',{method:'POST',headers:{'Content-Type':'application/json'},
-      body:JSON.stringify({service:tplSvc||'best_offer',blocks:[{type:'mjml',mjml:b.mjml}]})}); html=await r.text(); }
-    catch(e){ toast('Не удалось скомпилировать MJML'); return; }
-  }
+  let html; try{ html=await _compiled(b); }catch(e){ toast('Не удалось скомпилировать MJML'); return; }
   const parts=htmlToBlocks(html);
   if(!parts.length){ toast('Не удалось разобрать'); return; }
   if(!confirm(`Разобрать на ${parts.length} блоков? Вёрстка станет одностолбцовой в стиле конструктора (дизайн оригинала не сохранится), зато всё можно будет править визуально.`)) return;

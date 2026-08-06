@@ -280,6 +280,10 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
             return render_mjml(raw, products, user_id, campaign)
         if b0.get("type") == "html":
             return raw.replace("{{unsubscribe_url}}", unsub)
+    # Импорт, разбитый на секции: все блоки html → склеиваем как есть, без брендовой обёртки
+    # (у письма своя шапка/футер). Так «разбито по блокам», а вид остаётся 1-в-1.
+    if blocks and all((b or {}).get("type") == "html" for b in blocks):
+        return "".join((b.get("html") or "") for b in blocks).replace("{{unsubscribe_url}}", unsub)
     parts = []
     for b in blocks:
         html = _render_block(b, products, campaign, lk)
