@@ -360,6 +360,14 @@ select.inp{width:auto;font-family:var(--sans)}
 .gjs-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
 #gjs{border:1px solid var(--border);border-radius:10px;overflow:hidden}
 #gjs .gjs-cv-canvas{background:var(--surface-2)}
+/* Полноширинная страница кода импортированного письма */
+.codehero{display:flex;justify-content:space-between;align-items:center;gap:16px;flex-wrap:wrap;
+  background:linear-gradient(180deg,var(--accent-weak),transparent),var(--surface);
+  border:1px solid var(--border);border-radius:14px;padding:18px 20px;margin-bottom:16px}
+.codehero .svc-sub{margin-top:3px}
+.btn.big{font-size:15px;font-weight:650;padding:13px 24px;display:inline-flex;align-items:center;gap:9px}
+.codehost .code-ed{margin-top:0}
+.codehost .ce-code,.codehost .ce-gutter{height:460px}
 /* Библиотека шаблонов — компактный список */
 .tpl-pill{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-weak);color:var(--accent);font-weight:600}
 .tpl-pill.muted{background:var(--surface-2);color:var(--muted)}
@@ -1189,8 +1197,8 @@ async function viewTemplates(){
         <div class="seg">${tab('builder','Конструктор')}${tab('design','Оформление')}</div>
       </div>
       <div style="display:flex;gap:10px;align-items:center">
-        <button class="btn" onclick="tplPreviewOn=!tplPreviewOn;viewTemplates()" title="Показать/скрыть предпросмотр" style="display:inline-flex;align-items:center;gap:7px">${ic(tplPreviewOn?'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/>':'<path d="M2 12s4-7 10-7c2.2 0 4 .8 5.5 1.8M22 12s-4 7-10 7c-2.2 0-4-.8-5.5-1.8"/><path d="M4 4l16 16"/>',16)}${tplPreviewOn?'Скрыть превью':'Показать превью'}</button>
-        ${tplPreviewOn?`<div class="seg"><button class="${tplDevice==='desktop'?'active':''}" onclick="tplDevice='desktop';viewTemplates()">Десктоп</button><button class="${tplDevice==='mobile'?'active':''}" onclick="tplDevice='mobile';viewTemplates()">Мобайл</button></div>`:''}</div>
+        ${tplCodePage()?'':`<button class="btn" onclick="tplPreviewOn=!tplPreviewOn;viewTemplates()" title="Показать/скрыть предпросмотр" style="display:inline-flex;align-items:center;gap:7px">${ic(tplPreviewOn?'<path d="M2 12s4-7 10-7 10 7 10 7-4 7-10 7-10-7-10-7z"/><circle cx="12" cy="12" r="2.6"/>':'<path d="M2 12s4-7 10-7c2.2 0 4 .8 5.5 1.8M22 12s-4 7-10 7c-2.2 0-4-.8-5.5-1.8"/><path d="M4 4l16 16"/>',16)}${tplPreviewOn?'Скрыть превью':'Показать превью'}</button>
+        ${tplPreviewOn?`<div class="seg"><button class="${tplDevice==='desktop'?'active':''}" onclick="tplDevice='desktop';viewTemplates()">Десктоп</button><button class="${tplDevice==='mobile'?'active':''}" onclick="tplDevice='mobile';viewTemplates()">Мобайл</button></div>`:''}`}</div>
     </div>
     <div id="tplBody"></div></section>`;
   if(tplTab==='builder'){ renderBuilder(); tplPreview(); } else renderLook();
@@ -1259,7 +1267,38 @@ function drawTemplateList(){
 }
 
 /* Конструктор */
+// true, если сейчас показываем страницу кода цельного письма (для скрытия превью-контролов).
+function tplCodePage(){ return tplTab==='builder' && Array.isArray(tplBlocks) && tplBlocks.length===1
+  && (tplBlocks[0].type==='html'||tplBlocks[0].type==='mjml'); }
+// Импортированное письмо (единственный html/mjml-блок) → нормальная полноширинная
+// страница с кодом и крупной кнопкой конструктора, а не тесный инспектор блока.
+function renderCodePage(i){
+  const b=tplBlocks[i]; const kind=b.type;
+  const grid='<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>';
+  $('tplBody').innerHTML=`
+    <div style="max-width:1000px;margin:0 auto">
+      <div class="codehero">
+        <div>
+          <div style="font-weight:700;font-size:16px">Импортированное письмо · ${kind==='mjml'?'MJML':'HTML'}</div>
+          <div class="svc-sub">Соберите мышью в конструкторе — или правьте код ниже. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div>
+        </div>
+        <div style="display:flex;gap:8px;align-items:center">
+          <input type="file" id="tplImport" accept=".html,.htm,.mjml,text/html" style="display:none" onchange="importHtml(this)">
+          <button class="btn" onclick="document.getElementById('tplImport').click()" title="Загрузить другой файл письма">Импорт</button>
+          <button class="btn primary big" onclick="openGrapes(${i})">${ic(grid,17)} Открыть в конструкторе</button>
+        </div>
+      </div>
+      <div class="codehost">${codeEditor(i,kind)}</div>
+      <div style="display:flex;gap:8px;margin-top:14px;align-items:center">
+        <button class="btn primary" style="flex:1" onclick="saveBlocks()">Сохранить шаблон</button>
+        <button class="btn" onclick="resetBlocks()" title="Отменить несохранённые изменения">Отменить</button>
+        <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
+      </div>
+    </div>`;
+}
 function renderBuilder(){
+  // Импортированное цельное письмо — отдельная страница кода (не тесный инспектор).
+  if(tplBlocks.length===1 && (tplBlocks[0].type==='html'||tplBlocks[0].type==='mjml')) return renderCodePage(0);
   const dev=tplDevice==='mobile';
   const pal=Object.keys(BLOCK_TYPES).map(t=>`<button onclick="addBlock('${t}')" title="Добавить: ${BLOCK_TYPES[t].ru}">${ic(BICON[t])}<span>${BLOCK_TYPES[t].ru}</span></button>`).join('');
   const list=tplBlocks.length? tplBlocks.map((b,i)=>blkCard(b,i)).join('')
