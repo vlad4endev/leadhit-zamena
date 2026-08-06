@@ -6,6 +6,7 @@ look: {brand_color, header, button, footer} — редактируется в р
 from __future__ import annotations
 
 import html as _htmllib
+import re
 from html.parser import HTMLParser
 
 from app.config import settings
@@ -243,11 +244,46 @@ def _mjml_items(products: list[dict] | None) -> list[dict]:
     return out
 
 
+_VOID_TAGS = {"img", "br", "hr", "meta", "input", "link", "area", "base", "col",
+              "source", "wbr", "embed", "track", "param"}
+_TOKEN_RE = re.compile(r'<!--.*?-->|<[^>]*>|[^<]+', re.S)
+
+
+def _balance_html(s: str) -> str:
+    """Чиним вёрстку, которую браузер прощает, а строгий mrml — нет: выкидываем сиротские
+    закрывающие теги и дозакрываем незакрытые. Оригинальные байты валидных токенов сохраняем
+    (переписываем только теги), чтобы не поломать аккуратную MJML-разметку."""
+    out, stack = [], []
+    for tok in _TOKEN_RE.findall(s):
+        if not tok.startswith("<") or tok.startswith("<!"):
+            out.append(tok)                                  # текст/комментарий/decl — как есть
+            continue
+        inner = tok[1:-1].strip()
+        if inner.endswith("/") or not inner:                 # <x/> самозакрытый
+            out.append(tok)
+            continue
+        if inner.startswith("/"):                            # закрывающий </x>
+            name = inner[1:].strip().split()[0].lower() if inner[1:].strip() else ""
+            if name in stack:
+                while stack and stack[-1] != name:           # авто-закрыть вложенные
+                    out.append(f"</{stack.pop()}>")
+                stack.pop()
+                out.append(tok)
+            # иначе сиротский закрывающий — выкидываем
+            continue
+        name = inner.split()[0].lower()                      # открывающий <x ...>
+        out.append(tok)
+        if name and name not in _VOID_TAGS:
+            stack.append(name)
+    while stack:                                             # дозакрыть оставшееся
+        out.append(f"</{stack.pop()}>")
+    return "".join(out)
+
+
 def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) -> str:
     """Импортированный MJML-шаблон (Jinja + MJML): рендерим Jinja с товарами/отпиской,
     затем компилируем MJML → HTML. Ошибку показываем баннером (превью в админке видит проблему
     до активации; ponytail: без сложной обработки ошибок — админ проверяет письмо глазами)."""
-    import re
     import jinja2
     import mrml
     unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
@@ -270,12 +306,18 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
         # рендерятся пустыми, а не роняют шаблон. Функции данных (get_*) заданы явно выше.
         env = jinja2.Environment(autoescape=False, undefined=jinja2.ChainableUndefined)
         mjml_str = env.from_string(source).render(**ctx)
-        res = mrml.to_html(mjml_str)
+        try:
+            res = mrml.to_html(mjml_str)
+        except Exception:                       # битая вёрстка → чиним теги и пробуем ещё раз
+            res = mrml.to_html(_balance_html(mjml_str))
         return getattr(res, "content", res)
     except Exception as e:  # noqa: BLE001 — показываем причину в превью, не роняем воркер
-        return (f'<div style="font-family:sans-serif;padding:24px;color:#b00020">'
-                f'<b>Ошибка рендера MJML-шаблона:</b><br><pre style="white-space:pre-wrap">'
-                f'{_esc(type(e).__name__)}: {_esc(e)}</pre></div>')
+        return (f'<div style="font-family:sans-serif;padding:24px;color:#b00020;line-height:1.5">'
+                f'<b>Не удалось собрать MJML-шаблон.</b><br>'
+                f'Скорее всего, ошибка в вёрстке исходника (незакрытые или лишние теги, '
+                f'неподдерживаемый MJML-элемент). Откройте шаблон в mjml.io, исправьте вёрстку '
+                f'и загрузите заново.<br><br><span style="color:#888;font-size:12px">Детали: '
+                f'{_esc(type(e).__name__)}: {_esc(e)}</span></div>')
 
 
 def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
