@@ -5,3 +5,7 @@ __pycache__/
 .DS_Store
 mailer-service/outbox.db*
 app/static/uploads/
+
+# Локальный тулинг Claude Code
+.claude/
+.claude-flow/

@@ -777,6 +777,22 @@ async def get_upload(name: str):
     return FileResponse(path, headers={"Cache-Control": "public, max-age=86400"})
 
 
+# Вендорные ассеты конструктора писем (GrapesJS и пресет) — самохост, без CDN.
+# Общего StaticFiles-маунта в проекте нет, поэтому отдаём одним параметр-роутом
+# с защитой от обхода каталога (нормализуем путь и держим его внутри vendor/).
+_VENDOR_DIR = os.path.join(os.path.dirname(__file__), "static", "vendor")
+
+
+@router.get("/vendor/{path:path}")
+async def get_vendor(path: str):
+    full = os.path.normpath(os.path.join(_VENDOR_DIR, path))
+    if full != _VENDOR_DIR and not full.startswith(_VENDOR_DIR + os.sep):
+        return Response(status_code=403)
+    if not os.path.isfile(full):
+        return Response(status_code=404)
+    return FileResponse(full, headers={"Cache-Control": "public, max-age=604800"})
+
+
 def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
     """Синхронный вызов mailer-service (в потоке)."""
     import urllib.request

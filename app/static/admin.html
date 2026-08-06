@@ -356,7 +356,10 @@ select.inp{width:auto;font-family:var(--sans)}
 .ce-hl .c-var{color:#c26a12;font-weight:600}
 .dark .ce-hl .c-str{color:#6ccf8e}
 .dark .ce-hl .c-var{color:#f2a65a}
-.ve-frame{width:100%;height:540px;margin-top:8px;border:1px solid var(--border);border-radius:8px;background:#fff;display:block}
+/* Конструктор GrapesJS */
+.gjs-bar{display:flex;align-items:center;gap:12px;margin-bottom:12px;flex-wrap:wrap}
+#gjs{border:1px solid var(--border);border-radius:10px;overflow:hidden}
+#gjs .gjs-cv-canvas{background:var(--surface-2)}
 /* Библиотека шаблонов — компактный список */
 .tpl-pill{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-weak);color:var(--accent);font-weight:600}
 .tpl-pill.muted{background:var(--surface-2);color:var(--muted)}
@@ -1070,7 +1073,6 @@ async function viewReport(){
 let tplView='list', tplTab='builder', tplSvc='best_offer', tplDevice='desktop', tplLook=null;
 let tplId=null, tplBlocks=null, tplIsActive=false, tplName='', tplSel=-1, tplDirty=false, tplDrag=-1;
 let tplListTab='best_offer', tplListData=null, tplPreviewOn=true, svcTab='scenario';
-let tplVisual=false, veImg=null;          // визуальное (WYSIWYG) редактирование html-блока
 const TRIGGER_DESC={
   best_offer:'Плановая рассылка: раз в заданный интервал подбирает топ-5 товаров по категории получателя и отправляет письмо.',
   cart:'Событийный триггер: срабатывает, когда посетитель ушёл с непустой корзиной и не оформил заказ.',
@@ -1195,7 +1197,7 @@ async function viewTemplates(){
 }
 function tplSetTab(v){ tplTab=v; viewTemplates(); }
 function openTemplate(id){ location.hash='#/templates/'+encodeURIComponent(id); }
-function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; tplVisual=false; viewTemplates(); }
+function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; viewTemplates(); }
 async function createTemplate(service){
   const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
   if(r&&r.ok&&r.id){ toast('Шаблон создан'); location.hash='#/templates/'+r.id; } else toast('Ошибка создания');
@@ -1259,13 +1261,10 @@ function drawTemplateList(){
 /* Конструктор */
 function renderBuilder(){
   const dev=tplDevice==='mobile';
-  // Визуальное редактирование (редактируемый превью) занимает всю ширину — правый превью прячем.
-  const visualEditing = tplVisual && tplSel>=0 && tplBlocks[tplSel] && tplBlocks[tplSel].type==='html';
-  const wide = !tplPreviewOn || visualEditing;
   const pal=Object.keys(BLOCK_TYPES).map(t=>`<button onclick="addBlock('${t}')" title="Добавить: ${BLOCK_TYPES[t].ru}">${ic(BICON[t])}<span>${BLOCK_TYPES[t].ru}</span></button>`).join('');
   const list=tplBlocks.length? tplBlocks.map((b,i)=>blkCard(b,i)).join('')
     : `<div class="tpl-empty">Пусто — добавьте блоки из палитры выше.</div>`;
-  const editor=`<div ${wide?'style="max-width:720px;margin:0 auto"':''}>
+  const editor=`<div ${tplPreviewOn?'':'style="max-width:720px;margin:0 auto"'}>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px">
         <div class="pal-lbl" style="margin:0">Добавить блок</div>
         <div style="display:flex;gap:10px;align-items:center">
@@ -1288,10 +1287,9 @@ function renderBuilder(){
         <iframe id="tplframe" title="Предпросмотр" sandbox="" style="width:${dev?'380px':'100%'};max-width:${dev?'380':'680'}px;height:600px;border:0;background:#fff;border-radius:10px"></iframe>
       </div>
     </div>`;
-  $('tplBody').innerHTML = (tplPreviewOn && !visualEditing)
+  $('tplBody').innerHTML = tplPreviewOn
     ? `<div class="grid" style="grid-template-columns:400px minmax(0,1fr);align-items:start;gap:20px">${editor}${preview}</div>`
     : editor;
-  if(visualEditing) veInit(tplSel);      // подцепить редактируемый iframe после вставки в DOM
 }
 function blkCard(b,i){
   const m=BLOCK_TYPES[b.type]||{ru:b.type}; const sel=i===tplSel;
@@ -1343,11 +1341,10 @@ function blkInspector(b,i){
       + styleRow('Скругление',radiusSeg(i,b.radius)) + boxRows(i,b);
   }
   if(b.type==='html'||b.type==='mjml'){
-    const showVisual = tplVisual && b.type==='html';      // MJML сначала компилируется в HTML (в setTplMode)
-    const toggle=`<div class="seg" style="margin-bottom:10px">
-      <button class="${showVisual?'':'active'}" onclick="setTplMode('code')" title="Редактировать HTML/MJML кодом">Код</button>
-      <button class="${showVisual?'active':''}" onclick="setTplMode('visual')" title="Редактировать письмо визуально — кликать текст и картинки">Визуально</button></div>`;
-    return toggle + (showVisual ? visualEditor(i) : codeEditor(i,b.type));
+    const openBtn=`<button class="btn primary" style="width:100%;margin-bottom:10px;display:flex;align-items:center;justify-content:center;gap:8px" onclick="openGrapes(${i})" title="Профессиональный drag-and-drop конструктор письма">
+      ${ic('<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>',16)} Открыть в конструкторе</button>
+    <div class="svc-sub" style="margin:-4px 0 10px">Визуальный drag-and-drop редактор письма. Или правьте код ниже.</div>`;
+    return openBtn + codeEditor(i,b.type);
   }
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
   if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
@@ -1450,91 +1447,94 @@ function ceInsert(btn,kind,k){                          // вставить го
   ta.selectionStart=ta.selectionEnd=s+snip.length; ta.focus();
   ta.dispatchEvent(new Event('input'));
 }
-// ── Визуальный (WYSIWYG) редактор: письмо в редактируемом iframe ────────────────
-// Только для html-блоков (MJML сперва компилируется в HTML — setTplMode). designMode='on'
-// делает документ редактируемым; скрипты письма не выполняются (sandbox без allow-scripts),
-// но родитель имеет доступ к DOM (allow-same-origin) — читаем/пишем содержимое.
-function setTplMode(m){
-  const b=tplBlocks[tplSel]; if(!b) return;
-  if(m==='visual'){
-    if(b.type==='mjml'){                 // компиляция MJML→HTML (раскладка 1-в-1, динамика застывает)
-      convertMjmlToHtml(tplSel).then(ok=>{ if(ok){ tplVisual=true; reBuild(); } });
-      return;
-    }
-    tplVisual=true;
-  } else tplVisual=false;
-  reBuild();
-}
+// ── Конструктор писем на GrapesJS (self-hosted) ───────────────────────────────
+// Профессиональный drag-and-drop редактор. Бандл лежит локально в /admin/vendor
+// и подгружается лениво при первом открытии. Правит html-блок целиком; MJML сперва
+// компилируется в HTML (динамика застывает — предупреждаем).
+let gjsEditor=null, _gjsLoad=null;
 async function convertMjmlToHtml(i){
   const b=tplBlocks[i]; if(!b||b.type!=='mjml') return true;
-  if(!confirm('Открыть визуальный режим? MJML скомпилируется в HTML (раскладка 1-в-1), но динамика (цикл товаров) станет статичной, а MJML-исходник будет заменён на HTML. Продолжить?')) return false;
+  if(!confirm('Открыть в конструкторе? MJML скомпилируется в HTML (раскладка 1-в-1), но динамика (цикл товаров) станет статичной, а MJML-исходник заменится на HTML. Продолжить?')) return false;
   let html; try{ html=await _compiled(b); }catch(e){ toast('Не удалось скомпилировать MJML'); return false; }
   tplBlocks[i]={type:'html',html}; tplDirty=true; return true;
 }
-function visualEditor(i){
-  const vb=(cmd,l,t)=>`<button type="button" title="${t}" onmousedown="event.preventDefault()" onclick="veCmd('${cmd}')">${l}</button>`;
-  return `<div class="tf"><span>Визуальный редактор — кликните текст и правьте прямо в письме; кликните картинку, чтобы заменить</span>
-    <div class="rt-tb">
-      ${vb('bold','<b>Ж</b>','Жирный')}${vb('italic','<i>К</i>','Курсив')}${vb('underline','<u>П</u>','Подчёркнутый')}
-      ${vb('insertUnorderedList','• список','Список')}
-      <button type="button" title="Ссылка" onmousedown="event.preventDefault()" onclick="veLink()">🔗 ссылка</button>
-      <button type="button" title="Заменить/добавить картинку" onmousedown="event.preventDefault()" onclick="veAddImg()">📷 картинка</button>
-      ${vb('removeFormat','✕','Убрать формат')}
+function loadGjs(){
+  if(_gjsLoad) return _gjsLoad;
+  _gjsLoad=new Promise((res,rej)=>{
+    const base='/admin/vendor/grapesjs/';
+    const css=document.createElement('link'); css.rel='stylesheet'; css.href=base+'grapes.min.css'; document.head.appendChild(css);
+    const s1=document.createElement('script'); s1.src=base+'grapes.min.js';
+    s1.onload=()=>{ const s2=document.createElement('script'); s2.src=base+'preset-newsletter.js'; s2.onload=res; s2.onerror=()=>rej(new Error('preset')); document.head.appendChild(s2); };
+    s1.onerror=()=>rej(new Error('grapes')); document.head.appendChild(s1);
+  });
+  return _gjsLoad;
+}
+async function openGrapes(i){
+  const b=tplBlocks[i]; if(!b) return;
+  if(b.type==='mjml'){ if(!await convertMjmlToHtml(i)) return; }
+  toast('Загрузка конструктора…');
+  try{ await loadGjs(); }catch(e){ toast('Не удалось загрузить конструктор (нет файлов vendor)'); return; }
+  if(!window.grapesjs){ toast('GrapesJS не загрузился'); return; }
+  tplSel=i; renderGrapes();
+}
+// Разбор сохранённого письма: markup отдельно, стили из <head><style> отдельно —
+// GrapesJS редактирует и то, и другое, а на экспорте инлайнит обратно.
+function splitDoc(html){
+  let doc; try{ doc=new DOMParser().parseFromString(html||'','text/html'); }catch(e){ return {css:'',body:html||''}; }
+  const css=[...doc.querySelectorAll('style')].map(s=>s.textContent).join('\n');
+  const body=doc.body?doc.body.innerHTML:(html||'');
+  return {css,body};
+}
+function renderGrapes(){
+  const doc=splitDoc(tplBlocks[tplSel].html);
+  $('tplBody').innerHTML=`
+    <div class="gjs-bar">
+      <button class="btn" onclick="closeGrapes()">← К блокам</button>
+      <b style="flex:1">Конструктор письма</b>
+      <span class="svc-sub" style="align-self:center">Тяните блоки из панели справа · клик по элементу — правка стилей</span>
+      <button class="btn" onclick="saveGrapes(false)" title="Записать правки в шаблон, не выходя">Применить</button>
+      <button class="btn primary" onclick="saveGrapes(true)">Готово · сохранить</button>
     </div>
-    <iframe id="veFrame" class="ve-frame" sandbox="allow-same-origin" title="Визуальный редактор письма"></iframe>
-    <input type="file" id="veFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" onchange="veUpload(this)">
-    <div class="svc-sub" style="margin-top:6px">Правки идут прямо по вёрстке письма (1-в-1). Для тонкой правки разметки переключитесь на «Код». Не забудьте «Сохранить шаблон».</div>
-  </div>`;
+    <div id="gjs"></div>`;
+  const P=window['grapesjs-preset-newsletter']; const plugin=(P&&P.default)||P;
+  gjsEditor=window.grapesjs.init({
+    container:'#gjs', height:'74vh', fromElement:false, storageManager:false,
+    assetManager:{
+      uploadText:'Перетащите файл или вставьте ссылку',
+      uploadFile: async (ev)=>{
+        const files=(ev.dataTransfer?ev.dataTransfer.files:(ev.target&&ev.target.files))||[];
+        for(const file of files){
+          if(file.size>3000000){ toast('Файл больше 3 МБ'); continue; }
+          const data=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(file); });
+          const resp=await j('/admin/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:file.name,data})});
+          if(resp&&resp.ok&&resp.url) gjsEditor.AssetManager.add(resp.url); else toast('Ошибка загрузки картинки');
+        }
+      },
+    },
+    plugins:[e=>plugin(e,{})],
+    components: doc.body,
+    style: doc.css,
+  });
 }
-function veDoc(){ const f=document.getElementById('veFrame'); try{ return f&&f.contentDocument; }catch(e){ return null; } }
-function veInit(i){
-  const f=document.getElementById('veFrame'); if(!f) return;
-  veImg=null;
-  f.onload=()=>{ const d=f.contentDocument; if(!d) return;
-    try{ d.designMode='on'; }catch(e){}
-    d.addEventListener('click',ev=>{ const t=ev.target;
-      if(t&&t.tagName==='IMG'){ ev.preventDefault(); veImg=t; veImage(t); }
-      else if(t&&t.closest&&t.closest('a')){ ev.preventDefault(); }   // ссылки не «уводят», ставим каретку
-    },true);
-    d.addEventListener('input',()=>{ clearTimeout(window._ve); window._ve=setTimeout(()=>veSync(i),250); });
-  };
-  f.srcdoc = tplBlocks[i].html || '<p style="font-family:sans-serif;color:#888">Пусто — переключитесь на «Код» и вставьте письмо.</p>';
+// HTML письма из GrapesJS: пресет инлайнит стили (устойчиво в почте); фолбэк — head+body.
+function gjsHtml(){
+  if(!gjsEditor) return null;
+  try{ const h=gjsEditor.runCommand('gjs-get-inlined-html'); if(h) return h; }catch(e){}
+  const css=gjsEditor.getCss()||'', html=gjsEditor.getHtml()||'';
+  return `<!doctype html><html><head><meta charset="utf-8"><style>${css}</style></head><body>${html}</body></html>`;
 }
-function veSync(i){
-  const d=veDoc(); if(!d) return;
-  let html=d.documentElement.outerHTML.replace(/\s*contenteditable="[^"]*"/gi,'');
-  tplBlocks[i].html='<!doctype html>\n'+html;
-  tplTouch();
+async function saveGrapes(close){
+  const html=gjsHtml(); if(html==null){ toast('Редактор не готов'); return; }
+  tplBlocks[tplSel].html=html; tplDirty=true;
+  // Свой PUT (не через saveBlocks — тот дёргает renderBuilder и снёс бы открытый конструктор).
+  const r=await j('/admin/template/'+encodeURIComponent(tplId),{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks:tplBlocks,name:tplName})});
+  if(!(r&&r.ok)){ toast('Ошибка сохранения'); return; }
+  tplDirty=false; toast('Шаблон сохранён');
+  if(close) closeGrapes();
 }
-function veCmd(cmd){ const d=veDoc(); if(!d) return; try{ d.execCommand(cmd,false,null); }catch(e){} veSync(tplSel); }
-function veLink(){ const url=prompt('Ссылка (https://…)'); if(!url) return; const d=veDoc(); if(!d) return; try{ d.execCommand('createLink',false,url); }catch(e){} veSync(tplSel); }
-function veImage(img){
-  const cur=img.getAttribute('src')||'';
-  const url=prompt('Ссылка на картинку (оставьте пустым — загрузить файл):', cur);
-  if(url===null) return;                       // отмена
-  if(url){ img.setAttribute('src',url); veSync(tplSel); }
-  else document.getElementById('veFile').click();
-}
-function veAddImg(){
-  if(veImg){ veImage(veImg); return; }         // заменить последнюю выбранную
-  const url=prompt('Ссылка на новую картинку (оставьте пустым — загрузить файл):');
-  if(url===null) return;
-  const d=veDoc(); if(!d) return;
-  if(url){ try{ d.execCommand('insertImage',false,url); }catch(e){} veSync(tplSel); }
-  else document.getElementById('veFile').click();
-}
-async function veUpload(input){
-  const file=input.files&&input.files[0]; input.value=''; if(!file) return;
-  if(file.size>3000000){ toast('Файл больше 3 МБ'); return; }
-  toast('Загрузка…');
-  const data=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(file); });
-  const resp=await j('/admin/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:file.name,data})});
-  if(resp&&resp.ok&&resp.url){
-    const d=veDoc();
-    if(veImg) veImg.setAttribute('src',resp.url);
-    else if(d){ try{ d.execCommand('insertImage',false,resp.url); }catch(e){} }
-    veSync(tplSel); toast('Изображение загружено');
-  } else toast('Ошибка загрузки'+(resp&&resp.reason?': '+resp.reason:''));
+function closeGrapes(){
+  if(gjsEditor){ try{ gjsEditor.destroy(); }catch(e){} gjsEditor=null; }
+  renderBuilder(); tplPreview();
 }
 function richTb(){
   const b=(cmd,label,title)=>`<button type="button" title="${title}" onmousedown="event.preventDefault()" onclick="rtCmd('${cmd}')">${label}</button>`;
