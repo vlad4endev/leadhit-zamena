@@ -261,8 +261,14 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
         ctx[name] = lambda *a, **k: items
     ctx.setdefault("get_recommendations", lambda *a, **k: items)
     ctx.setdefault("get_cart_items", lambda *a, **k: items)
+    # Не-товарные хелперы LeadHit: get_utc_time() возвращает строку времени (шаблоны таймеров
+    # делают .split('+')), а не список — поэтому переопределяем поверх сканера.
+    import datetime
+    ctx["get_utc_time"] = lambda *a, **k: datetime.datetime.now(datetime.timezone.utc).isoformat()
     try:
-        env = jinja2.Environment(autoescape=False)
+        # ChainableUndefined: неизвестные переменные/атрибуты (lead.name, alert_name, …)
+        # рендерятся пустыми, а не роняют шаблон. Функции данных (get_*) заданы явно выше.
+        env = jinja2.Environment(autoescape=False, undefined=jinja2.ChainableUndefined)
         mjml_str = env.from_string(source).render(**ctx)
         res = mrml.to_html(mjml_str)
         return getattr(res, "content", res)
