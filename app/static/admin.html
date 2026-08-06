@@ -12,27 +12,27 @@
   --border:rgba(22,18,34,.10); --glass-border:rgba(255,255,255,.8); --blur:16px;
   --text:#191223; --muted:#6d6479; --accent:#a81fcb; --accent-weak:rgba(188,57,229,.11);
   --brand:#bc39e5; --gold:#fecc00; --orange:#fc6631;
-  --grad:linear-gradient(135deg,#c33be1 0%,#8b3ff0 55%,#6a5cf5 100%);
-  --grad-soft:linear-gradient(135deg,rgba(195,59,225,.16),rgba(106,92,245,.12));
+  --grad:linear-gradient(135deg,#d24bf0 0%,#bc39e5 50%,#9c1fbf 100%);
+  --grad-soft:linear-gradient(135deg,rgba(210,75,240,.15),rgba(156,31,191,.11));
   --ok:#12986a; --warn:#c24710; --alert:#e0464b;
   --sidebar:rgba(250,250,252,.72); --side-text:#453c52; --side-muted:#8f85a0;
   --side-active:rgba(188,57,229,.12); --side-hover:rgba(22,18,34,.045); --side-border:rgba(22,18,34,.08);
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
   --r:16px; --r-sm:11px;
-  --shadow:0 1px 2px rgba(28,21,36,.04),0 10px 30px rgba(120,50,160,.09);
-  --shadow-lg:0 2px 6px rgba(28,21,36,.05),0 20px 48px rgba(120,50,160,.16);
+  --shadow:0 1px 2px rgba(20,18,28,.05),0 10px 30px rgba(20,18,28,.07);
+  --shadow-lg:0 2px 6px rgba(20,18,28,.06),0 20px 48px rgba(20,18,28,.12);
   --glow:0 6px 22px rgba(168,31,203,.34);
 }
 .dark{
   --bg:#0b0812;
-  --canvas:radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.22),transparent 55%),radial-gradient(1000px 640px at -8% 12%,rgba(106,92,245,.16),transparent 52%),radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.06),transparent 55%),#0b0812;
+  --canvas:radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.24),transparent 55%),radial-gradient(1000px 640px at -8% 12%,rgba(156,31,191,.16),transparent 52%),radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.06),transparent 55%),#0b0812;
   --surface:rgba(28,20,40,.6); --surface-solid:#18121f; --surface-2:rgba(255,255,255,.05);
   --border:rgba(255,255,255,.09); --glass-border:rgba(255,255,255,.12); --blur:18px;
   --text:#f0e8f7; --muted:#a89eb8; --accent:#cf6bef; --accent-weak:rgba(207,107,239,.16);
   --brand:#c15ae8; --gold:#fecc00; --orange:#ff7a4d;
-  --grad:linear-gradient(135deg,#d24bf0 0%,#9a55f5 55%,#7b6cf8 100%);
-  --grad-soft:linear-gradient(135deg,rgba(210,75,240,.22),rgba(123,108,248,.16));
+  --grad:linear-gradient(135deg,#e05cf5 0%,#c15ae8 50%,#a52fc9 100%);
+  --grad-soft:linear-gradient(135deg,rgba(224,92,245,.22),rgba(165,47,201,.16));
   --ok:#2eb681; --warn:#fc6631; --alert:#f0575c;
   --sidebar:rgba(19,13,27,.55); --side-text:#d6cbe4; --side-muted:#8a7e9a;
   --side-active:rgba(207,107,239,.16); --side-hover:rgba(255,255,255,.05); --side-border:rgba(255,255,255,.08);
@@ -42,13 +42,13 @@
 }
 @media (prefers-color-scheme:dark){:root:not(.light){
   --bg:#0b0812;
-  --canvas:radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.22),transparent 55%),radial-gradient(1000px 640px at -8% 12%,rgba(106,92,245,.16),transparent 52%),radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.06),transparent 55%),#0b0812;
+  --canvas:radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.24),transparent 55%),radial-gradient(1000px 640px at -8% 12%,rgba(156,31,191,.16),transparent 52%),radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.06),transparent 55%),#0b0812;
   --surface:rgba(28,20,40,.6); --surface-solid:#18121f; --surface-2:rgba(255,255,255,.05);
   --border:rgba(255,255,255,.09); --glass-border:rgba(255,255,255,.12); --blur:18px;
   --text:#f0e8f7; --muted:#a89eb8; --accent:#cf6bef; --accent-weak:rgba(207,107,239,.16);
   --brand:#c15ae8; --gold:#fecc00; --orange:#ff7a4d;
-  --grad:linear-gradient(135deg,#d24bf0 0%,#9a55f5 55%,#7b6cf8 100%);
-  --grad-soft:linear-gradient(135deg,rgba(210,75,240,.22),rgba(123,108,248,.16));
+  --grad:linear-gradient(135deg,#e05cf5 0%,#c15ae8 50%,#a52fc9 100%);
+  --grad-soft:linear-gradient(135deg,rgba(224,92,245,.22),rgba(165,47,201,.16));
   --ok:#2eb681; --warn:#fc6631; --alert:#f0575c;
   --sidebar:rgba(19,13,27,.55); --side-text:#d6cbe4; --side-muted:#8a7e9a;
   --side-active:rgba(207,107,239,.16); --side-hover:rgba(255,255,255,.05); --side-border:rgba(255,255,255,.08);
@@ -69,8 +69,12 @@ aside{background:var(--sidebar);color:var(--side-text);display:flex;flex-directi
   backdrop-filter:blur(var(--blur)) saturate(1.4);-webkit-backdrop-filter:blur(var(--blur)) saturate(1.4)}
 .logo{display:flex;align-items:center;gap:11px;padding:0 20px 20px;border-bottom:1px solid var(--side-border);margin-bottom:4px}
 .mark{width:38px;height:38px;border-radius:12px;flex:0 0 auto;display:grid;place-items:center;
-  background:var(--grad);box-shadow:var(--glow)}
+  background:var(--accent);box-shadow:0 2px 8px var(--accent-weak)}
 .mark svg{width:20px;height:20px;color:#fff}
+.logo .mark{display:none}
+.brand-full{display:flex;flex-direction:column;gap:3px;line-height:1;min-width:0}
+.brand-mark{height:24px;width:auto;display:block;color:var(--text)}
+.brand-sub{font-size:11px;color:var(--side-muted);letter-spacing:.01em}
 .logo b{font-size:15px;font-weight:700;color:var(--text);letter-spacing:-.01em}
 .logo span{display:block;font-size:11px;color:var(--side-muted)}
 nav{flex:1;overflow-y:auto;padding:6px 12px}
@@ -250,6 +254,7 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
 .nav-collapsed aside{padding:20px 0}
 .nav-collapsed .logo{justify-content:center;padding:0 0 16px}
 .nav-collapsed .logo>div{display:none}
+.nav-collapsed .logo .mark{display:grid}
 .nav-collapsed nav{padding:6px 8px}
 .nav-collapsed .navgroup{display:none}
 .nav-collapsed .navlink{justify-content:center;padding:10px 0;gap:0}
@@ -355,7 +360,13 @@ body.nav-collapsed{grid-template-columns:64px 1fr}
 <aside>
   <div class="logo"><div class="mark" aria-hidden="true">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round" stroke-linejoin="round"><rect x="3" y="5" width="18" height="14" rx="2.5"/><path d="m3 7.5 9 6 9-6"/></svg></div>
-    <div><b>GrosterHIT</b><span>groster.me</span></div></div>
+    <div class="brand-full">
+      <svg class="brand-mark" viewBox="0 0 173 42" role="img" aria-label="GrosterHIT">
+        <path d="M83.3554 11.4206H64.543C59.1624 11.4206 54.786 15.798 54.786 21.1786C54.786 26.5582 59.1624 30.9363 64.543 30.9363H83.3554C88.7362 30.9363 93.1131 26.5582 93.1131 21.1786C93.1131 15.798 88.7362 11.4206 83.3554 11.4206ZM64.543 17.3311H83.3554C85.4766 17.3311 87.2028 19.0575 87.2028 21.1786C87.2028 23.2994 85.4766 25.0248 83.3554 25.0248H64.543C62.4219 25.0248 60.6967 23.2994 60.6967 21.1786C60.6967 19.0575 62.4219 17.3311 64.543 17.3311ZM157.289 38.0322H150.789V11.9614H157.289V14.0084C158.677 12.2617 160.569 11.3863 162.963 11.3863C164.279 11.3863 165.505 11.6441 166.643 12.159C167.779 12.6736 168.767 13.374 169.605 14.2591C170.443 15.1443 171.095 16.1863 171.561 17.3834C172.028 18.5806 172.262 19.8606 172.262 21.2253C172.262 22.5892 172.028 23.8593 171.561 25.0319C171.095 26.2048 170.449 27.2342 169.623 28.1194C168.798 29.0045 167.821 29.6995 166.697 30.2017C165.571 30.7037 164.35 30.9561 163.034 30.9561C160.736 30.9561 158.82 30.1665 157.289 28.5864V38.0322ZM165.475 21.2253C165.475 20.651 165.373 20.1066 165.171 19.591C164.967 19.0773 164.673 18.6283 164.291 18.2453C163.908 17.863 163.459 17.5574 162.945 17.3303C162.429 17.1021 161.873 16.9877 161.275 16.9877C160.701 16.9877 160.161 17.0959 159.659 17.3113C159.156 17.5267 158.718 17.826 158.349 18.2092C157.977 18.5923 157.678 19.0412 157.451 19.5557C157.223 20.0706 157.109 20.6142 157.109 21.1902C157.109 21.7633 157.217 22.3035 157.433 22.8055C157.648 23.3076 157.947 23.7448 158.331 24.1152C158.713 24.4874 159.162 24.7869 159.676 25.0139C160.191 25.2412 160.736 25.3546 161.311 25.3546C161.885 25.3546 162.424 25.2473 162.927 25.0319C163.429 24.8166 163.865 24.5165 164.237 24.1342C164.608 23.752 164.906 23.3076 165.135 22.8055C165.362 22.3035 165.475 21.776 165.475 21.2253ZM134.841 22.2665C134.841 25.0672 136.157 26.4679 138.791 26.4679C140.202 26.4679 141.269 25.8928 141.986 24.7445H148.27C147 28.9576 143.829 31.0644 138.755 31.0644C137.198 31.0644 135.774 30.8298 134.481 30.3638C133.188 29.8969 132.08 29.2325 131.16 28.3708C130.238 27.5091 129.526 26.4806 129.024 25.2826C128.521 24.0865 128.269 22.746 128.269 21.2615C128.269 19.7297 128.508 18.347 128.988 17.114C129.465 15.8807 130.149 14.8343 131.034 13.9726C131.92 13.1099 132.991 12.4464 134.247 11.9804C135.505 11.5124 136.923 11.2791 138.502 11.2791C140.059 11.2791 141.46 11.5124 142.704 11.9804C143.948 12.4464 145.002 13.1226 145.864 14.0084C146.726 14.8939 147.383 15.9773 147.838 17.2573C148.293 18.5382 148.521 19.9813 148.521 21.585V22.2665H134.841ZM142.452 18.4967C142.237 17.5873 141.794 16.857 141.124 16.3063C140.454 15.7556 139.639 15.4798 138.682 15.4798C137.677 15.4798 136.857 15.7437 136.222 16.2701C135.589 16.7976 135.187 17.5386 135.02 18.4967H142.452ZM127.245 17.3834H122.937V30.3821H116.438V17.3834H112.128V11.9614H127.245V17.3834ZM109.807 17.9226C108.681 17.1553 107.545 16.7733 106.395 16.7733C105.774 16.7733 105.193 16.8806 104.654 17.0959C104.116 17.3113 103.643 17.617 103.235 18.0109C102.829 18.4066 102.511 18.8736 102.284 19.4126C102.056 19.9506 101.943 20.5556 101.943 21.2253C101.943 21.8716 102.056 22.4639 102.284 23.0029C102.511 23.5409 102.823 24.0079 103.219 24.4036C103.613 24.7986 104.085 25.1032 104.636 25.3188C105.188 25.5342 105.774 25.6422 106.395 25.6422C107.616 25.6422 108.754 25.224 109.807 24.3848V29.9151C108.203 30.6091 106.683 30.9561 105.247 30.9561C103.906 30.9561 102.631 30.7289 101.423 30.2738C100.214 29.8193 99.1484 29.1668 98.2271 28.3178C97.3058 27.4676 96.5692 26.4499 96.0185 25.2645C95.4678 24.081 95.1928 22.7569 95.1928 21.2975C95.1928 19.8372 95.4559 18.5022 95.9835 17.2933C96.5098 16.0854 97.2272 15.0434 98.1368 14.17C99.0464 13.2964 100.13 12.6143 101.386 12.1229C102.644 11.6324 103.99 11.3863 105.426 11.3863C107.006 11.3863 108.466 11.7227 109.807 12.3923V17.9226ZM38.162 38.0322H31.6629V11.9614H38.162V14.0084C39.5492 12.2617 41.4413 11.3863 43.8355 11.3863C45.1515 11.3863 46.3785 11.6441 47.5161 12.159C48.652 12.6736 49.6398 13.374 50.4781 14.2591C51.3154 15.1443 51.9681 16.1863 52.4351 17.3834C52.902 18.5806 53.1354 19.8606 53.1354 21.2253C53.1354 22.5892 52.902 23.8593 52.4351 25.0319C51.9681 26.2048 51.3218 27.2342 50.4961 28.1194C49.6704 29.0045 48.6943 29.6995 47.5701 30.2017C46.4444 30.7037 45.2228 30.9561 43.9076 30.9561C41.6091 30.9561 39.6935 30.1665 38.162 28.5864V38.0322ZM46.3486 21.2253C46.3486 20.651 46.2468 20.1066 46.0441 19.591C45.8394 19.0773 45.5465 18.6283 45.1632 18.2453C44.7812 17.863 44.3312 17.5574 43.8175 17.3303C43.3028 17.1021 42.7458 16.9877 42.1472 16.9877C41.5739 16.9877 41.0349 17.0959 40.5319 17.3113C40.0289 17.5267 39.5918 17.826 39.2222 18.2092C38.8499 18.5923 38.5505 19.0412 38.3243 19.5557C38.0962 20.0706 37.9816 20.6142 37.9816 21.1902C37.9816 21.7633 38.0909 22.3035 38.3063 22.8055C38.5209 23.3076 38.821 23.7448 39.2032 24.1152C39.5855 24.4874 40.0352 24.7869 40.5499 25.0139C41.0646 25.2412 41.6091 25.3546 42.1834 25.3546C42.7585 25.3546 43.2965 25.2473 43.7995 25.0319C44.3025 24.8166 44.7388 24.5165 45.1102 24.1342C45.4807 23.752 45.7798 23.3076 46.0071 22.8055C46.2351 22.3035 46.3486 21.776 46.3486 21.2253ZM16.9941 30.3821V11.9614H29.8871V17.3834H23.4573V30.3821H16.9941Z" fill="currentColor"/>
+        <path d="M6.55062 20.9395C5.99714 20.58 5.53432 20.2138 5.16137 19.8403C4.78803 19.4675 4.49803 19.0532 4.29057 18.5969C4.08292 18.1406 3.93821 17.6224 3.85507 17.042C3.77233 16.461 3.73056 15.784 3.73056 15.0102V8.04457C3.73056 7.46357 3.68938 6.99402 3.60644 6.63473C3.5235 6.27545 3.3782 5.9989 3.17114 5.80511C2.96368 5.6119 2.67368 5.48838 2.30034 5.43216C1.9268 5.37673 1.45032 5.34922 0.869918 5.34922H-0.000488281V0.000488281H3.56467C5.69308 0.000488281 7.25514 0.50547 8.25006 1.51405C9.24517 2.52263 9.74283 4.27116 9.74283 6.75885V14.5955C9.74283 15.8952 9.93643 16.8419 10.3236 17.4355C10.7102 18.0306 11.9518 18.4245 12.8921 18.6175V23.7176C11.1778 24.105 9.74283 25.2933 9.74283 27.2834V35.1204C9.74283 37.5521 9.26635 39.2873 8.31261 40.3236C7.35867 41.3603 5.74831 41.878 3.48232 41.878H-0.000488281V36.4881H0.828149C1.43587 36.4881 1.93333 36.4603 2.32132 36.4055C2.70733 36.3497 3.00545 36.2252 3.21231 36.0322C3.41997 35.8388 3.55814 35.5618 3.62762 35.2029C3.69592 34.8436 3.73056 34.3737 3.73056 33.7931V26.8271C3.73056 25.9978 3.77886 25.2933 3.87586 24.7127C3.97226 24.1317 4.12468 23.6212 4.33214 23.1784C4.5396 22.7365 4.82267 22.3426 5.18196 21.9968C5.54085 21.6516 5.99714 21.2992 6.55062 20.9395Z" style="fill:var(--brand)"/>
+      </svg>
+      <span class="brand-sub">консоль рассылок</span>
+    </div></div>
   <nav id="nav"></nav>
   <div class="sidefoot">GrosterHIT · v1</div>
 </aside>
@@ -1045,6 +1056,7 @@ const BICON={
   divider:'<path d="M4 12h16"/><path d="M5 8h2M17 8h2M5 16h2M17 16h2" opacity=".45"/>',
   spacer:'<path d="M12 4v16"/><path d="M8.5 8L12 4.5 15.5 8M8.5 16L12 19.5 15.5 16"/>',
   html:'<path d="M9 8l-4 4 4 4M15 8l4 4-4 4M13 6l-2 12"/>',
+  mjml:'<path d="M4 18V6l4 6 4-6v12M17 6v9M14 12l3 3 3-3"/>',
 };
 const AICON={
   up:'<path d="M7 14l5-5 5 5"/>', down:'<path d="M7 10l5 5 5-5"/>',
@@ -1056,7 +1068,7 @@ const BLOCK_TYPES={
   heading:{ru:'Заголовок'}, text:{ru:'Текст'}, products:{ru:'Товары'},
   button:{ru:'Кнопка'}, image:{ru:'Картинка'}, columns:{ru:'2 колонки'},
   quote:{ru:'Цитата'}, promo:{ru:'Промокод'}, social:{ru:'Соцсети'},
-  divider:{ru:'Разделитель'}, spacer:{ru:'Отступ'}, html:{ru:'HTML'},
+  divider:{ru:'Разделитель'}, spacer:{ru:'Отступ'}, html:{ru:'HTML'}, mjml:{ru:'MJML'},
 };
 function newBlock(t){return {
   heading:{type:'heading',text:'Новый заголовок'}, text:{type:'text',html:'<b>Текст</b> письма — форматируйте кнопками выше.'},
@@ -1066,7 +1078,8 @@ function newBlock(t){return {
   promo:{type:'promo',code:'GROSTER10',caption:'Скидка 10% на первый заказ'},
   social:{type:'social',vk:'',telegram:'',whatsapp:'',instagram:''},
   columns:{type:'columns',left:'Левая колонка',right:'Правая колонка'},
-  html:{type:'html',html:'<!-- Вставьте HTML письма. Плейсхолдер {{unsubscribe_url}} — ссылка отписки -->'}}[t];}
+  html:{type:'html',html:'<!-- Вставьте HTML письма. Плейсхолдер {{unsubscribe_url}} — ссылка отписки -->'},
+  mjml:{type:'mjml',mjml:'<mjml>\n  <mj-body>\n    <mj-section><mj-column>\n      <mj-text>Текст письма</mj-text>\n    </mj-column></mj-section>\n  </mj-body>\n</mjml>'}}[t];}
 function stripTags(h){return (h||'').replace(/<[^>]*>/g,'').trim();}
 function blkSub(b){
   if(b.type==='heading')return b.text||''; if(b.type==='text')return stripTags(b.html).slice(0,40);
@@ -1075,7 +1088,8 @@ function blkSub(b){
   if(b.type==='quote')return (b.text||'').slice(0,40); if(b.type==='promo')return b.code||'';
   if(b.type==='social'){const n=['vk','telegram','whatsapp','instagram'].filter(k=>b[k]).length;return n?n+' ссылок':'нет ссылок';}
   if(b.type==='columns')return '2 колонки';
-  if(b.type==='html')return stripTags(b.html).slice(0,40)||'пусто'; return '';}
+  if(b.type==='html')return stripTags(b.html).slice(0,40)||'пусто';
+  if(b.type==='mjml')return 'MJML · товары авто'; return '';}
 
 // Оформление (GET-превью текущего шаблона по id с оверрайдами look)
 function tplPreviewSrc(){
@@ -1164,14 +1178,14 @@ function drawTemplateList(){
     <div class="tgrp-h"><div class="ti">${esc(svc.ru)} <span class="n">${svc.templates.length||'—'}</span>
       ${svc.using_default?'<span class="tpl-pill muted">стандартный</span>':''}</div>
       <span style="display:flex;gap:4px">
-        <button class="add" onclick="pickImport('${svc.service}')" title="Загрузить готовый HTML-файл письма">↑ Импорт HTML</button>
+        <button class="add" onclick="pickImport('${svc.service}')" title="Загрузить готовый HTML- или MJML-файл письма">↑ Импорт HTML/MJML</button>
         <button class="add" onclick="createTemplate('${svc.service}')">+ Новый шаблон</button></span></div>
     ${svc.templates.map(t=>row(t,false)).join('')}${svc.using_default?defRow(svc):''}</div>`;
   const drafts=data.drafts||[];
   const draftGrp=`<div class="tgrp">
     <div class="tgrp-h"><div class="ti">Мои шаблоны <span class="n">без типа</span></div>
       <span style="display:flex;gap:4px">
-        <button class="add" onclick="pickImport('')" title="Загрузить готовый HTML-файл письма">↑ Импорт HTML</button>
+        <button class="add" onclick="pickImport('')" title="Загрузить готовый HTML- или MJML-файл письма">↑ Импорт HTML/MJML</button>
         <button class="add" onclick="createTemplate('')">+ Создать шаблон</button></span></div>
     ${drafts.length?drafts.map(t=>row(t,true)).join('')
       :'<div class="trow def"><span class="st"></span><div class="mn"><div class="mt">Черновиков нет. Создайте свой шаблон и прикрепите к любому сценарию.</div></div></div>'}</div>`;
@@ -1190,8 +1204,8 @@ function renderBuilder(){
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px">
         <div class="pal-lbl" style="margin:0">Добавить блок</div>
         <div style="display:flex;gap:10px;align-items:center">
-          <input type="file" id="tplImport" accept=".html,.htm,text/html" style="display:none" onchange="importHtml(this)">
-          <button class="btn" onclick="document.getElementById('tplImport').click()" title="Загрузить готовый HTML-файл письма">Импорт HTML</button>
+          <input type="file" id="tplImport" accept=".html,.htm,.mjml,text/html" style="display:none" onchange="importHtml(this)">
+          <button class="btn" onclick="document.getElementById('tplImport').click()" title="Загрузить готовый HTML- или MJML-файл письма">Импорт HTML/MJML</button>
           <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
         </div>
       </div>
@@ -1265,6 +1279,9 @@ function blkInspector(b,i){
   if(b.type==='html') return `<div class="tf"><span>HTML-код письма</span>
       <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].html=this.value;tplTouch()">${esc(b.html||'')}</textarea>
       <div class="svc-sub" style="margin-top:6px">Вставьте готовый HTML целиком (или загрузите файл кнопкой «Импорт HTML»). Если это единственный блок — письмо уйдёт «как есть», без шапки и футера конструктора. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div></div>`;
+  if(b.type==='mjml') return `<div class="tf"><span>MJML-код письма</span>
+      <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].mjml=this.value;tplTouch()">${esc(b.mjml||'')}</textarea>
+      <div class="svc-sub" style="margin-top:6px">MJML компилируется в HTML на сервере. Товары подставляются автоматически через <code>get_recommendations()</code>, отписка — через <code>{{ unsubscribe_url }}</code>. Шапка и футер конструктора не применяются — вёрстка целиком из MJML.</div></div>`;
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
   if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
   return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
@@ -1305,10 +1322,15 @@ function dupBlock(i){ tplBlocks.splice(i+1,0,JSON.parse(JSON.stringify(tplBlocks
 function moveBlock(i,d){ const k=i+d; if(k<0||k>=tplBlocks.length)return; const t=tplBlocks[i];tplBlocks[i]=tplBlocks[k];tplBlocks[k]=t; tplSel=k; reBuild(); }
 function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); tplPreview(); }
 function tplDropOn(i){ if(tplDrag<0||tplDrag===i){tplDrag=-1;return;} const b=tplBlocks.splice(tplDrag,1)[0]; tplBlocks.splice(i,0,b); tplSel=i; tplDrag=-1; reBuild(); }
-// Импорт из библиотеки: файл → новый шаблон (html-блок) → сразу открываем в редакторе.
+// Определяем формат файла: MJML (по расширению или тегу <mjml>) → блок mjml, иначе — html.
+function blockFromFile(name,text){
+  const isMjml=/\.mjml$/i.test(name)||/<mjml[\s>]/i.test(text.slice(0,2000));
+  return isMjml?{type:'mjml',mjml:text}:{type:'html',html:text};
+}
+// Импорт из библиотеки: файл → новый шаблон → сразу открываем в редакторе.
 function pickImport(service){
   const inp=document.createElement('input');
-  inp.type='file'; inp.accept='.html,.htm,text/html';
+  inp.type='file'; inp.accept='.html,.htm,.mjml,text/html';
   inp.onchange=()=>importHtmlNew(inp,service);
   inp.click();
 }
@@ -1316,22 +1338,22 @@ async function importHtmlNew(input,service){
   const file=input.files&&input.files[0]; if(!file) return;
   if(file.size>2000000){ toast('Файл больше 2 МБ'); return; }
   const text=await file.text();
-  const name=file.name.replace(/\.html?$/i,'');
+  const name=file.name.replace(/\.(html?|mjml)$/i,'');
   toast('Импорт…');
   const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
   if(!(r&&r.ok&&r.id)){ toast('Ошибка создания'); return; }
-  const s=await j('/admin/template/'+r.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks:[{type:'html',html:text}],name})});
+  const s=await j('/admin/template/'+r.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks:[blockFromFile(file.name,text)],name})});
   if(s&&s.ok){ toast('Шаблон импортирован из файла'); location.hash='#/templates/'+r.id; }
   else toast('Ошибка сохранения');
 }
 async function importHtml(input){
   const file=input.files&&input.files[0]; if(!file){ return; }
   if(file.size>2000000){ toast('Файл больше 2 МБ'); input.value=''; return; }
-  if(tplBlocks.length && !confirm('Заменить текущее содержимое импортированным HTML?')){ input.value=''; return; }
+  if(tplBlocks.length && !confirm('Заменить текущее содержимое импортированным файлом?')){ input.value=''; return; }
   const text=await file.text();
-  tplBlocks=[{type:'html',html:text}]; tplSel=0;
-  if(!tplName) tplName=file.name.replace(/\.html?$/i,'');
-  input.value=''; tplDirty=true; viewTemplates(); toast('HTML импортирован — нажмите «Сохранить шаблон»');
+  tplBlocks=[blockFromFile(file.name,text)]; tplSel=0;
+  if(!tplName) tplName=file.name.replace(/\.(html?|mjml)$/i,'');
+  input.value=''; tplDirty=true; viewTemplates(); toast('Импортировано — нажмите «Сохранить шаблон»');
 }
 async function tplUpload(i,input){
   const file=input.files&&input.files[0]; if(!file) return;
