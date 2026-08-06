@@ -333,6 +333,30 @@ select.inp{width:auto;font-family:var(--sans)}
 .srow>span{font-size:12px;color:var(--muted)}
 .lnk{border:0;background:none;color:var(--muted);font-size:12px;cursor:pointer;text-decoration:underline;padding:2px}
 .lnk:hover{color:var(--accent)}
+/* Редактор кода MJML/HTML — подсветка (прозрачная textarea поверх pre) + номера строк + вставка блоков */
+.code-ed{margin-top:8px}
+.ce-tb{display:flex;flex-wrap:wrap;gap:4px;margin-bottom:8px}
+.ce-tb button{border:1px solid var(--border);background:var(--surface);border-radius:6px;padding:4px 9px;font-size:12px;cursor:pointer;color:var(--text);line-height:1.2}
+.ce-tb button:hover{border-color:var(--accent);color:var(--accent);background:var(--accent-weak)}
+.ce-wrap{display:flex;border:1px solid var(--border);border-radius:8px;overflow:hidden;background:var(--surface-solid)}
+.ce-wrap:focus-within{border-color:var(--accent);box-shadow:0 0 0 3px var(--accent-weak)}
+.ce-gutter{height:380px;overflow:hidden;box-sizing:border-box;padding:12px 8px;text-align:right;
+  font-family:var(--mono,ui-monospace,Menlo,Consolas,monospace);font-size:12.5px;line-height:1.55;tab-size:2;
+  color:var(--muted);background:var(--surface-2);border-right:1px solid var(--border);white-space:pre;user-select:none;min-width:34px}
+.ce-code{position:relative;flex:1;height:380px;min-width:0}
+.ce-hl,.ce-ta{position:absolute;inset:0;margin:0;box-sizing:border-box;padding:12px;border:0;
+  font-family:var(--mono,ui-monospace,Menlo,Consolas,monospace);font-size:12.5px;line-height:1.55;tab-size:2;white-space:pre;word-wrap:normal}
+.ce-hl{pointer-events:none;overflow:hidden;color:var(--text)}
+.ce-hl code{font:inherit;white-space:inherit}
+.ce-ta{overflow:auto;background:transparent;color:transparent;caret-color:var(--accent);resize:none;outline:0}
+.ce-ta::selection{background:var(--accent-weak)}
+.ce-hl .c-com{color:var(--muted);font-style:italic}
+.ce-hl .c-tag{color:var(--accent);font-weight:600}
+.ce-hl .c-str{color:#2f8f4e}
+.ce-hl .c-var{color:#c26a12;font-weight:600}
+.dark .ce-hl .c-str{color:#6ccf8e}
+.dark .ce-hl .c-var{color:#f2a65a}
+.ve-frame{width:100%;height:540px;margin-top:8px;border:1px solid var(--border);border-radius:8px;background:#fff;display:block}
 /* Библиотека шаблонов — компактный список */
 .tpl-pill{font-size:11px;padding:2px 8px;border-radius:20px;background:var(--accent-weak);color:var(--accent);font-weight:600}
 .tpl-pill.muted{background:var(--surface-2);color:var(--muted)}
@@ -1046,6 +1070,7 @@ async function viewReport(){
 let tplView='list', tplTab='builder', tplSvc='best_offer', tplDevice='desktop', tplLook=null;
 let tplId=null, tplBlocks=null, tplIsActive=false, tplName='', tplSel=-1, tplDirty=false, tplDrag=-1;
 let tplListTab='best_offer', tplListData=null, tplPreviewOn=true, svcTab='scenario';
+let tplVisual=false, veImg=null;          // визуальное (WYSIWYG) редактирование html-блока
 const TRIGGER_DESC={
   best_offer:'Плановая рассылка: раз в заданный интервал подбирает топ-5 товаров по категории получателя и отправляет письмо.',
   cart:'Событийный триггер: срабатывает, когда посетитель ушёл с непустой корзиной и не оформил заказ.',
@@ -1170,7 +1195,7 @@ async function viewTemplates(){
 }
 function tplSetTab(v){ tplTab=v; viewTemplates(); }
 function openTemplate(id){ location.hash='#/templates/'+encodeURIComponent(id); }
-function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; viewTemplates(); }
+function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; tplVisual=false; viewTemplates(); }
 async function createTemplate(service){
   const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
   if(r&&r.ok&&r.id){ toast('Шаблон создан'); location.hash='#/templates/'+r.id; } else toast('Ошибка создания');
@@ -1234,10 +1259,13 @@ function drawTemplateList(){
 /* Конструктор */
 function renderBuilder(){
   const dev=tplDevice==='mobile';
+  // Визуальное редактирование (редактируемый превью) занимает всю ширину — правый превью прячем.
+  const visualEditing = tplVisual && tplSel>=0 && tplBlocks[tplSel] && tplBlocks[tplSel].type==='html';
+  const wide = !tplPreviewOn || visualEditing;
   const pal=Object.keys(BLOCK_TYPES).map(t=>`<button onclick="addBlock('${t}')" title="Добавить: ${BLOCK_TYPES[t].ru}">${ic(BICON[t])}<span>${BLOCK_TYPES[t].ru}</span></button>`).join('');
   const list=tplBlocks.length? tplBlocks.map((b,i)=>blkCard(b,i)).join('')
     : `<div class="tpl-empty">Пусто — добавьте блоки из палитры выше.</div>`;
-  const editor=`<div ${tplPreviewOn?'':'style="max-width:660px;margin:0 auto"'}>
+  const editor=`<div ${wide?'style="max-width:720px;margin:0 auto"':''}>
       <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px">
         <div class="pal-lbl" style="margin:0">Добавить блок</div>
         <div style="display:flex;gap:10px;align-items:center">
@@ -1260,9 +1288,10 @@ function renderBuilder(){
         <iframe id="tplframe" title="Предпросмотр" sandbox="" style="width:${dev?'380px':'100%'};max-width:${dev?'380':'680'}px;height:600px;border:0;background:#fff;border-radius:10px"></iframe>
       </div>
     </div>`;
-  $('tplBody').innerHTML = tplPreviewOn
+  $('tplBody').innerHTML = (tplPreviewOn && !visualEditing)
     ? `<div class="grid" style="grid-template-columns:400px minmax(0,1fr);align-items:start;gap:20px">${editor}${preview}</div>`
     : editor;
+  if(visualEditing) veInit(tplSel);      // подцепить редактируемый iframe после вставки в DOM
 }
 function blkCard(b,i){
   const m=BLOCK_TYPES[b.type]||{ru:b.type}; const sel=i===tplSel;
@@ -1313,17 +1342,199 @@ function blkInspector(b,i){
       + inp('alt','Alt-текст',b.alt) + inp('url','Ссылка (необязательно)',b.url)
       + styleRow('Скругление',radiusSeg(i,b.radius)) + boxRows(i,b);
   }
-  if(b.type==='html') return `<div class="tf"><span>HTML-код письма</span>
-      <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].html=this.value;tplTouch()">${esc(b.html||'')}</textarea>
-      <div class="svc-sub" style="margin-top:6px">Вставьте готовый HTML целиком (или загрузите файл кнопкой «Импорт HTML»). Если это единственный блок — письмо уйдёт «как есть», без шапки и футера конструктора. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div>
-      ${splitBtns(i)}</div>`;
-  if(b.type==='mjml') return `<div class="tf"><span>MJML-код письма</span>
-      <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].mjml=this.value;tplTouch()">${esc(b.mjml||'')}</textarea>
-      <div class="svc-sub" style="margin-top:6px">MJML компилируется в HTML на сервере. Товары подставляются автоматически через <code>get_recommendations()</code>, отписка — через <code>{{ unsubscribe_url }}</code>. Шапка и футер конструктора не применяются — вёрстка целиком из MJML (1-в-1 как оригинал).</div>
-      ${splitBtns(i)}</div>`;
+  if(b.type==='html'||b.type==='mjml'){
+    const showVisual = tplVisual && b.type==='html';      // MJML сначала компилируется в HTML (в setTplMode)
+    const toggle=`<div class="seg" style="margin-bottom:10px">
+      <button class="${showVisual?'':'active'}" onclick="setTplMode('code')" title="Редактировать HTML/MJML кодом">Код</button>
+      <button class="${showVisual?'active':''}" onclick="setTplMode('visual')" title="Редактировать письмо визуально — кликать текст и картинки">Визуально</button></div>`;
+    return toggle + (showVisual ? visualEditor(i) : codeEditor(i,b.type));
+  }
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
   if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
   return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
+}
+// ── Редактор кода MJML/HTML ───────────────────────────────────────────────────
+// Готовые блоки для вставки в место курсора. {l:подпись, t:подсказка, s:код}.
+const CE_SNIP={
+  mjml:{
+    frame:{l:'Каркас',t:'Пустой каркас MJML-письма',s:'<mjml>\n  <mj-body>\n    <mj-section>\n      <mj-column>\n        <mj-text>Текст письма</mj-text>\n      </mj-column>\n    </mj-section>\n  </mj-body>\n</mjml>\n'},
+    section:{l:'Секция',t:'Секция с колонкой',s:'<mj-section>\n  <mj-column>\n    <mj-text>Текст</mj-text>\n  </mj-column>\n</mj-section>\n'},
+    cols:{l:'2 колонки',t:'Секция с двумя колонками',s:'<mj-section>\n  <mj-column>\n    <mj-text>Левая</mj-text>\n  </mj-column>\n  <mj-column>\n    <mj-text>Правая</mj-text>\n  </mj-column>\n</mj-section>\n'},
+    heading:{l:'Заголовок',t:'Заголовок',s:'<mj-text font-size="22px" font-weight="700" color="#1a1a2e">Заголовок</mj-text>\n'},
+    text:{l:'Текст',t:'Абзац текста',s:'<mj-text font-size="15px" line-height="1.55" color="#333333">Текст письма</mj-text>\n'},
+    button:{l:'Кнопка',t:'Кнопка-ссылка',s:'<mj-button href="https://groster.me" background-color="#a81fcb" border-radius="8px">Перейти</mj-button>\n'},
+    image:{l:'Картинка',t:'Изображение',s:'<mj-image src="https://" alt="" href="" />\n'},
+    products:{l:'Товары',t:'Цикл по товарам сценария (топ-5)',s:'<mj-section>\n{% for item in get_recommendations() %}\n  <mj-column>\n    <mj-image src="{{ item.picture }}" href="{{ item.url }}" />\n    <mj-text align="center" font-weight="600">{{ item.name }}</mj-text>\n    <mj-text align="center">{{ (item.price / 100) | round | int }} ₽</mj-text>\n    <mj-button href="{{ item.url }}" background-color="#a81fcb">Купить</mj-button>\n  </mj-column>\n{% endfor %}\n</mj-section>\n'},
+    divider:{l:'Разделитель',t:'Горизонтальная линия',s:'<mj-divider border-color="#e6ebf3" border-width="1px" />\n'},
+    spacer:{l:'Отступ',t:'Вертикальный отступ',s:'<mj-spacer height="20px" />\n'},
+    social:{l:'Соцсети',t:'Иконки соцсетей',s:'<mj-social font-size="13px" mode="horizontal">\n  <mj-social-element name="telegram" href="https://" />\n  <mj-social-element name="instagram" href="https://" />\n</mj-social>\n'},
+    unsub:{l:'Отписка',t:'Ссылка отписки',s:'<mj-text align="center" font-size="12px" color="#888888"><a href="{{ unsubscribe_url }}" style="color:#888">Отписаться от рассылки</a></mj-text>\n'},
+  },
+  html:{
+    heading:{l:'Заголовок',t:'Заголовок',s:'<h2 style="font-size:22px;line-height:1.25;color:#1a1a2e;margin:16px 0 10px">Заголовок</h2>\n'},
+    text:{l:'Текст',t:'Абзац текста',s:'<p style="font-size:15px;line-height:1.55;color:#333;margin:8px 0">Текст письма</p>\n'},
+    button:{l:'Кнопка',t:'Кнопка-ссылка (таблица, устойчива в почте)',s:'<table role="presentation" cellpadding="0" cellspacing="0" style="margin:14px auto"><tr>\n  <td style="background:#a81fcb;border-radius:8px">\n    <a href="https://groster.me" style="display:inline-block;padding:12px 30px;color:#fff;text-decoration:none;font-weight:600">Перейти</a>\n  </td>\n</tr></table>\n'},
+    image:{l:'Картинка',t:'Изображение',s:'<img src="https://" alt="" style="max-width:100%;border-radius:8px;display:block;margin:10px 0">\n'},
+    divider:{l:'Разделитель',t:'Горизонтальная линия',s:'<hr style="border:0;border-top:1px solid #e6ebf3;margin:18px 0">\n'},
+    spacer:{l:'Отступ',t:'Вертикальный отступ',s:'<div style="height:20px;line-height:20px">&nbsp;</div>\n'},
+    unsub:{l:'Отписка',t:'Ссылка отписки',s:'<p style="text-align:center;font-size:12px;color:#888;margin-top:16px"><a href="{{unsubscribe_url}}" style="color:#888">Отписаться от рассылки</a></p>\n'},
+  },
+};
+function ceEsc(s){return (s||'').replace(/&/g,'&amp;').replace(/</g,'&lt;').replace(/>/g,'&gt;');}
+function hlTag(t){                                     // подсветка одного тега: имя + строки в кавычках
+  let e=ceEsc(t);
+  e=e.replace(/("[^"]*"|'[^']*')/g,'<span class="c-str">$1</span>');
+  e=e.replace(/^(&lt;\/?)([\w:-]+)/,'$1<span class="c-tag">$2</span>');
+  return e;
+}
+function hlCode(src){                                  // комментарии / Jinja / теги / текст
+  const re=/<!--[\s\S]*?-->|\{\{[\s\S]*?\}\}|\{%[\s\S]*?%\}|<\/?[a-zA-Z][^>]*>/g;
+  let out='',last=0,m;
+  while((m=re.exec(src))){
+    out+=ceEsc(src.slice(last,m.index));
+    const t=m[0];
+    if(t.startsWith('<!--')) out+='<span class="c-com">'+ceEsc(t)+'</span>';
+    else if(t[0]==='{') out+='<span class="c-var">'+ceEsc(t)+'</span>';
+    else out+=hlTag(t);
+    last=re.lastIndex;
+  }
+  return out+ceEsc(src.slice(last));
+}
+function ceGutter(src){ const n=(src||'').split('\n').length||1; let s=''; for(let k=1;k<=n;k++) s+=k+(k<n?'\n':''); return s; }
+function codeEditor(i,kind){
+  const key=kind==='mjml'?'mjml':'html', src=tplBlocks[i][key]||'', S=CE_SNIP[kind];
+  const tb=Object.keys(S).map(k=>`<button type="button" title="${esc(S[k].t)}" onmousedown="event.preventDefault()" onclick="ceInsert(this,'${kind}','${k}')">+ ${esc(S[k].l)}</button>`).join('');
+  const help=kind==='mjml'
+    ? 'MJML компилируется в HTML на сервере. Товары — <code>get_recommendations()</code>, отписка — <code>{{ unsubscribe_url }}</code>. Кнопки выше вставляют блок в место курсора; вёрстка идёт 1-в-1 без шапки/футера конструктора.'
+    : 'Готовый HTML письма. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически. Кнопки выше вставляют блок в место курсора. Единственный html-блок уходит «как есть», без шапки/футера конструктора.';
+  return `<div class="tf"><span>${kind==='mjml'?'MJML-код письма':'HTML-код письма'} · подсветка, Tab — отступ</span>
+    <div class="code-ed">
+      <div class="ce-tb">${tb}</div>
+      <div class="ce-wrap">
+        <div class="ce-gutter">${ceGutter(src)}</div>
+        <div class="ce-code">
+          <pre class="ce-hl" aria-hidden="true"><code>${hlCode(src)}</code></pre>
+          <textarea class="ce-ta" spellcheck="false" wrap="off" autocapitalize="off" autocomplete="off"
+            oninput="ceInput(this,${i},'${key}')" onscroll="ceScroll(this)" onkeydown="ceKey(event,this)">${ceEsc(src)}</textarea>
+        </div>
+      </div>
+    </div>
+    <div class="svc-sub" style="margin-top:6px">${help}</div>
+    ${splitBtns(i)}</div>`;
+}
+function ceSync(ta){                                    // перерисовать подсветку + номера строк
+  const ced=ta.closest('.code-ed'); const src=ta.value;
+  ced.querySelector('.ce-hl code').innerHTML=hlCode(src);
+  ced.querySelector('.ce-gutter').textContent=ceGutter(src);
+  ceScroll(ta);
+}
+function ceScroll(ta){ const ced=ta.closest('.code-ed'); const hl=ced.querySelector('.ce-hl'),g=ced.querySelector('.ce-gutter');
+  hl.scrollTop=ta.scrollTop; hl.scrollLeft=ta.scrollLeft; g.scrollTop=ta.scrollTop; }
+function ceInput(ta,i,key){ tplBlocks[i][key]=ta.value; ceSync(ta); tplTouch(); }
+function ceKey(ev,ta){                                  // Tab — отступ 2 пробела; Shift+Tab / выделение — по строкам
+  if(ev.key!=='Tab') return;
+  ev.preventDefault();
+  const s=ta.selectionStart,e=ta.selectionEnd,v=ta.value,IND='  ';
+  if(s===e){ ta.value=v.slice(0,s)+IND+v.slice(e); ta.selectionStart=ta.selectionEnd=s+IND.length; }
+  else{
+    const ls=v.lastIndexOf('\n',s-1)+1; let block=v.slice(ls,e);
+    block=ev.shiftKey?block.replace(/^ {1,2}/gm,''):block.replace(/^/gm,IND);
+    ta.value=v.slice(0,ls)+block+v.slice(e); ta.selectionStart=ls; ta.selectionEnd=ls+block.length;
+  }
+  ta.dispatchEvent(new Event('input'));
+}
+function ceInsert(btn,kind,k){                          // вставить готовый блок в место курсора
+  const ta=btn.closest('.code-ed').querySelector('.ce-ta'), snip=CE_SNIP[kind][k].s;
+  const s=ta.selectionStart,e=ta.selectionEnd,v=ta.value;
+  ta.value=v.slice(0,s)+snip+v.slice(e);
+  ta.selectionStart=ta.selectionEnd=s+snip.length; ta.focus();
+  ta.dispatchEvent(new Event('input'));
+}
+// ── Визуальный (WYSIWYG) редактор: письмо в редактируемом iframe ────────────────
+// Только для html-блоков (MJML сперва компилируется в HTML — setTplMode). designMode='on'
+// делает документ редактируемым; скрипты письма не выполняются (sandbox без allow-scripts),
+// но родитель имеет доступ к DOM (allow-same-origin) — читаем/пишем содержимое.
+function setTplMode(m){
+  const b=tplBlocks[tplSel]; if(!b) return;
+  if(m==='visual'){
+    if(b.type==='mjml'){                 // компиляция MJML→HTML (раскладка 1-в-1, динамика застывает)
+      convertMjmlToHtml(tplSel).then(ok=>{ if(ok){ tplVisual=true; reBuild(); } });
+      return;
+    }
+    tplVisual=true;
+  } else tplVisual=false;
+  reBuild();
+}
+async function convertMjmlToHtml(i){
+  const b=tplBlocks[i]; if(!b||b.type!=='mjml') return true;
+  if(!confirm('Открыть визуальный режим? MJML скомпилируется в HTML (раскладка 1-в-1), но динамика (цикл товаров) станет статичной, а MJML-исходник будет заменён на HTML. Продолжить?')) return false;
+  let html; try{ html=await _compiled(b); }catch(e){ toast('Не удалось скомпилировать MJML'); return false; }
+  tplBlocks[i]={type:'html',html}; tplDirty=true; return true;
+}
+function visualEditor(i){
+  const vb=(cmd,l,t)=>`<button type="button" title="${t}" onmousedown="event.preventDefault()" onclick="veCmd('${cmd}')">${l}</button>`;
+  return `<div class="tf"><span>Визуальный редактор — кликните текст и правьте прямо в письме; кликните картинку, чтобы заменить</span>
+    <div class="rt-tb">
+      ${vb('bold','<b>Ж</b>','Жирный')}${vb('italic','<i>К</i>','Курсив')}${vb('underline','<u>П</u>','Подчёркнутый')}
+      ${vb('insertUnorderedList','• список','Список')}
+      <button type="button" title="Ссылка" onmousedown="event.preventDefault()" onclick="veLink()">🔗 ссылка</button>
+      <button type="button" title="Заменить/добавить картинку" onmousedown="event.preventDefault()" onclick="veAddImg()">📷 картинка</button>
+      ${vb('removeFormat','✕','Убрать формат')}
+    </div>
+    <iframe id="veFrame" class="ve-frame" sandbox="allow-same-origin" title="Визуальный редактор письма"></iframe>
+    <input type="file" id="veFile" accept="image/png,image/jpeg,image/gif,image/webp" style="display:none" onchange="veUpload(this)">
+    <div class="svc-sub" style="margin-top:6px">Правки идут прямо по вёрстке письма (1-в-1). Для тонкой правки разметки переключитесь на «Код». Не забудьте «Сохранить шаблон».</div>
+  </div>`;
+}
+function veDoc(){ const f=document.getElementById('veFrame'); try{ return f&&f.contentDocument; }catch(e){ return null; } }
+function veInit(i){
+  const f=document.getElementById('veFrame'); if(!f) return;
+  veImg=null;
+  f.onload=()=>{ const d=f.contentDocument; if(!d) return;
+    try{ d.designMode='on'; }catch(e){}
+    d.addEventListener('click',ev=>{ const t=ev.target;
+      if(t&&t.tagName==='IMG'){ ev.preventDefault(); veImg=t; veImage(t); }
+      else if(t&&t.closest&&t.closest('a')){ ev.preventDefault(); }   // ссылки не «уводят», ставим каретку
+    },true);
+    d.addEventListener('input',()=>{ clearTimeout(window._ve); window._ve=setTimeout(()=>veSync(i),250); });
+  };
+  f.srcdoc = tplBlocks[i].html || '<p style="font-family:sans-serif;color:#888">Пусто — переключитесь на «Код» и вставьте письмо.</p>';
+}
+function veSync(i){
+  const d=veDoc(); if(!d) return;
+  let html=d.documentElement.outerHTML.replace(/\s*contenteditable="[^"]*"/gi,'');
+  tplBlocks[i].html='<!doctype html>\n'+html;
+  tplTouch();
+}
+function veCmd(cmd){ const d=veDoc(); if(!d) return; try{ d.execCommand(cmd,false,null); }catch(e){} veSync(tplSel); }
+function veLink(){ const url=prompt('Ссылка (https://…)'); if(!url) return; const d=veDoc(); if(!d) return; try{ d.execCommand('createLink',false,url); }catch(e){} veSync(tplSel); }
+function veImage(img){
+  const cur=img.getAttribute('src')||'';
+  const url=prompt('Ссылка на картинку (оставьте пустым — загрузить файл):', cur);
+  if(url===null) return;                       // отмена
+  if(url){ img.setAttribute('src',url); veSync(tplSel); }
+  else document.getElementById('veFile').click();
+}
+function veAddImg(){
+  if(veImg){ veImage(veImg); return; }         // заменить последнюю выбранную
+  const url=prompt('Ссылка на новую картинку (оставьте пустым — загрузить файл):');
+  if(url===null) return;
+  const d=veDoc(); if(!d) return;
+  if(url){ try{ d.execCommand('insertImage',false,url); }catch(e){} veSync(tplSel); }
+  else document.getElementById('veFile').click();
+}
+async function veUpload(input){
+  const file=input.files&&input.files[0]; input.value=''; if(!file) return;
+  if(file.size>3000000){ toast('Файл больше 3 МБ'); return; }
+  toast('Загрузка…');
+  const data=await new Promise(r=>{ const fr=new FileReader(); fr.onload=()=>r(fr.result); fr.readAsDataURL(file); });
+  const resp=await j('/admin/upload',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({filename:file.name,data})});
+  if(resp&&resp.ok&&resp.url){
+    const d=veDoc();
+    if(veImg) veImg.setAttribute('src',resp.url);
+    else if(d){ try{ d.execCommand('insertImage',false,resp.url); }catch(e){} }
+    veSync(tplSel); toast('Изображение загружено');
+  } else toast('Ошибка загрузки'+(resp&&resp.reason?': '+resp.reason:''));
 }
 function richTb(){
   const b=(cmd,label,title)=>`<button type="button" title="${title}" onmousedown="event.preventDefault()" onclick="rtCmd('${cmd}')">${label}</button>`;
@@ -1359,7 +1570,8 @@ function addBlock(t){ const at=(tplSel>=0&&tplSel<tplBlocks.length)?tplSel+1:tpl
 function delBlock(i){ tplBlocks.splice(i,1); if(tplSel>=tplBlocks.length)tplSel=tplBlocks.length-1; reBuild(); }
 function dupBlock(i){ tplBlocks.splice(i+1,0,JSON.parse(JSON.stringify(tplBlocks[i]))); tplSel=i+1; reBuild(); }
 function moveBlock(i,d){ const k=i+d; if(k<0||k>=tplBlocks.length)return; const t=tplBlocks[i];tplBlocks[i]=tplBlocks[k];tplBlocks[k]=t; tplSel=k; reBuild(); }
-function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); tplPreview(); }
+// Выбор блока не меняет содержимое письма → превью НЕ перерисовываем (иначе картинки мигают).
+function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); }
 function tplDropOn(i){ if(tplDrag<0||tplDrag===i){tplDrag=-1;return;} const b=tplBlocks.splice(tplDrag,1)[0]; tplBlocks.splice(i,0,b); tplSel=i; tplDrag=-1; reBuild(); }
 // ── Разбор импортированного письма на блоки конструктора ──────────────────────
 // Проходим по DOM готового HTML и раскладываем контент на нативные блоки
