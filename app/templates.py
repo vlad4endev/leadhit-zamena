@@ -247,16 +247,23 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
     """Импортированный MJML-шаблон (Jinja + MJML): рендерим Jinja с товарами/отпиской,
     затем компилируем MJML → HTML. Ошибку показываем баннером (превью в админке видит проблему
     до активации; ponytail: без сложной обработки ошибок — админ проверяет письмо глазами)."""
+    import re
     import jinja2
     import mrml
     unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
     items = _mjml_items(products)
+    # Разные шаблоны LeadHit зовут разные функции данных: get_recommendations(),
+    # get_cart_items(), get_order_items(), get_viewed_items() и т.п. — все означают
+    # «дай товары сценария». Находим все вызовы get_*() в шаблоне и отдаём им items
+    # (ни одна питон/jinja-функция не начинается с get_, поэтому пересечений нет).
+    ctx = {"unsubscribe_url": unsub}
+    for name in set(re.findall(r'(?<![\w.])(get_[A-Za-z0-9_]*)\s*\(', source)):
+        ctx[name] = lambda *a, **k: items
+    ctx.setdefault("get_recommendations", lambda *a, **k: items)
+    ctx.setdefault("get_cart_items", lambda *a, **k: items)
     try:
         env = jinja2.Environment(autoescape=False)
-        mjml_str = env.from_string(source).render(
-            unsubscribe_url=unsub,
-            get_recommendations=lambda *a, **k: items,
-        )
+        mjml_str = env.from_string(source).render(**ctx)
         res = mrml.to_html(mjml_str)
         return getattr(res, "content", res)
     except Exception as e:  # noqa: BLE001 — показываем причину в превью, не роняем воркер
