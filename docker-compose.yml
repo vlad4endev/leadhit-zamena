@@ -20,7 +20,11 @@ services:
     restart: unless-stopped
 
   api:
-    build: .
+    build:
+      context: .
+      # PIP_INDEX_URL — зеркало PyPI на случай, если pypi.org недоступен со сборочного хоста.
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     env_file: .env
     environment:
       # В сети compose БД и mailer — по имени сервиса (перебивают .env).
@@ -41,7 +45,10 @@ services:
     restart: unless-stopped
 
   workers:
-    build: .
+    build:
+      context: .
+      args:
+        PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     command: python scripts/worker_loop.py
     env_file: .env
     environment:

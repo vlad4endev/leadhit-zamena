@@ -10,7 +10,12 @@ ENV PYTHONUNBUFFERED=1 \
 WORKDIR /app
 
 COPY requirements.txt .
-RUN pip install --no-cache-dir -r requirements.txt
+# Терпеливый pip + опциональное зеркало: если pypi.org недоступен со сборочного хоста
+# (частая картина в РФ-сети — соединение висит на чтении), собрать через зеркало:
+#   docker compose build --build-arg PIP_INDEX_URL=https://mirror.yandex.ru/mirrors/pypi/simple/
+ARG PIP_INDEX_URL=
+RUN pip install --no-cache-dir --timeout 120 --retries 10 \
+      ${PIP_INDEX_URL:+--index-url "$PIP_INDEX_URL"} -r requirements.txt
 
 COPY app ./app
 COPY scripts ./scripts
