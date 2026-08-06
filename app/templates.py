@@ -301,6 +301,9 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
     # делают .split('+')), а не список — поэтому переопределяем поверх сканера.
     import datetime
     ctx["get_utc_time"] = lambda *a, **k: datetime.datetime.now(datetime.timezone.utc).isoformat()
+    # Управляющие хелперы LeadHit (exit()/abort() — «не отправлять, если данных нет»):
+    # у нас решение об отправке принимает воркер, поэтому делаем их безвредными no-op.
+    ctx["exit"] = ctx["abort"] = ctx["stop"] = lambda *a, **k: ""
     try:
         # ChainableUndefined: неизвестные переменные/атрибуты (lead.name, alert_name, …)
         # рендерятся пустыми, а не роняют шаблон. Функции данных (get_*) заданы явно выше.
