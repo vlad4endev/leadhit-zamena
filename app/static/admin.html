@@ -1277,7 +1277,7 @@ function renderCodePage(i){
         <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
         <button class="btn primary" onclick="openGrapes(${i})" title="Собрать письмо мышью — drag-and-drop конструктор" style="display:inline-flex;align-items:center;gap:7px;padding:7px 14px">${ic(grid,15)} Визуально</button>
       </div>
-      <div class="codehost">${codeEditor(i,kind)}</div>
+      <div class="codehost">${codeEditor(i,kind,true)}</div>
     </div>`;
 }
 function renderBuilder(){
@@ -1421,15 +1421,17 @@ function hlCode(src){                                  // комментарии
   return out+ceEsc(src.slice(last));
 }
 function ceGutter(src){ const n=(src||'').split('\n').length||1; let s=''; for(let k=1;k<=n;k++) s+=k+(k<n?'\n':''); return s; }
-function codeEditor(i,kind){
+// bare=true — «чистый» код (страница кода письма): без панели вставки блоков и
+// кнопок разбиения. Все инструменты редактирования — в визуальном конструкторе.
+function codeEditor(i,kind,bare){
   const key=kind==='mjml'?'mjml':'html', src=tplBlocks[i][key]||'', S=CE_SNIP[kind];
-  const tb=Object.keys(S).map(k=>`<button type="button" title="${esc(S[k].t)}" onmousedown="event.preventDefault()" onclick="ceInsert(this,'${kind}','${k}')">+ ${esc(S[k].l)}</button>`).join('');
+  const tb=bare?'':`<div class="ce-tb">${Object.keys(S).map(k=>`<button type="button" title="${esc(S[k].t)}" onmousedown="event.preventDefault()" onclick="ceInsert(this,'${kind}','${k}')">+ ${esc(S[k].l)}</button>`).join('')}</div>`;
   const help=kind==='mjml'
-    ? 'MJML компилируется в HTML на сервере. Товары — <code>get_recommendations()</code>, отписка — <code>{{ unsubscribe_url }}</code>. Кнопки выше вставляют блок в место курсора; вёрстка идёт 1-в-1 без шапки/футера конструктора.'
-    : 'Готовый HTML письма. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически. Кнопки выше вставляют блок в место курсора. Единственный html-блок уходит «как есть», без шапки/футера конструктора.';
+    ? 'MJML компилируется в HTML на сервере. Товары — <code>get_recommendations()</code>, отписка — <code>{{ unsubscribe_url }}</code>. Вёрстка идёт 1-в-1 без шапки/футера конструктора.'
+    : 'Готовый HTML письма. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически. Единственный html-блок уходит «как есть», без шапки/футера конструктора.';
   return `<div class="tf"><span>${kind==='mjml'?'MJML-код письма':'HTML-код письма'} · подсветка, Tab — отступ</span>
     <div class="code-ed">
-      <div class="ce-tb">${tb}</div>
+      ${tb}
       <div class="ce-wrap">
         <div class="ce-gutter">${ceGutter(src)}</div>
         <div class="ce-code">
@@ -1440,7 +1442,7 @@ function codeEditor(i,kind){
       </div>
     </div>
     <div class="svc-sub" style="margin-top:6px">${help}</div>
-    ${splitBtns(i)}</div>`;
+    ${bare?'':splitBtns(i)}</div>`;
 }
 function ceSync(ta){                                    // перерисовать подсветку + номера строк
   const ced=ta.closest('.code-ed'); const src=ta.value;
