@@ -1044,6 +1044,7 @@ const BICON={
   social:'<circle cx="6" cy="12" r="2.3"/><circle cx="18" cy="6" r="2.3"/><circle cx="18" cy="18" r="2.3"/><path d="M8 11l8-4M8 13l8 4"/>',
   divider:'<path d="M4 12h16"/><path d="M5 8h2M17 8h2M5 16h2M17 16h2" opacity=".45"/>',
   spacer:'<path d="M12 4v16"/><path d="M8.5 8L12 4.5 15.5 8M8.5 16L12 19.5 15.5 16"/>',
+  html:'<path d="M9 8l-4 4 4 4M15 8l4 4-4 4M13 6l-2 12"/>',
 };
 const AICON={
   up:'<path d="M7 14l5-5 5 5"/>', down:'<path d="M7 10l5 5 5-5"/>',
@@ -1055,7 +1056,7 @@ const BLOCK_TYPES={
   heading:{ru:'Заголовок'}, text:{ru:'Текст'}, products:{ru:'Товары'},
   button:{ru:'Кнопка'}, image:{ru:'Картинка'}, columns:{ru:'2 колонки'},
   quote:{ru:'Цитата'}, promo:{ru:'Промокод'}, social:{ru:'Соцсети'},
-  divider:{ru:'Разделитель'}, spacer:{ru:'Отступ'},
+  divider:{ru:'Разделитель'}, spacer:{ru:'Отступ'}, html:{ru:'HTML'},
 };
 function newBlock(t){return {
   heading:{type:'heading',text:'Новый заголовок'}, text:{type:'text',html:'<b>Текст</b> письма — форматируйте кнопками выше.'},
@@ -1064,7 +1065,8 @@ function newBlock(t){return {
   quote:{type:'quote',text:'Отличный сервис и быстрая доставка!',author:'Клиент Groster'},
   promo:{type:'promo',code:'GROSTER10',caption:'Скидка 10% на первый заказ'},
   social:{type:'social',vk:'',telegram:'',whatsapp:'',instagram:''},
-  columns:{type:'columns',left:'Левая колонка',right:'Правая колонка'}}[t];}
+  columns:{type:'columns',left:'Левая колонка',right:'Правая колонка'},
+  html:{type:'html',html:'<!-- Вставьте HTML письма. Плейсхолдер {{unsubscribe_url}} — ссылка отписки -->'}}[t];}
 function stripTags(h){return (h||'').replace(/<[^>]*>/g,'').trim();}
 function blkSub(b){
   if(b.type==='heading')return b.text||''; if(b.type==='text')return stripTags(b.html).slice(0,40);
@@ -1072,7 +1074,8 @@ function blkSub(b){
   if(b.type==='spacer')return (b.h||16)+' px'; if(b.type==='image')return b.src?'задана':'нет картинки';
   if(b.type==='quote')return (b.text||'').slice(0,40); if(b.type==='promo')return b.code||'';
   if(b.type==='social'){const n=['vk','telegram','whatsapp','instagram'].filter(k=>b[k]).length;return n?n+' ссылок':'нет ссылок';}
-  if(b.type==='columns')return '2 колонки'; return '';}
+  if(b.type==='columns')return '2 колонки';
+  if(b.type==='html')return stripTags(b.html).slice(0,40)||'пусто'; return '';}
 
 // Оформление (GET-превью текущего шаблона по id с оверрайдами look)
 function tplPreviewSrc(){
@@ -1160,12 +1163,16 @@ function drawTemplateList(){
   const scenGrp=`<div class="tgrp">
     <div class="tgrp-h"><div class="ti">${esc(svc.ru)} <span class="n">${svc.templates.length||'—'}</span>
       ${svc.using_default?'<span class="tpl-pill muted">стандартный</span>':''}</div>
-      <button class="add" onclick="createTemplate('${svc.service}')">+ Новый шаблон</button></div>
+      <span style="display:flex;gap:4px">
+        <button class="add" onclick="pickImport('${svc.service}')" title="Загрузить готовый HTML-файл письма">↑ Импорт HTML</button>
+        <button class="add" onclick="createTemplate('${svc.service}')">+ Новый шаблон</button></span></div>
     ${svc.templates.map(t=>row(t,false)).join('')}${svc.using_default?defRow(svc):''}</div>`;
   const drafts=data.drafts||[];
   const draftGrp=`<div class="tgrp">
     <div class="tgrp-h"><div class="ti">Мои шаблоны <span class="n">без типа</span></div>
-      <button class="add" onclick="createTemplate('')">+ Создать шаблон</button></div>
+      <span style="display:flex;gap:4px">
+        <button class="add" onclick="pickImport('')" title="Загрузить готовый HTML-файл письма">↑ Импорт HTML</button>
+        <button class="add" onclick="createTemplate('')">+ Создать шаблон</button></span></div>
     ${drafts.length?drafts.map(t=>row(t,true)).join('')
       :'<div class="trow def"><span class="st"></span><div class="mn"><div class="mt">Черновиков нет. Создайте свой шаблон и прикрепите к любому сценарию.</div></div></div>'}</div>`;
   $('view').innerHTML=`<section style="max-width:820px">
@@ -1180,9 +1187,13 @@ function renderBuilder(){
   const list=tplBlocks.length? tplBlocks.map((b,i)=>blkCard(b,i)).join('')
     : `<div class="tpl-empty">Пусто — добавьте блоки из палитры выше.</div>`;
   const editor=`<div ${tplPreviewOn?'':'style="max-width:660px;margin:0 auto"'}>
-      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px">
+      <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:10px;gap:10px">
         <div class="pal-lbl" style="margin:0">Добавить блок</div>
-        <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
+        <div style="display:flex;gap:10px;align-items:center">
+          <input type="file" id="tplImport" accept=".html,.htm,text/html" style="display:none" onchange="importHtml(this)">
+          <button class="btn" onclick="document.getElementById('tplImport').click()" title="Загрузить готовый HTML-файл письма">Импорт HTML</button>
+          <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
+        </div>
       </div>
       <div class="tpl-pal">${pal}</div>
       <div class="pal-lbl">Блоки письма ${tplBlocks.length?`· ${tplBlocks.length}`:''}</div>
@@ -1251,6 +1262,9 @@ function blkInspector(b,i){
       + inp('alt','Alt-текст',b.alt) + inp('url','Ссылка (необязательно)',b.url)
       + styleRow('Скругление',radiusSeg(i,b.radius)) + boxRows(i,b);
   }
+  if(b.type==='html') return `<div class="tf"><span>HTML-код письма</span>
+      <textarea class="inp" rows="14" spellcheck="false" style="font-family:ui-monospace,Menlo,Consolas,monospace;font-size:12px;line-height:1.5;white-space:pre;overflow-wrap:normal" oninput="tplBlocks[${i}].html=this.value;tplTouch()">${esc(b.html||'')}</textarea>
+      <div class="svc-sub" style="margin-top:6px">Вставьте готовый HTML целиком (или загрузите файл кнопкой «Импорт HTML»). Если это единственный блок — письмо уйдёт «как есть», без шапки и футера конструктора. Плейсхолдер <code>{{unsubscribe_url}}</code> подставляется автоматически.</div></div>`;
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
   if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
   return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
@@ -1291,6 +1305,34 @@ function dupBlock(i){ tplBlocks.splice(i+1,0,JSON.parse(JSON.stringify(tplBlocks
 function moveBlock(i,d){ const k=i+d; if(k<0||k>=tplBlocks.length)return; const t=tplBlocks[i];tplBlocks[i]=tplBlocks[k];tplBlocks[k]=t; tplSel=k; reBuild(); }
 function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); tplPreview(); }
 function tplDropOn(i){ if(tplDrag<0||tplDrag===i){tplDrag=-1;return;} const b=tplBlocks.splice(tplDrag,1)[0]; tplBlocks.splice(i,0,b); tplSel=i; tplDrag=-1; reBuild(); }
+// Импорт из библиотеки: файл → новый шаблон (html-блок) → сразу открываем в редакторе.
+function pickImport(service){
+  const inp=document.createElement('input');
+  inp.type='file'; inp.accept='.html,.htm,text/html';
+  inp.onchange=()=>importHtmlNew(inp,service);
+  inp.click();
+}
+async function importHtmlNew(input,service){
+  const file=input.files&&input.files[0]; if(!file) return;
+  if(file.size>2000000){ toast('Файл больше 2 МБ'); return; }
+  const text=await file.text();
+  const name=file.name.replace(/\.html?$/i,'');
+  toast('Импорт…');
+  const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
+  if(!(r&&r.ok&&r.id)){ toast('Ошибка создания'); return; }
+  const s=await j('/admin/template/'+r.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks:[{type:'html',html:text}],name})});
+  if(s&&s.ok){ toast('Шаблон импортирован из файла'); location.hash='#/templates/'+r.id; }
+  else toast('Ошибка сохранения');
+}
+async function importHtml(input){
+  const file=input.files&&input.files[0]; if(!file){ return; }
+  if(file.size>2000000){ toast('Файл больше 2 МБ'); input.value=''; return; }
+  if(tplBlocks.length && !confirm('Заменить текущее содержимое импортированным HTML?')){ input.value=''; return; }
+  const text=await file.text();
+  tplBlocks=[{type:'html',html:text}]; tplSel=0;
+  if(!tplName) tplName=file.name.replace(/\.html?$/i,'');
+  input.value=''; tplDirty=true; viewTemplates(); toast('HTML импортирован — нажмите «Сохранить шаблон»');
+}
 async function tplUpload(i,input){
   const file=input.files&&input.files[0]; if(!file) return;
   if(file.size>3000000){ toast('Файл больше 3 МБ'); input.value=''; return; }

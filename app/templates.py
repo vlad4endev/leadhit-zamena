@@ -214,6 +214,10 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict) -> str
             f'font-weight:600;font-size:13px">{label}</a>'
             for label, url in items if url)
         return f'<div style="text-align:center;margin:14px 0">{pills}</div>' if pills else ""
+    if t == "html":
+        # Сырой HTML от админа (доверенный источник) — отдаём как есть, без санитизации:
+        # это единственный способ сохранить табличную вёрстку готового письма.
+        return b.get("html") or ""
     if t == "columns":
         left = sanitize_html(b.get("left") or "")
         right = sanitize_html(b.get("right") or "")
@@ -229,8 +233,13 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
     """Рендер письма из блоков конструктора. Шапка/футер берутся из look (единый бренд)."""
     lk = _look(look)
     unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    blocks = blocks or []
+    # Импортированное письмо целиком: единственный html-блок → отдаём документ «как есть»,
+    # без брендовой обёртки. Плейсхолдер {{unsubscribe_url}} подставляем на ссылку отписки.
+    if len(blocks) == 1 and (blocks[0] or {}).get("type") == "html":
+        return (blocks[0].get("html") or "").replace("{{unsubscribe_url}}", unsub)
     parts = []
-    for b in (blocks or []):
+    for b in blocks:
         html = _render_block(b, products, campaign, lk)
         if html:
             box = []
@@ -246,7 +255,7 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
             if box:
                 html = f'<div style="{";".join(box)}">{html}</div>'
         parts.append(html)
-    body = "".join(parts)
+    body = "".join(parts).replace("{{unsubscribe_url}}", unsub)
     return (
         f'<div style="font-family:sans-serif;max-width:640px;margin:0 auto;'
         f'border:1px solid #e6ebf3;border-radius:14px;overflow:hidden">'
