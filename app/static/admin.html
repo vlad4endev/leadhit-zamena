@@ -1322,12 +1322,80 @@ function dupBlock(i){ tplBlocks.splice(i+1,0,JSON.parse(JSON.stringify(tplBlocks
 function moveBlock(i,d){ const k=i+d; if(k<0||k>=tplBlocks.length)return; const t=tplBlocks[i];tplBlocks[i]=tplBlocks[k];tplBlocks[k]=t; tplSel=k; reBuild(); }
 function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); tplPreview(); }
 function tplDropOn(i){ if(tplDrag<0||tplDrag===i){tplDrag=-1;return;} const b=tplBlocks.splice(tplDrag,1)[0]; tplBlocks.splice(i,0,b); tplSel=i; tplDrag=-1; reBuild(); }
-// Определяем формат файла: MJML (по расширению или тегу <mjml>) → блок mjml, иначе — html.
-function blockFromFile(name,text){
-  const isMjml=/\.mjml$/i.test(name)||/<mjml[\s>]/i.test(text.slice(0,2000));
-  return isMjml?{type:'mjml',mjml:text}:{type:'html',html:text};
+// ── Разбор импортированного письма на блоки конструктора ──────────────────────
+// Проходим по DOM готового HTML и раскладываем контент на нативные блоки
+// (заголовок/текст/картинка/кнопка/разделитель). Табличная обёртка письма
+// «схлопывается» — остаётся редактируемый стек блоков в стиле конструктора.
+const _RT_INLINE=new Set(['B','STRONG','I','EM','U','S','A','BR','SPAN']);
+// Селектор «есть вложенная раскладка» → значит нужно спускаться глубже, а не брать как лист.
+const _LAYOUT_SEL='img,table,tbody,thead,tr,td,hr,div,section,center';
+function _styleOf(el){ return ((el.getAttribute&&el.getAttribute('style'))||'').toLowerCase(); }
+function _hidden(el){ const s=_styleOf(el);
+  // ВНИМАНИЕ: font-size:0 сам по себе — приём MJML для схлопывания пробелов между колонками,
+  // НЕ признак скрытия. Скрыто = display:none / opacity:0 / прозрачный прехедер.
+  return /display:\s*none/.test(s)
+    || /opacity:\s*0\s*(;|$)/.test(s)
+    || (/font-size:\s*0/.test(s) && /color:\s*transparent/.test(s)); }
+function _align(el){ const s=_styleOf(el); const m=s.match(/text-align:\s*(left|center|right)/);
+  return (m&&m[1])||(el.getAttribute&&el.getAttribute('align'))||''; }
+function _isButton(a){ const s=_styleOf(a); return /background(-color)?:/.test(s)&&/padding:/.test(s)&&!a.querySelector('img'); }
+function _txt(el){ return (el.textContent||'').replace(/[\s⠀]+/g,' ').trim(); }
+function htmlToBlocks(html){
+  let doc; try{ doc=new DOMParser().parseFromString(html,'text/html'); }catch(e){ return []; }
+  const root=doc.body||doc.documentElement; if(!root) return [];
+  const blocks=[];
+  const _clean=h=>(h||'').replace(/<!--[\s\S]*?-->/g,'').trim();   // выкидываем mso-условные комментарии
+  const _hasBtn=el=>[...el.querySelectorAll('a')].some(_isButton);
+  const pushText=(inner,el)=>{
+    inner=_clean(inner);
+    if(!stripTags(inner).replace(/⠀/g,'').trim()) return;
+    const s=_styleOf(el); const fs=+(s.match(/font-size:\s*(\d+)px/)||[])[1]||0;
+    const bold=/font-weight:\s*(bold|[6-9]00)/.test(s)||!!el.querySelector('b,strong');
+    const plain=_txt(el);
+    if(fs>=16&&bold&&plain.length&&plain.length<80) blocks.push({type:'heading',text:plain,align:_align(el)||undefined});
+    else blocks.push({type:'text',html:inner,align:_align(el)||undefined});
+  };
+  function walk(node){
+    let buf='';
+    const flush=()=>{ const c=_clean(buf); if(stripTags(c).trim()) blocks.push({type:'text',html:c}); buf=''; };
+    node.childNodes.forEach(ch=>{
+      if(ch.nodeType===3){ buf+=ch.textContent; return; }
+      if(ch.nodeType!==1) return;                       // комментарии/mso — мимо
+      if(_hidden(ch)) return;                            // прехедер, скрытые филлеры
+      const tag=ch.tagName;
+      if(tag==='IMG'){ flush(); blocks.push({type:'image',src:ch.getAttribute('src')||'',alt:ch.getAttribute('alt')||''}); return; }
+      if(tag==='A'){
+        const img=ch.querySelector('img');
+        if(img){ flush(); blocks.push({type:'image',src:img.getAttribute('src')||'',alt:img.getAttribute('alt')||'',url:ch.getAttribute('href')||''}); return; }
+        if(_isButton(ch)){ flush(); blocks.push({type:'button',text:_txt(ch)||'Перейти',url:ch.getAttribute('href')||'#',align:_align(ch)||_align(ch.parentElement)||'center'}); return; }
+        buf+=ch.outerHTML; return;                       // обычная ссылка → в текст
+      }
+      if(/^H[1-6]$/.test(tag)){ flush(); blocks.push({type:'heading',text:_txt(ch),align:_align(ch)||undefined}); return; }
+      if(tag==='HR'){ flush(); blocks.push({type:'divider'}); return; }
+      if(_RT_INLINE.has(tag)){ buf+=ch.outerHTML; return; }
+      if(!ch.querySelector(_LAYOUT_SEL)&&!_hasBtn(ch)){ flush(); pushText(ch.innerHTML,ch); return; }  // текстовый лист
+      flush(); walk(ch);                                 // контейнер с раскладкой/кнопкой → глубже
+    });
+    flush();
+  }
+  walk(root);
+  return blocks;
 }
-// Импорт из библиотеки: файл → новый шаблон → сразу открываем в редакторе.
+// Файл → массив блоков. MJML сперва компилируем в HTML через /template/render.
+async function parseImport(name,text,service){
+  const isMjml=/\.mjml$/i.test(name)||/<mjml[\s>]/i.test(text.slice(0,2000));
+  let html=text;
+  if(isMjml){
+    toast('Компиляция MJML…');
+    try{ const r=await fetch('/admin/template/render',{method:'POST',headers:{'Content-Type':'application/json'},
+      body:JSON.stringify({service:service||'best_offer',blocks:[{type:'mjml',mjml:text}]})}); html=await r.text(); }
+    catch(e){ html=''; }
+  }
+  let blocks=htmlToBlocks(html);
+  if(!blocks.length) blocks=[isMjml?{type:'mjml',mjml:text}:{type:'html',html:text}];  // не разобрали → цельным блоком
+  return blocks;
+}
+// Импорт из библиотеки: файл → новый шаблон (разобранный на блоки) → открываем в редакторе.
 function pickImport(service){
   const inp=document.createElement('input');
   inp.type='file'; inp.accept='.html,.htm,.mjml,text/html';
@@ -1340,10 +1408,11 @@ async function importHtmlNew(input,service){
   const text=await file.text();
   const name=file.name.replace(/\.(html?|mjml)$/i,'');
   toast('Импорт…');
+  const blocks=await parseImport(file.name,text,service);
   const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
   if(!(r&&r.ok&&r.id)){ toast('Ошибка создания'); return; }
-  const s=await j('/admin/template/'+r.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks:[blockFromFile(file.name,text)],name})});
-  if(s&&s.ok){ toast('Шаблон импортирован из файла'); location.hash='#/templates/'+r.id; }
+  const s=await j('/admin/template/'+r.id,{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({blocks,name})});
+  if(s&&s.ok){ toast(`Импортировано · ${blocks.length} блоков`); location.hash='#/templates/'+r.id; }
   else toast('Ошибка сохранения');
 }
 async function importHtml(input){
@@ -1351,9 +1420,11 @@ async function importHtml(input){
   if(file.size>2000000){ toast('Файл больше 2 МБ'); input.value=''; return; }
   if(tplBlocks.length && !confirm('Заменить текущее содержимое импортированным файлом?')){ input.value=''; return; }
   const text=await file.text();
-  tplBlocks=[blockFromFile(file.name,text)]; tplSel=0;
+  toast('Импорт…');
+  const blocks=await parseImport(file.name,text,tplSvc);
+  tplBlocks=blocks; tplSel=-1;
   if(!tplName) tplName=file.name.replace(/\.(html?|mjml)$/i,'');
-  input.value=''; tplDirty=true; viewTemplates(); toast('Импортировано — нажмите «Сохранить шаблон»');
+  input.value=''; tplDirty=true; viewTemplates(); toast(`Разобрано на ${blocks.length} блоков — «Сохранить шаблон»`);
 }
 async function tplUpload(i,input){
   const file=input.files&&input.files[0]; if(!file) return;

@@ -483,7 +483,7 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         look = await app_settings.template_look(con)
         tpl = await app_settings.active_template(con, service)
         rows = await con.fetch(
-            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 4")
+            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 8")
     products = [dict(r, price=float(r["price"])) for r in rows]
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service, [])
     html = render_blocks(blocks, products, "test", service, look)
@@ -559,7 +559,7 @@ async def template_preview(id: Optional[int] = None, service: str = "best_offer"
             tpl = await app_settings.active_template(con, service)
             blocks = tpl["blocks"] if tpl else None
         rows = await con.fetch(
-            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 4")
+            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 8")
     override = {"brand_color": brand_color, "header": header, "button": button, "footer": footer}
     look = {**look, **{k: v for k, v in override.items() if v}}
     products = [dict(r, price=float(r["price"])) for r in rows]
@@ -578,7 +578,7 @@ async def template_render(body: dict) -> str:
         if look is None:
             look = await app_settings.template_look(con)
         rows = await con.fetch(
-            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 4")
+            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 8")
     products = [dict(r, price=float(r["price"])) for r in rows]
     return render_blocks(blocks, products, "preview", service, look)
 

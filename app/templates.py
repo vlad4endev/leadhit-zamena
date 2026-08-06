@@ -228,16 +228,58 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict) -> str
     return ""
 
 
+def _mjml_items(products: list[dict] | None) -> list[dict]:
+    """Адаптер: наши товары → объекты, которых ждёт MJML-шаблон LeadHit.
+    Шаблон обращается к item.url/picture/name/price и делит цену на 100 (LeadHit хранил
+    копейки) — поэтому цену в рублях домножаем обратно."""
+    out = []
+    for p in (products or []):
+        out.append({
+            "url": p.get("product_url") or "#",
+            "picture": p.get("image_url") or "",
+            "name": p.get("name") or "",
+            "price": int(round(float(p.get("price") or 0) * 100)),
+        })
+    return out
+
+
+def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) -> str:
+    """Импортированный MJML-шаблон (Jinja + MJML): рендерим Jinja с товарами/отпиской,
+    затем компилируем MJML → HTML. Ошибку показываем баннером (превью в админке видит проблему
+    до активации; ponytail: без сложной обработки ошибок — админ проверяет письмо глазами)."""
+    import jinja2
+    import mrml
+    unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    items = _mjml_items(products)
+    try:
+        env = jinja2.Environment(autoescape=False)
+        mjml_str = env.from_string(source).render(
+            unsubscribe_url=unsub,
+            get_recommendations=lambda *a, **k: items,
+        )
+        res = mrml.to_html(mjml_str)
+        return getattr(res, "content", res)
+    except Exception as e:  # noqa: BLE001 — показываем причину в превью, не роняем воркер
+        return (f'<div style="font-family:sans-serif;padding:24px;color:#b00020">'
+                f'<b>Ошибка рендера MJML-шаблона:</b><br><pre style="white-space:pre-wrap">'
+                f'{_esc(type(e).__name__)}: {_esc(e)}</pre></div>')
+
+
 def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
                   campaign: str, look: dict | None = None) -> str:
     """Рендер письма из блоков конструктора. Шапка/футер берутся из look (единый бренд)."""
     lk = _look(look)
     unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
     blocks = blocks or []
-    # Импортированное письмо целиком: единственный html-блок → отдаём документ «как есть»,
-    # без брендовой обёртки. Плейсхолдер {{unsubscribe_url}} подставляем на ссылку отписки.
-    if len(blocks) == 1 and (blocks[0] or {}).get("type") == "html":
-        return (blocks[0].get("html") or "").replace("{{unsubscribe_url}}", unsub)
+    # Импортированное письмо целиком (единственный блок) → отдаём документ, минуя брендовую обёртку.
+    # MJML (type=mjml или содержимое с <mjml>) компилируем; сырой HTML отдаём как есть.
+    if len(blocks) == 1:
+        b0 = blocks[0] or {}
+        raw = b0.get("mjml") or b0.get("html") or ""
+        if b0.get("type") == "mjml" or "<mjml" in raw[:2000].lower():
+            return render_mjml(raw, products, user_id, campaign)
+        if b0.get("type") == "html":
+            return raw.replace("{{unsubscribe_url}}", unsub)
     parts = []
     for b in blocks:
         html = _render_block(b, products, campaign, lk)
