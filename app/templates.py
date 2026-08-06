@@ -280,35 +280,47 @@ def _balance_html(s: str) -> str:
     return "".join(out)
 
 
-def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) -> str:
-    """Импортированный MJML-шаблон (Jinja + MJML): рендерим Jinja с товарами/отпиской,
-    затем компилируем MJML → HTML. Ошибку показываем баннером (превью в админке видит проблему
-    до активации; ponytail: без сложной обработки ошибок — админ проверяет письмо глазами)."""
+def _jinja_render(source: str, products: list[dict], user_id: str, campaign: str) -> str:
+    """Прогон Jinja-слоя шаблона LeadHit (общий для MJML и HTML): подставляем товары/отписку,
+    неизвестные переменные (lead.name, alert_name, …) → пусто, управляющие хелперы → no-op."""
+    import datetime
     import jinja2
-    import mrml
     unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
     items = _mjml_items(products)
-    # Разные шаблоны LeadHit зовут разные функции данных: get_recommendations(),
-    # get_cart_items(), get_order_items(), get_viewed_items() и т.п. — все означают
-    # «дай товары сценария». Находим все вызовы get_*() в шаблоне и отдаём им items
-    # (ни одна питон/jinja-функция не начинается с get_, поэтому пересечений нет).
+    # Все вызовы get_*() (get_recommendations/get_cart_items/get_order_items/…) означают
+    # «дай товары сценария» — ни одна питон/jinja-функция не начинается с get_.
     ctx = {"unsubscribe_url": unsub}
     for name in set(re.findall(r'(?<![\w.])(get_[A-Za-z0-9_]*)\s*\(', source)):
         ctx[name] = lambda *a, **k: items
     ctx.setdefault("get_recommendations", lambda *a, **k: items)
     ctx.setdefault("get_cart_items", lambda *a, **k: items)
-    # Не-товарные хелперы LeadHit: get_utc_time() возвращает строку времени (шаблоны таймеров
-    # делают .split('+')), а не список — поэтому переопределяем поверх сканера.
-    import datetime
     ctx["get_utc_time"] = lambda *a, **k: datetime.datetime.now(datetime.timezone.utc).isoformat()
-    # Управляющие хелперы LeadHit (exit()/abort() — «не отправлять, если данных нет»):
-    # у нас решение об отправке принимает воркер, поэтому делаем их безвредными no-op.
-    ctx["exit"] = ctx["abort"] = ctx["stop"] = lambda *a, **k: ""
+    ctx["exit"] = ctx["abort"] = ctx["stop"] = lambda *a, **k: ""   # «не слать без данных» → no-op
+    # ChainableUndefined: неизвестные переменные/атрибуты рендерятся пустыми, а не роняют шаблон.
+    env = jinja2.Environment(autoescape=False, undefined=jinja2.ChainableUndefined)
+    return env.from_string(source).render(**ctx)
+
+
+def render_html_template(raw: str, products: list[dict], user_id: str, campaign: str) -> str:
+    """Готовый HTML-шаблон целиком. Если внутри есть Jinja ({{…}}/{%…%}) — прогоняем через
+    тот же Jinja-слой (заполнит {{unsubscribe_url}}, циклы; неизвестное — пусто). Если Jinja
+    не нужна или сломалась — отдаём как есть, подставив ссылку отписки."""
+    unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    if "{{" in raw or "{%" in raw:
+        try:
+            return _jinja_render(raw, products, user_id, campaign)
+        except Exception:  # noqa: BLE001 — не Jinja/битый шаблон → безопасный fallback
+            pass
+    return raw.replace("{{unsubscribe_url}}", unsub)
+
+
+def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) -> str:
+    """Импортированный MJML-шаблон (Jinja + MJML): рендерим Jinja с товарами/отпиской,
+    затем компилируем MJML → HTML. Ошибку показываем баннером (превью в админке видит проблему
+    до активации; ponytail: без сложной обработки ошибок — админ проверяет письмо глазами)."""
+    import mrml
     try:
-        # ChainableUndefined: неизвестные переменные/атрибуты (lead.name, alert_name, …)
-        # рендерятся пустыми, а не роняют шаблон. Функции данных (get_*) заданы явно выше.
-        env = jinja2.Environment(autoescape=False, undefined=jinja2.ChainableUndefined)
-        mjml_str = env.from_string(source).render(**ctx)
+        mjml_str = _jinja_render(source, products, user_id, campaign)
         try:
             res = mrml.to_html(mjml_str)
         except Exception:                       # битая вёрстка → чиним теги и пробуем ещё раз
@@ -337,7 +349,7 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
         if b0.get("type") == "mjml" or "<mjml" in raw[:2000].lower():
             return render_mjml(raw, products, user_id, campaign)
         if b0.get("type") == "html":
-            return raw.replace("{{unsubscribe_url}}", unsub)
+            return render_html_template(raw, products, user_id, campaign)
     # Импорт, разбитый на секции: все блоки html → склеиваем как есть, без брендовой обёртки
     # (у письма своя шапка/футер). Так «разбито по блокам», а вид остаётся 1-в-1.
     if blocks and all((b or {}).get("type") == "html" for b in blocks):
