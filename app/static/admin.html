@@ -7,16 +7,16 @@
 <style>
 :root{
   /* Groster: маджента #BC39E5 + золото #FECC00 — bold / glassmorphism */
-  --bg:#f2edf9;
-  --surface:rgba(255,255,255,.72); --surface-solid:#ffffff; --surface-2:rgba(120,70,160,.07);
-  --border:rgba(120,60,150,.13); --glass-border:rgba(255,255,255,.75); --blur:16px;
+  --canvas:#ffffff; --bg:#f4f4f7;
+  --surface:rgba(255,255,255,.78); --surface-solid:#ffffff; --surface-2:rgba(22,18,34,.05);
+  --border:rgba(22,18,34,.10); --glass-border:rgba(255,255,255,.8); --blur:16px;
   --text:#191223; --muted:#6d6479; --accent:#a81fcb; --accent-weak:rgba(188,57,229,.11);
   --brand:#bc39e5; --gold:#fecc00; --orange:#fc6631;
   --grad:linear-gradient(135deg,#c33be1 0%,#8b3ff0 55%,#6a5cf5 100%);
   --grad-soft:linear-gradient(135deg,rgba(195,59,225,.16),rgba(106,92,245,.12));
   --ok:#12986a; --warn:#c24710; --alert:#e0464b;
-  --sidebar:rgba(255,255,255,.58); --side-text:#453c52; --side-muted:#8f85a0;
-  --side-active:rgba(188,57,229,.12); --side-hover:rgba(120,60,150,.06); --side-border:rgba(120,60,150,.10);
+  --sidebar:rgba(250,250,252,.72); --side-text:#453c52; --side-muted:#8f85a0;
+  --side-active:rgba(188,57,229,.12); --side-hover:rgba(22,18,34,.045); --side-border:rgba(22,18,34,.08);
   --mono:ui-monospace,"SF Mono","JetBrains Mono",Menlo,Consolas,monospace;
   --sans:"Inter",-apple-system,BlinkMacSystemFont,"Segoe UI",Roboto,system-ui,sans-serif;
   --r:16px; --r-sm:11px;
@@ -26,6 +26,7 @@
 }
 .dark{
   --bg:#0b0812;
+  --canvas:radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.22),transparent 55%),radial-gradient(1000px 640px at -8% 12%,rgba(106,92,245,.16),transparent 52%),radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.06),transparent 55%),#0b0812;
   --surface:rgba(28,20,40,.6); --surface-solid:#18121f; --surface-2:rgba(255,255,255,.05);
   --border:rgba(255,255,255,.09); --glass-border:rgba(255,255,255,.12); --blur:18px;
   --text:#f0e8f7; --muted:#a89eb8; --accent:#cf6bef; --accent-weak:rgba(207,107,239,.16);
@@ -41,6 +42,7 @@
 }
 @media (prefers-color-scheme:dark){:root:not(.light){
   --bg:#0b0812;
+  --canvas:radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.22),transparent 55%),radial-gradient(1000px 640px at -8% 12%,rgba(106,92,245,.16),transparent 52%),radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.06),transparent 55%),#0b0812;
   --surface:rgba(28,20,40,.6); --surface-solid:#18121f; --surface-2:rgba(255,255,255,.05);
   --border:rgba(255,255,255,.09); --glass-border:rgba(255,255,255,.12); --blur:18px;
   --text:#f0e8f7; --muted:#a89eb8; --accent:#cf6bef; --accent-weak:rgba(207,107,239,.16);
@@ -56,12 +58,7 @@
 }}
 *{box-sizing:border-box}
 html,body{margin:0;height:100%}
-body{background:
-    radial-gradient(1200px 720px at 84% -12%,rgba(188,57,229,.20),transparent 55%),
-    radial-gradient(1000px 640px at -8% 12%,rgba(106,92,245,.15),transparent 52%),
-    radial-gradient(900px 760px at 55% 118%,rgba(254,204,0,.09),transparent 55%),
-    var(--bg);
-  background-attachment:fixed;
+body{background:var(--canvas);background-attachment:fixed;
   color:var(--text);font-family:var(--sans);font-size:14px;line-height:1.55;
   -webkit-font-smoothing:antialiased;display:grid;grid-template-columns:248px 1fr}
 .mono{font-family:var(--mono);font-variant-numeric:tabular-nums}
@@ -140,7 +137,7 @@ section+section{margin-top:32px}
 
 .switch{position:relative;display:inline-flex;align-items:center;gap:9px;cursor:pointer;font-size:12px;font-weight:600;color:var(--muted);user-select:none}
 .switch input{position:absolute;opacity:0;width:0;height:0}
-.track{width:38px;height:22px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);transition:background .18s;flex:0 0 auto}
+.track{position:relative;width:38px;height:22px;border-radius:999px;background:var(--surface-2);border:1px solid var(--border);transition:background .18s;flex:0 0 auto}
 .track::after{content:"";position:absolute;left:3px;top:3px;width:16px;height:16px;border-radius:50%;background:#fff;box-shadow:0 1px 2px rgba(0,0,0,.25);transition:transform .18s}
 .switch input:checked+.track{background:var(--ok);border-color:var(--ok)}
 .switch input:checked+.track::after{transform:translateX(16px)}
