@@ -320,7 +320,15 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
     до активации; ponytail: без сложной обработки ошибок — админ проверяет письмо глазами)."""
     import mrml
     try:
-        mjml_str = _jinja_render(source, products, user_id, campaign)
+        rendered = _jinja_render(source, products, user_id, campaign)
+        # Отрезаем всё до <mjml> и после </mjml>: ведущие vars-комментарии, {%…%}, пробелы,
+        # обёртка <html> — не должны ломать mrml (частая ошибка «position 0:5»).
+        low = rendered.lower()
+        i = low.find("<mjml")
+        if i == -1:                             # это не MJML (нет <mjml>) — отдаём как HTML
+            return rendered.replace("{{unsubscribe_url}}", f'{UNSUB_BASE}?u={user_id}&c={campaign}')
+        j = low.rfind("</mjml>")
+        mjml_str = rendered[i:(j + 7 if j != -1 else None)]
         try:
             res = mrml.to_html(mjml_str)
         except Exception:                       # битая вёрстка → чиним теги и пробуем ещё раз
