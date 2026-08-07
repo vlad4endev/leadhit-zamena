@@ -886,6 +886,8 @@ async function viewFeeds(){
         <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
         <input type="file" id="importFile" accept=".xml,text/xml,application/xml" style="display:none" onchange="importXml(this)">
         <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML)</button>
+        <input type="file" id="importJsonFile" accept=".json,application/json" style="display:none" onchange="importJson(this)">
+        <button class="btn primary" onclick="document.getElementById('importJsonFile').click()">Импорт товаров (JSON)</button>
       </div>
     </div>
     <div class="card statbar">
@@ -921,6 +923,15 @@ async function importXml(input){
   if(r.ok){ const c=r.imported||{}; const parts=Object.keys(c).map(k=>`${k}: ${c[k]}`).join(', ');
     toast(`Импорт из файла: ${parts||'пусто'}`); await loadCore(); viewFeeds(); }
   else toast(`Импорт: ${r.reason||'ошибка'}`);
+}
+async function importJson(input){
+  const file=input.files&&input.files[0]; input.value='';
+  if(!file)return;
+  const resp=await fetch('/admin/import-json',{method:'POST',body:file});
+  const r=await resp.json();
+  if(r.ok){ const c=r.imported||{}; const parts=Object.keys(c).map(k=>`${k}: ${c[k]}`).join(', ');
+    toast(`Импорт товаров (JSON): ${parts||'пусто'}`); await loadCore(); viewFeeds(); }
+  else toast(`Импорт JSON: ${r.reason||'ошибка'}`);
 }
 
 function pager(page,hasMore,fn){

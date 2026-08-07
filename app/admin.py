@@ -944,6 +944,20 @@ async def import_xml_upload(request: Request) -> dict:
     return {"ok": True, "imported": counts}
 
 
+@router.post("/import-json")
+async def import_json_upload(request: Request) -> dict:
+    """Импорт каталога из JSON-выгрузки товаров (сырое тело файла). Атомарно."""
+    from app import import_json, import_xml
+    data = await request.body()
+    try:
+        parsed = import_json.parse(data)
+    except ValueError as e:
+        return {"ok": False, "reason": str(e)}
+    async with db.pool().acquire() as con:
+        counts = await import_xml.import_all(con, parsed)  # та же схема БД, тот же upsert
+    return {"ok": True, "imported": counts}
+
+
 @router.get("/integration")
 async def integration() -> dict:
     """Статус интеграции: режим отправки, домен, 1С. Секреты НЕ отдаём."""
