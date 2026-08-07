@@ -884,10 +884,8 @@ async function viewFeeds(){
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
-        <input type="file" id="importFile" accept=".xml,text/xml,application/xml" style="display:none" onchange="importXml(this)">
-        <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML)</button>
-        <input type="file" id="importJsonFile" accept=".json,application/json" style="display:none" onchange="importJson(this)">
-        <button class="btn primary" onclick="document.getElementById('importJsonFile').click()">Импорт товаров (JSON)</button>
+        <input type="file" id="importFile" accept=".xml,.json,text/xml,application/xml,application/json" style="display:none" onchange="importFile(this)">
+        <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML/JSON)</button>
       </div>
     </div>
     <div class="card statbar">
@@ -915,23 +913,15 @@ async function syncCatalog(){
   toast(r.ok?`Каталог: синхронизировано ${r.synced}`:`1С: ${r.reason||'ошибка'}`);
   if(r.ok)viewFeeds();
 }
-async function importXml(input){
+async function importFile(input){
   const file=input.files&&input.files[0]; input.value='';
   if(!file)return;
-  const resp=await fetch('/admin/import-xml',{method:'POST',body:file});
+  const ep=/\.json$/i.test(file.name)?'/admin/import-json':'/admin/import-xml';  // маршрут по расширению
+  const resp=await fetch(ep,{method:'POST',body:file});
   const r=await resp.json();
   if(r.ok){ const c=r.imported||{}; const parts=Object.keys(c).map(k=>`${k}: ${c[k]}`).join(', ');
     toast(`Импорт из файла: ${parts||'пусто'}`); await loadCore(); viewFeeds(); }
   else toast(`Импорт: ${r.reason||'ошибка'}`);
-}
-async function importJson(input){
-  const file=input.files&&input.files[0]; input.value='';
-  if(!file)return;
-  const resp=await fetch('/admin/import-json',{method:'POST',body:file});
-  const r=await resp.json();
-  if(r.ok){ const c=r.imported||{}; const parts=Object.keys(c).map(k=>`${k}: ${c[k]}`).join(', ');
-    toast(`Импорт товаров (JSON): ${parts||'пусто'}`); await loadCore(); viewFeeds(); }
-  else toast(`Импорт JSON: ${r.reason||'ошибка'}`);
 }
 
 function pager(page,hasMore,fn){
