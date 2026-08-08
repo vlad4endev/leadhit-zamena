@@ -1240,7 +1240,7 @@ async function viewTemplates(){
 }
 function tplSetTab(v){ tplTab=v; viewTemplates(); }
 function openTemplate(id){ location.hash='#/templates/'+encodeURIComponent(id); }
-function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; viewTemplates(); }
+function openTemplateView(id){ tplId=id; tplView='editor'; tplTab='builder'; tplBlocks=null; tplSel=-1; tplDirty=false; tplCodeOpen=-1; viewTemplates(); }
 async function createTemplate(service){
   const r=await j('/admin/templates',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({service:service||null})});
   if(r&&r.ok&&r.id){ toast('Шаблон создан'); location.hash='#/templates/'+r.id; } else toast('Ошибка создания');
@@ -1302,27 +1302,30 @@ function drawTemplateList(){
 }
 
 /* Конструктор */
-// true, если сейчас показываем страницу кода цельного письма (для скрытия превью-контролов).
-function tplCodePage(){ return tplTab==='builder' && Array.isArray(tplBlocks) && tplBlocks.length===1
-  && (tplBlocks[0].type==='html'||tplBlocks[0].type==='mjml'); }
-// Импортированное письмо (единственный html/mjml-блок) → полноширинная страница
-// кода. Маленькая кнопка «Визуально» открывает конструктор; правки кода тихо
-// автосохраняются (см. tplTouch/autoSaveCode), поэтому кнопки сохранения нет.
+// Экран кода html/mjml-блока открывается ПО КЛИКУ на блок (tplCodeOpen=индекс), а не сам собой.
+let tplCodeOpen=-1;
+function tplCodePage(){ return tplTab==='builder' && tplCodeOpen>=0
+  && tplBlocks[tplCodeOpen] && (tplBlocks[tplCodeOpen].type==='html'||tplBlocks[tplCodeOpen].type==='mjml'); }
+// Экран кода html/mjml-блока: кнопка «← К блокам», справа «Визуально» (конструктор).
+// Правки кода тихо автосохраняются (см. tplTouch/autoSaveCode).
 function renderCodePage(i){
   const b=tplBlocks[i]; const kind=b.type;
   const grid='<rect x="3" y="3" width="7" height="7" rx="1.5"/><rect x="14" y="3" width="7" height="7" rx="1.5"/><rect x="3" y="14" width="7" height="7" rx="1.5"/><rect x="14" y="14" width="7" height="7" rx="1.5"/>';
   $('tplBody').innerHTML=`
     <div style="max-width:1000px;margin:0 auto">
-      <div style="display:flex;align-items:center;justify-content:flex-end;gap:12px;margin-bottom:8px">
+      <div style="display:flex;align-items:center;gap:12px;margin-bottom:8px">
+        <button class="btn" onclick="closeCodePage()">← К блокам</button>
+        <span style="flex:1"></span>
         <span id="tplDirtyDot" class="svc-sub" style="opacity:${tplDirty?1:0};transition:.2s;color:var(--accent)">● не сохранено</span>
         <button class="btn primary" onclick="openGrapes(${i})" title="Собрать письмо мышью — drag-and-drop конструктор" style="display:inline-flex;align-items:center;gap:7px;padding:7px 14px">${ic(grid,15)} Визуально</button>
       </div>
       <div class="codehost">${codeEditor(i,kind,true)}</div>
     </div>`;
 }
+function closeCodePage(){ tplCodeOpen=-1; tplSel=-1; renderBuilder(); tplPreview(); }
 function renderBuilder(){
-  // Импортированное цельное письмо — отдельная страница кода (не тесный инспектор).
-  if(tplBlocks.length===1 && (tplBlocks[0].type==='html'||tplBlocks[0].type==='mjml')) return renderCodePage(0);
+  // Экран кода — только если пользователь кликнул html/mjml-блок; иначе обычный список блоков.
+  if(tplCodePage()) return renderCodePage(tplCodeOpen);
   const dev=tplDevice==='mobile';
   const pal=Object.keys(BLOCK_TYPES).map(t=>`<button onclick="addBlock('${t}')" title="Добавить: ${BLOCK_TYPES[t].ru}">${ic(BICON[t])}<span>${BLOCK_TYPES[t].ru}</span></button>`).join('');
   const list=tplBlocks.length? tplBlocks.map((b,i)=>blkCard(b,i)).join('')
@@ -1642,7 +1645,11 @@ function delBlock(i){ tplBlocks.splice(i,1); if(tplSel>=tplBlocks.length)tplSel=
 function dupBlock(i){ tplBlocks.splice(i+1,0,JSON.parse(JSON.stringify(tplBlocks[i]))); tplSel=i+1; reBuild(); }
 function moveBlock(i,d){ const k=i+d; if(k<0||k>=tplBlocks.length)return; const t=tplBlocks[i];tplBlocks[i]=tplBlocks[k];tplBlocks[k]=t; tplSel=k; reBuild(); }
 // Выбор блока не меняет содержимое письма → превью НЕ перерисовываем (иначе картинки мигают).
-function selBlock(i){ tplSel=(tplSel===i?-1:i); renderBuilder(); }
+function selBlock(i){
+  const b=tplBlocks[i];
+  if(b&&(b.type==='html'||b.type==='mjml')){ tplSel=i; tplCodeOpen=i; renderBuilder(); return; }  // клик по html/mjml → экран кода
+  tplSel=(tplSel===i?-1:i); renderBuilder();
+}
 function tplDropOn(i){ if(tplDrag<0||tplDrag===i){tplDrag=-1;return;} const b=tplBlocks.splice(tplDrag,1)[0]; tplBlocks.splice(i,0,b); tplSel=i; tplDrag=-1; reBuild(); }
 // ── Разбор импортированного письма на блоки конструктора ──────────────────────
 // Проходим по DOM готового HTML и раскладываем контент на нативные блоки
@@ -1802,7 +1809,7 @@ async function saveBlocks(){
 }
 async function resetBlocks(){
   if(tplDirty && !confirm('Отменить несохранённые изменения?')) return;
-  tplBlocks=null; tplSel=-1; tplDirty=false; viewTemplates();
+  tplBlocks=null; tplSel=-1; tplDirty=false; tplCodeOpen=-1; viewTemplates();
 }
 
 /* Оформление (глобальный бренд-стиль) */
