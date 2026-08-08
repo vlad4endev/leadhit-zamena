@@ -812,6 +812,8 @@ async function viewAnalytics(){
 }
 
 function priceRu(v){ return v==null?'—':v.toLocaleString('ru-RU',{minimumFractionDigits:(v%1?2:0),maximumFractionDigits:2})+' ₽'; }
+// Битый src (404/недоступен) → плейсхолдер «нет фото» вместо сломанной иконки.
+function imgOnerr(el){ el.onerror=null; const d=document.createElement('div'); d.className='recimg ph'; d.textContent='нет фото'; el.replaceWith(d); }
 let recCat='', recView='cards', recProblems=false;
 function setRecView(v){ recView=v; viewFeeds(); }
 function recStatusPill(pr){
@@ -837,7 +839,7 @@ async function viewFeeds(){
     const items=c.products.map(pr=>{
       const dim = pr.usable ? '' : ' dim';
       const img = pr.image_url
-        ? `<img class="recimg" src="${esc(pr.image_url)}" alt="">`
+        ? `<img class="recimg" src="${esc(pr.image_url)}" alt="" onerror="imgOnerr(this)">`
         : `<div class="recimg ph">нет фото</div>`;
       const flag = !pr.exists ? '<div class="recflag" style="color:var(--alert)">нет в каталоге</div>'
         : !pr.in_stock ? '<div class="recflag" style="color:var(--warn)">нет в наличии</div>'
@@ -881,7 +883,7 @@ async function viewFeeds(){
     const items=c.products.map(pr=>{
       const dim = pr.in_stock ? '' : ' dim';
       const img = pr.image_url
-        ? `<img class="recimg" src="${esc(pr.image_url)}" alt="">`
+        ? `<img class="recimg" src="${esc(pr.image_url)}" alt="" onerror="imgOnerr(this)">`
         : `<div class="recimg ph">нет фото</div>`;
       const flag = pr.in_stock ? '<div class="recflag" style="color:var(--ok)">в наличии</div>'
         : '<div class="recflag" style="color:var(--warn)">нет в наличии</div>';
