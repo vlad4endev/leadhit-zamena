@@ -823,6 +823,7 @@ async function viewFeeds(){
   setTitle('Товарные рекомендации','топ-5 по категориям из 1С — что идёт в письма');
   await loadCore();
   const [rec] = await Promise.all([j('/admin/recommendations')]);
+  const catData = recView==='catalog' ? await j('/admin/catalog') : null;  // весь каталог — только по запросу
   const oc=cache.integration.onec_configured;
   const p=(iso)=>{const f=freshInfo(iso);return f;};
   const cat=p(cache.feeds.top5.last_updated);
@@ -874,8 +875,35 @@ async function viewFeeds(){
       <span class="lr-price mono">${priceRu(pr.price)}</span>
       ${recStatusPill(pr)}</div>`).join('')}</div></section>`).join('');
 
+  // Каталог: все товары карточками (в отличие от карточек топ-5). Фильтр по категории тот же.
+  let ccats = catData ? (recCat?catData.categories.filter(c=>c.category_id===recCat):catData.categories) : [];
+  const catalogCards = ccats.map(c=>{
+    const items=c.products.map(pr=>{
+      const dim = pr.in_stock ? '' : ' dim';
+      const img = pr.image_url
+        ? `<img class="recimg" src="${esc(pr.image_url)}" alt="">`
+        : `<div class="recimg ph">нет фото</div>`;
+      const flag = pr.in_stock ? '<div class="recflag" style="color:var(--ok)">в наличии</div>'
+        : '<div class="recflag" style="color:var(--warn)">нет в наличии</div>';
+      const label = esc(pr.name||('id '+pr.product_id));
+      const name = pr.product_url
+        ? `<a class="recname" href="${esc(pr.product_url)}" target="_blank" rel="noopener" title="${esc(pr.name||pr.product_id)}">${label}</a>`
+        : `<div class="recname" title="${esc(pr.name||pr.product_id)}">${label}</div>`;
+      return `<div class="recitem${dim}">${img}${name}
+        <div class="recprice">${priceRu(pr.price)}</div>${flag}</div>`;
+    }).join('');
+    return `<section><div class="eyebrow">
+        <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${c.products.length} тов.</span></h2>
+        <span class="rule"></span></div>
+      <div class="recgrid">${items}</div></section>`;
+  }).join('');
+  const catalogSection = (catData && catData.product_count)
+    ? catalogCards
+    : '<section><div class="tablewrap"><div class="empty">Каталог пуст. Импортируйте товары из файла.</div></div></section>';
+
   const seg=(v,l)=>`<button class="${recView===v?'active':''}" onclick="setRecView('${v}')">${l}</button>`;
-  const catOpts=`${opt('','Все категории',recCat)}${rec.categories.map(c=>opt(c.category_id,c.category_name,recCat)).join('')}`;
+  const filterCats = (recView==='catalog' && catData) ? catData.categories : rec.categories;  // в каталоге — все категории
+  const catOpts=`${opt('','Все категории',recCat)}${filterCats.map(c=>opt(c.category_id,c.category_name,recCat)).join('')}`;
   $('view').innerHTML=`<section>
     <div class="card srcbar">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
@@ -884,6 +912,7 @@ async function viewFeeds(){
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
+        <button class="btn" onclick="computeTop5()" title="Автоматически вычислить топ-5 по категориям из истории заказов">Пересчитать топ-5</button>
         <input type="file" id="importFile" accept=".xml,.json,text/xml,application/xml,application/json" style="display:none" onchange="importFile(this)">
         <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML/JSON)</button>
       </div>
@@ -900,11 +929,14 @@ async function viewFeeds(){
         <label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
           <span class="track"></span><span class="lbl">только проблемные</span></label>
       </div>
-      <div class="seg">${seg('cards','Карточки')}${seg('table','Таблица')}${seg('list','Список')}</div>
+      <div class="seg">${seg('cards','Топ-5')}${seg('catalog','Каталог')}${seg('table','Таблица')}${seg('list','Список')}</div>
     </div>
-    <p class="legend" style="margin:0 2px 4px">Топ-5 из 1С используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции в письмо не попадут.</p>
+    <p class="legend" style="margin:0 2px 4px">${recView==='catalog'
+      ? 'Весь каталог товаров. Топ-5 для писем вычисляется из истории заказов — кнопка <b>«Пересчитать топ-5»</b>.'
+      : 'Топ-5 используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции в письмо не попадут.'}</p>
   </section>
-  ${!rec.category_count?'<section><div class="tablewrap"><div class="empty">Топ-5 не заданы. Заполните фид на стороне 1С/заказчика и синхронизируйте.</div></div></section>'
+  ${recView==='catalog'? catalogSection
+    : !rec.category_count?'<section><div class="tablewrap"><div class="empty">Топ-5 не заданы. Импортируйте каталог и нажмите «Пересчитать топ-5», либо синхронизируйте из 1С.</div></div></section>'
     : empty?'<section><div class="tablewrap"><div class="empty">'+(recProblems?'Проблемных позиций нет — весь топ-5 в наличии. ✓':'Нет позиций.')+'</div></div></section>'
     : recView==='table'?recTable : recView==='list'?recList : catCards}`;
 }
@@ -912,6 +944,13 @@ async function syncCatalog(){
   const r=await j('/admin/sync-catalog',{method:'POST'});
   toast(r.ok?`Каталог: синхронизировано ${r.synced}`:`1С: ${r.reason||'ошибка'}`);
   if(r.ok)viewFeeds();
+}
+async function computeTop5(){
+  const r=await j('/admin/compute-top5',{method:'POST'});
+  if(r.ok){ toast(`Топ-5 пересчитан: ${r.categories} категорий, ${r.positions} позиций`);
+    if(recView==='catalog') recView='cards';  // покажем результат в топ-5
+    viewFeeds(); }
+  else toast(`Топ-5: ${r.reason||'ошибка'}`);
 }
 async function importFile(input){
   const file=input.files&&input.files[0]; input.value='';

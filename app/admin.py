@@ -333,6 +333,69 @@ async def recommendations() -> dict:
             "position_count": total, "usable_count": total_usable}
 
 
+@router.get("/catalog")
+async def catalog() -> dict:
+    """Весь каталог, сгруппированный по категориям — для просмотра карточками."""
+    rows = await db.pool().fetch(
+        """SELECT p.category_id, c.name AS category_name, c.sort_order,
+                  p.product_id, p.name, p.price, p.image_url, p.product_url, p.in_stock
+           FROM products p JOIN categories c ON c.category_id = p.category_id
+           ORDER BY c.sort_order, lower(p.name)""")
+    cats: dict = {}
+    for r in rows:
+        cat = cats.setdefault(r["category_id"], {
+            "category_id": r["category_id"], "category_name": r["category_name"], "products": []})
+        cat["products"].append({
+            "product_id": r["product_id"], "name": r["name"],
+            "price": float(r["price"]) if r["price"] is not None else None,
+            "image_url": r["image_url"], "product_url": r["product_url"],
+            "in_stock": bool(r["in_stock"]),
+        })
+    out = list(cats.values())
+    return {"categories": out, "category_count": len(out),
+            "product_count": sum(len(c["products"]) for c in out)}
+
+
+# Топ-5 по категориям из истории заказов. Ранжирование: продано (qty) ↓ → число
+# заказов ↓ → цена ↓ → product_id (детерминизм). Только в наличии. Товары без продаж
+# естественно сортируются по цене ↓ (премиум вперёд) — единый оконный проход, без
+# отдельной ветки для «нет продаж». Отменённые/возвращённые заказы не учитываем.
+_TOP5_SQL = """
+WITH sold AS (
+  SELECT it->>'product_id' AS product_id,
+         SUM(COALESCE((it->>'qty')::numeric, 1)) AS qty,
+         count(*) AS orders
+  FROM orders o CROSS JOIN LATERAL jsonb_array_elements(o.items) AS it
+  WHERE o.status NOT IN ('cancelled', 'returned')
+  GROUP BY 1
+),
+ranked AS (
+  SELECT p.category_id, p.product_id,
+         row_number() OVER (
+           PARTITION BY p.category_id
+           ORDER BY COALESCE(s.qty, 0) DESC, COALESCE(s.orders, 0) DESC,
+                    p.price DESC, p.product_id
+         ) AS rn
+  FROM products p LEFT JOIN sold s ON s.product_id = p.product_id
+  WHERE p.in_stock
+)
+SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_id, rn
+"""
+
+
+@router.post("/compute-top5")
+async def compute_top5() -> dict:
+    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена."""
+    from app.feeds import Top5Row, upsert_top5_rows
+    async with db.pool().acquire() as con:
+        rows = await con.fetch(_TOP5_SQL)
+        top5 = [Top5Row(category_id=r["category_id"], position=r["rn"], product_id=r["product_id"])
+                for r in rows]
+        if top5:
+            await upsert_top5_rows(con, top5)  # TRUNCATE + insert (актуальный срез целиком)
+    return {"ok": True, "categories": len({r["category_id"] for r in rows}), "positions": len(rows)}
+
+
 @router.get("/kpi")
 async def kpi() -> dict:
     """Гейтованный алиас публичного /kpi: админка ходит сюда, чтобы за edge (whitelist
