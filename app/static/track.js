@@ -160,10 +160,8 @@
   var doc = root.document;
   var cfg = root.grConfig || {};
 
-  // Endpoint = origin самого track.js (как LeadHIT берёт track.leadhit.io). Явный
-  // grConfig.endpoint важнее — на случай, если тег и API на разных доменах.
-  function selfEndpoint() {
-    if (cfg.endpoint) return String(cfg.endpoint).replace(/\/+$/, '');
+  // Свой тег <script>: нужен и для origin, и для версии (см. VER ниже).
+  function selfScript() {
     // currentScript у динамически вставленного тега бывает null → фолбэк: ищем свой src.
     var s = doc.currentScript;
     if (!s) {
@@ -172,14 +170,28 @@
         if (/\/track\.js(\?|$)/.test(all[i].src)) { s = all[i]; break; }
       }
     }
-    try { return s ? new URL(s.src).origin : ''; } catch (e) { return ''; }
+    return s || null;
+  }
+  var SELF = selfScript();
+
+  // Endpoint = origin самого track.js (как LeadHIT берёт track.leadhit.io). Явный
+  // grConfig.endpoint важнее — на случай, если тег и API на разных доменах.
+  function selfEndpoint() {
+    if (cfg.endpoint) return String(cfg.endpoint).replace(/\/+$/, '');
+    try { return SELF ? new URL(SELF.src).origin : ''; } catch (e) { return ''; }
   }
   var ENDPOINT = selfEndpoint();
+
+  // Версия из своего же src (?ver=... в теге витрины) пробрасывается на trigger.js/wheel.js:
+  // иначе после деплоя тег обновится, а под-скрипты браузер ещё час отдаст из кэша.
+  var VER = (function () {
+    try { return SELF ? (new URL(SELF.src).searchParams.get('ver') || '') : ''; } catch (e) { return ''; }
+  })();
 
   function loadScript(path, cb) {
     var s = doc.createElement('script');
     s.async = true;
-    s.src = ENDPOINT + path;
+    s.src = ENDPOINT + path + (VER ? '?ver=' + encodeURIComponent(VER) : '');
     s.onload = function () { if (cb) cb(); };
     s.onerror = function () { /* сеть легла — трекер деградирует молча, сайт не ломаем */ };
     var f = doc.getElementsByTagName('script')[0];
@@ -287,10 +299,19 @@
 
   if (cfg.wheel) {
     loadScript('/wheel.js', function () {
-      if (root.grosterWheel) {
-        var w = (cfg.wheel === true) ? {} : cfg.wheel; // wheel:true → дефолты; объект → opts
+      if (!root.grosterWheel) return;
+      var w = (cfg.wheel === true) ? {} : cfg.wheel; // wheel:true → дефолты; объект → opts
+      // Запоминаем endpoint на виджете: ручной вызов open() (клик по баннеру/кнопке) без
+      // аргументов иначе стучался бы за конфигом на домен витрины и брал дефолтные призы.
+      root.grosterWheel.endpoint = ENDPOINT;
+      var launch = function () {
         root.grosterWheel.open({ endpoint: ENDPOINT, onceDays: w.onceDays, force: w.force });
-      }
+      };
+      // delay — секунды до показа. Попап в лицо на первой миллисекунде хуже конверсии
+      // и раздражает; дефолт 0 сохранён для обратной совместимости.
+      var delay = Number(w.delay) || 0;
+      if (delay > 0) root.setTimeout(launch, delay * 1000);
+      else launch();
     });
   }
 })(typeof window !== 'undefined' ? window : this);

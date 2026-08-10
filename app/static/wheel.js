@@ -431,6 +431,11 @@
   // Явно переданные opts всегда важнее сервера. Сеть легла / нет fetch → попап на дефолтах (fallback).
   function open(opts) {
     opts = opts || {};
+    // endpoint не передали (напр. open({force:true}) по клику на баннер) — берём запомненный
+    // загрузчиком track.js. Иначе конфиг/лид ушли бы на домен витрины, где их никто не ждёт.
+    if (opts.endpoint == null && root.grosterWheel && root.grosterWheel.endpoint) {
+      opts.endpoint = root.grosterWheel.endpoint;
+    }
     var base = opts.endpoint === false ? '' : String(opts.endpoint || '').replace(/\/+$/, '');
     function show(cfg) {
       var merged = {};
