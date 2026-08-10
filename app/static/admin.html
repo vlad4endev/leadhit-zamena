@@ -1031,6 +1031,154 @@ function copyFrom(id){ const t=$(id); if(!t) return;
   if(navigator.clipboard&&navigator.clipboard.writeText) navigator.clipboard.writeText(t.value).then(done,()=>{t.select();done();});
   else { t.select(); done(); } }
 
+// Все сниппеты витрины в одном месте — порядок шагов как в docs/site_integration.md.
+// ok: подключён ли шаг ПО ФАКТУ данных (а не по вере интегратора); null — проверить нечем.
+function intSnippets(){
+  const o=snippetBase(), g=cache.integration||{};
+  return [
+    {id:'tag', t:'1. Тег', ok:!!g.last_ping_at,
+     title:'Один тег на все страницы',
+     hint:'Вставьте перед <code>&lt;/head&gt;</code> на всех страницах сайта. Тег на сайте больше '+
+          'не трогаете — трекер, колесо и захват email правятся здесь.',
+     code:trackSnippet(),
+     note:'<code>wheel.delay</code> — через сколько секунд всплывает колесо (частота «раз в N дней» — '+
+          'в разделе колеса). Захват email из форм включён по умолчанию. Если на сайте уже есть '+
+          'GA4/GTM-разметка электронной торговли, шаги 2 и 5 делать не нужно — корзина и заказы '+
+          'подхватятся сами.'},
+
+    {id:'cart', t:'2. Корзина', ok:!!g.cart_sessions_24h,
+     title:'Состав корзины',
+     hint:'Один пуш там, где вы обновляете бейдж корзины — на любое изменение (add / remove / qty). '+
+          'Обязателен только <code>product_id</code>, и он должен совпадать с каталогом/1С.',
+     code:`window.grDataLayer = window.grDataLayer || [];
+
+// на ЛЮБОЕ изменение корзины
+grDataLayer.push({ event: 'cart', items: [
+  { product_id: '0057412', qty: 2 },   // id как в каталоге/1С
+  { product_id: '0038921', qty: 1 },
+]});
+
+// очистка корзины / успешное оформление
+grDataLayer.push({ event: 'clear' });`,
+     note:'Необязательные поля позиции: <code>category_id</code>, <code>price</code> (число, не строка). '+
+          'Пустая строка или <code>0</code> хуже отсутствия поля. Незнакомые каталогу id вернутся в '+
+          'ответе в <code>unknown</code>, и письмо по такой корзине не уйдёт.'},
+
+    {id:'login', t:'3. Логин', ok:!!g.logged_in_24h,
+     title:'Идентификация залогиненного',
+     hint:'Сразу после логина либо на каждой загрузке, если сессия уже залогинена.',
+     code:`grDataLayer.push({ event: 'identify', user_id: '42817' });`,
+     note:'Личность сниппет помнит в cookie <code>gr_id</code> (1 год), звать на каждой загрузке не '+
+          'обязательно. <code>identify</code> передаёт только указанные ключи: пуш с одним '+
+          '<code>user_id</code> не затирает известный email.'},
+
+    {id:'consent', t:'4. Email + согласие', ok:!!g.consent_24h,
+     title:'Email и галочка согласия (152-ФЗ)',
+     hint:'Ключевой шаг: без него писем не будет вообще. Нужны два значения — email и '+
+          '<b>состояние</b> галочки согласия на рассылку.',
+     code:`// на сабмите шага оформления / формы подписки
+grDataLayer.push({
+  event: 'identify',
+  email: emailInput.value,
+  consent: consentCheckbox.checked,   // именно состояние галочки, не константа true
+});
+
+// отзыв согласия (пользователь снял галочку в профиле)
+grDataLayer.push({ event: 'identify', consent: false });`,
+     note:'<code>consent:true</code> → заводим подписчика с датой согласия, письма можно слать. '+
+          'Без согласия email хранится только для идентификации сессии. Галочка должна быть '+
+          '<b>не предустановленной</b>, текст про согласие — на стороне заказчика.'},
+
+    {id:'order', t:'5. Заказ', ok:!!g.orders_24h,
+     title:'Код заказа на thank-you page',
+     hint:'Покупка останавливает серию писем о брошенной корзине и даёт номер заказа с суммой — '+
+          'из них считается выручка рассылок и запускается «Постпродажа».',
+     code:`grDataLayer.push({
+  event: 'order',
+  order_id: 'ГР-184213',   // номер заказа КАК В 1С
+  total: 1323.20,          // сумма числом
+  items: [
+    { product_id: '0057412', price: 71.60, qty: 2 },
+    { product_id: '0038921', price: 11.80, qty: 1 },
+  ],
+});`,
+     note:'Повторный вызов с тем же <code>order_id</code> безопасен — F5 на «спасибо» ничего не '+
+          'задваивает. Если номер не совпадёт с 1С, в базе будет два заказа на одну покупку и '+
+          'выручка задвоится.'},
+
+    {id:'wheel', t:'Колесо', ok:null,
+     title:'Колесо фортуны отдельным тегом',
+     hint:'Обычно не нужно: колесо включается параметром <code>wheel</code> в теге из шага 1. '+
+          'Этот вариант — если колесо нужно только на отдельных страницах.',
+     code:`<script src="${o}/wheel.js"
+        data-endpoint="${o}"
+        data-auto="15"
+        data-once-days="7"><\/script>`,
+     note:'<code>data-auto</code> — задержка показа в секундах (0 — не показывать самому), '+
+          '<code>data-once-days</code> — не показывать повторно N дней. Призы и вид — в разделе «Колесо».'},
+
+    {id:'manual', t:'Ручной trigger.js', ok:null,
+     title:'Альтернатива: trigger.js без загрузчика',
+     hint:'Если сайт не хочет автоматики (захват форм, GA4-адаптер) и готов звать всё руками.',
+     code:`<script src="${o}/trigger.js"
+        data-endpoint="${o}" data-interval="45"><\/script>
+<script>
+  groster.cart([{ product_id: '0057412', qty: 2 }]);   // на изменение корзины
+  groster.identify({ user_id: '42817' });              // после логина
+  groster.identify({ email: 'ivan@mail.ru', consent: true });  // оформление
+  groster.order({ order_id: 'ГР-184213', total: 1323.20,
+                  items: [{ product_id: '0057412', price: 71.60, qty: 2 }] });
+<\/script>`,
+     note:'<code>data-interval</code> — период heartbeat в секундах. Пинг уходит, только когда '+
+          'вкладка активна и корзина непуста.'},
+
+    {id:'check', t:'Проверка', ok:null,
+     title:'Приёмка: убедиться, что всё дошло',
+     hint:'Откройте витрину с <code>?grdebug=1</code> — консоль печатает каждый вызов, ответ сервера '+
+          'и незнакомые каталогу id. Ниже — проверка приёмника без сайта.',
+     code:`# 1) события с сайта видно в консоли: https://<ваш-сайт>/?grdebug=1
+# 2) приёмник событий отвечает (unknown — id, которых нет в каталоге):
+curl -sS -X POST ${o}/cart-ping \\
+  -H 'Content-Type: application/json' \\
+  -d '{"session_id":"test-1","cart_items":[{"product_id":"0057412","qty":1}]}'`,
+     note:'После проверки статистика связи ниже обновится: тестовый пинг создаст сессию '+
+          '<code>test-1</code>. Товар с чужим id вернётся в <code>unknown</code> — это и есть самая '+
+          'частая поломка интеграции.'},
+  ];
+}
+
+let intTab='tag';
+function setIntTab(id){ intTab=id; renderIntTab(); }
+function renderIntTab(){
+  const box=$('intSnips'); if(!box) return;
+  const list=intSnippets(), s=list.find(x=>x.id===intTab)||list[0];
+  const rows=Math.min(16, s.code.split('\n').length+1);
+  const mark=x=> x.ok===true?' <span style="color:var(--ok)">✓</span>':(x.ok===false?' <span style="color:var(--muted)">•</span>':'');
+  const pill = s.ok===true?'<span class="pill live">данные приходят</span>'
+    : s.ok===false?'<span class="pill dev">данных ещё не было</span>' : '';
+  box.innerHTML=`
+    <div class="tabbar" style="flex-wrap:wrap">${list.map(x=>
+      `<button class="tab ${x.id===s.id?'active':''}" onclick="setIntTab('${x.id}')">${esc(x.t)}${mark(x)}</button>`).join('')}</div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
+        <div class="svc-name">${esc(s.title)}</div>${pill}</div>
+      <div class="svc-sub" style="margin-bottom:10px">${s.hint}</div>
+      <textarea class="inp wide" readonly id="intCode" rows="${rows}" spellcheck="false"
+        style="width:100%;box-sizing:border-box;font-family:var(--mono);font-size:12.5px;resize:vertical"
+        >${esc(s.code)}</textarea>
+      <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
+        <button class="btn" onclick="copyFrom('intCode')">Копировать код</button>
+        ${s.id==='tag'?`<a class="btn" href="${esc(snippetBase())}/wheel" target="_blank">Проверить колесо</a>
+          <a class="btn" href="/demo" target="_blank">Демо-страница</a>`:''}
+        ${s.id==='check'?'<button class="btn" onclick="viewIntegration()">Обновить статистику</button>':''}
+      </div>
+      ${/^https?:\/\/(localhost|127\.)/.test(snippetBase()) ? `<div class="svc-sub" style="margin-top:8px;color:var(--warn)">
+        В коде стоит <span class="mono">${esc(snippetBase())}</span> — это локальный адрес: на сайте он не заработает.
+        Задайте <span class="mono">PUBLIC_BASE_URL</span> в <span class="mono">.env</span> сервиса и обновите страницу.</div>` : ''}
+      <p class="legend">${s.note}</p>
+    </div>`;
+}
+
 async function viewIntegration(){
   setTitle('Интеграция','подключение сайта');
   await loadCore();
@@ -1045,35 +1193,31 @@ async function viewIntegration(){
     : online ? '<span class="pill live">на связи</span>'
     : `<span class="pill dev">молчит ${fresh.stale?'&gt;24ч':'&lt;24ч'}</span>`;
 
-  $('view').innerHTML=`<section>
-    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
-      <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <div class="svc-name">Код для сайта</div><span class="pill live">один тег</span></div>
-        <div class="svc-sub" style="margin-bottom:8px">Вставьте перед <code>&lt;/head&gt;</code> на всех страницах сайта.
-          Тег на сайте больше не трогаете — трекер, колесо и захват email правятся здесь.</div>
-        <textarea class="inp wide" readonly rows="7" id="trackSnippet"
-          style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;resize:vertical">${esc(trackSnippet())}</textarea>
-        <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
-          <button class="btn" onclick="copyFrom('trackSnippet')">Копировать код</button>
-          <a class="btn" href="${esc(snippetBase())}/wheel" target="_blank">Проверить колесо</a>
-          <a class="btn" href="/demo" target="_blank">Демо-страница</a>
-        </div>
-        ${/^https?:\/\/(localhost|127\.)/.test(snippetBase()) ? `<div class="svc-sub" style="margin-top:8px;color:var(--warn)">
-          В коде стоит <span class="mono">${esc(snippetBase())}</span> — это локальный адрес: на сайте он не заработает.
-          Задайте <span class="mono">PUBLIC_BASE_URL</span> в <span class="mono">.env</span> сервиса и обновите страницу.</div>` : ''}
-        <p class="legend"><code>wheel.delay</code> — через сколько секунд всплывает колесо (частота
-          «раз в N дней» — в разделе колеса). Захват email из форм включён по умолчанию.
-          Корзина подхватывается из готовой GA4-разметки сайта либо приходит через
-          <code>grDataLayer.push(&#123;event:'cart',items&#125;)</code>. Отладка на сайте — добавьте
-          <code>?grdebug=1</code> к адресу страницы и смотрите консоль браузера.</p>
-      </div>
+  // Шаги интеграции по факту данных за 24ч: пусто = шаг на сайте не подключён.
+  const steps=[
+    ['Тег track.js', !!g.last_ping_at, g.last_ping_at?`пинги идут, сессий за 24ч: ${num(g.sessions_24h)}`:'пингов ещё не было','tag'],
+    ['Состав корзины', !!g.cart_sessions_24h, g.cart_sessions_24h?`сессий с товарами: ${num(g.cart_sessions_24h)}`:'ни одной непустой корзины за 24ч','cart'],
+    ['Логин (user_id)', !!g.logged_in_24h, g.logged_in_24h?`сессий с user_id: ${num(g.logged_in_24h)}`:'сайт не шлёт identify с user_id','login'],
+    ['Email на оформлении', !!g.identified_24h, g.identified_24h?`сессий с email: ${num(g.identified_24h)}`:'email не приходит — писем не будет','consent'],
+    ['Согласие 152-ФЗ', !!g.consent_24h, g.consent_24h?`новых согласий: ${num(g.consent_24h)}`:'галочка consent не приходит','consent'],
+    ['Заказы', !!g.orders_24h, g.orders_24h?`заказов за 24ч: ${num(g.orders_24h)} (сайт или 1С)`:'заказов за 24ч нет','order'],
+  ];
 
+  $('view').innerHTML=`<section>
+    <div id="intSnips"></div>
+
+    <div class="eyebrow" style="margin-top:20px"><h2>Статистика связи</h2><span class="rule"></span></div>
+    <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <div class="svc-name">Связь с сайтом</div>${connPill}</div>
         <div class="field"><span class="k">Последний пинг</span><span class="mono">${esc(fresh.t)}</span></div>
         <div class="field"><span class="k">Сессий сегодня</span><span class="mono">${num(g.sessions_today)}</span></div>
+        <div class="field"><span class="k">Сессий за 24ч</span><span class="mono">${num(g.sessions_24h)}</span></div>
+        <div class="field"><span class="k">С товарами в корзине (24ч)</span><span class="mono">${num(g.cart_sessions_24h)}</span></div>
+        <div class="field"><span class="k">Последний email с сайта</span><span class="mono">${esc(freshInfo(g.last_identify_at).t)}</span></div>
+        <div class="field"><span class="k">Последнее согласие</span><span class="mono">${esc(freshInfo(g.last_consent_at).t)}</span></div>
+        <div class="field"><span class="k">Последний заказ</span><span class="mono">${esc(freshInfo(g.last_order_at).t)}</span></div>
         <div class="field"><span class="k">Приём событий</span><span class="mono">${esc(snippetBase())}/cart-ping</span></div>
         <div class="field"><span class="k">Товары не из каталога (24ч)</span><span class="mono">${
           !g.cart_sessions_24h ? '—'
@@ -1088,6 +1232,15 @@ async function viewIntegration(){
           : (g.last_ping_at
             ? 'Пингов давно нет. Проверьте, что тег стоит на страницах и не блокируется CORS/адблоком.'
             : 'Пингов ещё не было. Установите тег и откройте сайт — здесь появится статус.')}</div>
+        <div style="margin-top:10px"><button class="btn" onclick="viewIntegration()">Обновить</button></div>
+      </div>
+
+      <div class="card">
+        <div class="svc-name" style="margin-bottom:8px">Что доходит с сайта (24ч)</div>
+        ${steps.map(([t,on,s,tab])=>`<div class="check" style="cursor:pointer" onclick="setIntTab('${tab}');scrollTo({top:0,behavior:'smooth'})">
+          <div class="mk ${on?'on':''}">${on?'✓':'!'}</div><div class="t">${t}<small>${esc(s)}</small></div></div>`).join('')}
+        <p class="legend">Пустая строка — шаг на сайте не подключён (или за сутки не было трафика).
+          Клик по строке открывает нужный сниппет. Заказы приходят и от витрины, и из 1С — здесь они не разделяются.</p>
       </div>
     </div>
 
@@ -1105,7 +1258,6 @@ async function viewIntegration(){
       </div>
       <div class="card">
         <div class="svc-name" style="margin-bottom:8px">Чек-лист</div>
-        ${check(!!g.last_ping_at,'Тег track.js на сайте',g.last_ping_at?'cart-ping приходит':'пингов ещё не было')}
         ${check(!!g.cart_sessions_24h && !g.unknown_product_sessions_24h,'product_id совпадают с каталогом',
           !g.cart_sessions_24h?'нет корзин за сутки'
             :(g.unknown_product_sessions_24h?`${num(g.unknown_product_sessions_24h)} сессий с чужими id`:'все товары найдены'))}
@@ -1113,9 +1265,10 @@ async function viewIntegration(){
         ${check(!!g.smtp_host,'SMTP-хост задан',esc(g.smtp_host||'—'))}
         ${check(g.onec_configured,'1С подключена (pull)',esc(g.onec_base_url||'ONEC_BASE_URL не задан'))}
         ${check(false,'DKIM / SPF / DMARC','настроить на домене отправки')}
-        ${check(false,'Согласие 152-ФЗ','чекбокс при регистрации/заказе')}
+        ${check(!!g.consent_24h,'Согласие 152-ФЗ',g.consent_24h?'галочка приходит с сайта':'чекбокс при регистрации/заказе')}
       </div>
     </div></section>`;
+  renderIntTab();
 }
 
 /* Report */
