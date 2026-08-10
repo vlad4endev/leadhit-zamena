@@ -34,7 +34,9 @@ docker compose ps
 
 ## 4. Проверка
 ```bash
-curl -s https://groster.skypath.fun/trigger.js | head -1     # публичный сниппет
+curl -s https://groster.skypath.fun/track.js | head -1       # единый тег витрины
+curl -s https://groster.skypath.fun/trigger.js | head -1     # сниппет корзины
+curl -s https://groster.skypath.fun/wheel.js | head -1       # виджет колеса
 curl -s https://groster.skypath.fun/health                   # 404 снаружи — так и задумано
 docker compose exec api python -c "import urllib.request as u; print(u.urlopen('http://localhost:8000/health').read())"
 ```
