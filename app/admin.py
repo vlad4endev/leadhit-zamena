@@ -1044,6 +1044,23 @@ async def integration() -> dict:
         last_ping = await con.fetchval("SELECT max(last_ping_at) FROM cart_sessions")
         sessions_today = await con.fetchval(
             "SELECT count(*) FROM cart_sessions WHERE last_ping_at >= date_trunc('day', now())")
+        # Самая частая поломка интеграции: витрина шлёт свои product_id, которых нет в
+        # каталоге → письмо было бы с пустым товарным блоком (gate unknown_products).
+        # Считаем долю таких сессий за сутки + примеры id, чтобы отдать их интегратору.
+        diag = await con.fetchrow(
+            """WITH recent AS (
+                 SELECT session_id, cart_items FROM cart_sessions
+                 WHERE last_ping_at >= now() - interval '24 hours'
+                   AND jsonb_array_length(cart_items) > 0),
+               bad AS (
+                 SELECT r.session_id, e->>'product_id' AS pid
+                 FROM recent r, jsonb_array_elements(r.cart_items) e
+                 WHERE NOT EXISTS (
+                   SELECT 1 FROM products p WHERE p.product_id = e->>'product_id'))
+               SELECT (SELECT count(*) FROM recent) AS sessions,
+                      (SELECT count(DISTINCT session_id) FROM bad) AS bad_sessions,
+                      (SELECT array_agg(pid) FROM (SELECT DISTINCT pid FROM bad LIMIT 5) s)
+                        AS sample""")
     return {
         "mailer": mailer,
         "live": mailer != "LogMailer",
@@ -1056,6 +1073,9 @@ async def integration() -> dict:
         # Сигнал «сайт на связи»: свежий пинг = track.js реально шлёт события.
         "last_ping_at": _iso(last_ping),
         "sessions_today": int(sessions_today or 0),
+        "cart_sessions_24h": int(diag["sessions"] or 0),
+        "unknown_product_sessions_24h": int(diag["bad_sessions"] or 0),
+        "unknown_product_sample": list(diag["sample"] or []),
     }
 
 

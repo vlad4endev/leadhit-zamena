@@ -1062,6 +1062,14 @@ async function viewIntegration(){
         <div class="field"><span class="k">Последний пинг</span><span class="mono">${esc(fresh.t)}</span></div>
         <div class="field"><span class="k">Сессий сегодня</span><span class="mono">${num(g.sessions_today)}</span></div>
         <div class="field"><span class="k">Приём событий</span><span class="mono">${esc(location.origin)}/cart-ping</span></div>
+        <div class="field"><span class="k">Товары не из каталога (24ч)</span><span class="mono">${
+          !g.cart_sessions_24h ? '—'
+            : `${num(g.unknown_product_sessions_24h)} из ${num(g.cart_sessions_24h)} сессий`}</span></div>
+        ${g.unknown_product_sessions_24h ? `<div class="svc-sub" style="margin-top:6px">
+          Витрина шлёт id, которых нет в каталоге (напр. <span class="mono">${
+            esc((g.unknown_product_sample||[]).join(', '))}</span>) — письма по таким корзинам
+          не уходят. Передайте интегратору: <span class="mono">product_id</span> должен совпадать
+          с каталогом/1С, проверка на сайте — <span class="mono">?grdebug=1</span>.</div>` : ''}
         <div class="svc-sub" style="margin-top:10px">${online
           ? 'Сайт на связи — cart-ping приходит. Тег установлен корректно.'
           : (g.last_ping_at
@@ -1085,6 +1093,9 @@ async function viewIntegration(){
       <div class="card">
         <div class="svc-name" style="margin-bottom:8px">Чек-лист</div>
         ${check(!!g.last_ping_at,'Тег track.js на сайте',g.last_ping_at?'cart-ping приходит':'пингов ещё не было')}
+        ${check(!!g.cart_sessions_24h && !g.unknown_product_sessions_24h,'product_id совпадают с каталогом',
+          !g.cart_sessions_24h?'нет корзин за сутки'
+            :(g.unknown_product_sessions_24h?`${num(g.unknown_product_sessions_24h)} сессий с чужими id`:'все товары найдены'))}
         ${check(g.live,'Боевой ESP подключён','SMTP-relay вместо dev-лога')}
         ${check(!!g.smtp_host,'SMTP-хост задан',esc(g.smtp_host||'—'))}
         ${check(g.onec_configured,'1С подключена (pull)',esc(g.onec_base_url||'ONEC_BASE_URL не задан'))}

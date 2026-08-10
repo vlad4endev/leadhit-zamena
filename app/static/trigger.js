@@ -41,13 +41,14 @@
   }
 
   // Нормализация позиции к контракту Ping.CartItem (лишнее backend игнорит).
+  // Обязателен только product_id: цену/название/фото письмо берёт из каталога. category_id
+  // и price шлём, лишь если витрина их знает — пустышки вместо них хуже, чем их отсутствие.
   function normItem(i) {
-    return {
-      product_id: String(i.product_id),
-      category_id: String(i.category_id == null ? '' : i.category_id),
-      price: Number(i.price) || 0,
-      qty: Number(i.qty) || 1,
-    };
+    var out = { product_id: String(i.product_id), qty: Number(i.qty) || 1 };
+    if (i.category_id != null && i.category_id !== '') out.category_id = String(i.category_id);
+    var price = Number(i.price);
+    if (i.price != null && i.price !== '' && !isNaN(price)) out.price = price;
+    return out;
   }
 
   if (typeof module !== 'undefined' && module.exports) {
@@ -84,7 +85,16 @@
     items: [],
     hash: null,
     timer: null,
+    debug: false,
   };
+
+  // Debug-режим для интегратора: ?grdebug=1 в адресе (или init({debug:true})) — печатает
+  // каждый вызов и ответ сервера, включая незнакомые каталогу product_id. В прод-режиме
+  // не тратим ни строки в консоли и не читаем тело ответа.
+  function log() {
+    if (!S.debug) return;
+    try { console.log.apply(console, ['[groster]'].concat([].slice.call(arguments))); } catch (e) {}
+  }
 
   function send() {
     if (!S.endpoint) return;
@@ -97,13 +107,23 @@
       consent: S.consent || null,
     };
     try {
-      root.fetch(S.endpoint + '/cart-ping', {
+      var p = root.fetch(S.endpoint + '/cart-ping', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
         keepalive: true,       // долетит даже при закрытии вкладки
         credentials: 'omit',   // session_id в теле, cookie сервису не нужен
-      }).catch(function () {}); // fire-and-forget: сбой сети не ломает сайт
+      });
+      if (!S.debug) { p.catch(function () {}); return; } // fire-and-forget: сбой сети не ломает сайт
+      log('POST /cart-ping', body);
+      p.then(function (r) { return r.ok ? r.json() : { http: r.status }; })
+        .then(function (d) {
+          log('ответ', d);
+          if (d && d.unknown && d.unknown.length) {
+            console.warn('[groster] нет в каталоге product_id: ' + d.unknown.join(', ') +
+              ' — письмо по такой корзине не уйдёт');
+          }
+        }, function (e) { log('сеть недоступна', e); });
     } catch (e) { /* no-op */ }
   }
 
@@ -114,6 +134,7 @@
   var api = {
     init: function (opts) {
       opts = opts || {};
+      S.debug = !!opts.debug || /[?&]grdebug=1/.test(root.location.search);
       if (opts.endpoint) S.endpoint = String(opts.endpoint).replace(/\/+$/, '');
       if (opts.intervalSec) S.intervalSec = Math.max(15, Number(opts.intervalSec) || 45);
       S.sid = cookie('gr_sid') || uuid();
@@ -134,6 +155,7 @@
       doc.addEventListener('visibilitychange', function () {
         if (doc.visibilityState !== 'hidden') pingIfDue();
       });
+      log('init', { endpoint: S.endpoint, intervalSec: S.intervalSec, session_id: S.sid });
       return api;
     },
 
@@ -142,6 +164,8 @@
       var h = cartHash(S.items);
       var changed = h !== S.hash;
       S.hash = h;
+      log('cart()', S.items, changed ? '(состав изменился)' : '(без изменений)');
+      if (!S.items.length) log('корзина пуста → пинги остановлены (это норма)');
       if (changed) pingIfDue(); // реальная активность → свежий last_ping_at
       return api;
     },
@@ -152,6 +176,8 @@
       if (ids.email != null) S.email = String(ids.email);
       if (ids.consent != null) S.consent = !!ids.consent; // отзыв: identify({consent:false})
       cookie('gr_id', JSON.stringify({ user_id: S.user_id, email: S.email, consent: S.consent }), 365);
+      log('identify()', { user_id: S.user_id, email: S.email, consent: S.consent });
+      if (S.email && !S.consent) log('email без consent → только идентификация, письма не будет');
       pingIfDue();
       return api;
     },
@@ -165,6 +191,7 @@
     api.init({
       endpoint: self.getAttribute('data-endpoint'),
       intervalSec: self.getAttribute('data-interval'),
+      debug: self.hasAttribute('data-debug'),
     });
   }
 })(typeof window !== 'undefined' ? window : this);

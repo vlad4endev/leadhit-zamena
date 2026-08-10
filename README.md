@@ -77,7 +77,7 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
         data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
 <script>
   // на каждое изменение корзины:
-  groster.cart([{ product_id: 'A1', category_id: 'shoes', price: 4990, qty: 1 }]);
+  groster.cart([{ product_id: 'A1', qty: 1 }]);   // обязателен только product_id
   // при логине или вводе email на оформлении (идентификация анонима, ROADMAP 3.4).
   // consent: true — только если пользователь поставил галочку согласия на письма (152-ФЗ).
   // Backend заводит подписчика с consent_at ТОЛЬКО при consent:true; без него письма не будет.
@@ -88,6 +88,11 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
 вкладке и непустой корзине, помнит последнюю личность (cookie-приоритет 3.4). Для
 прода задать `CORS_ORIGINS` в `.env` (домены groster.me). Self-check логики:
 `node scripts/test_trigger.js`.
+
+Проще — один тег `track.js` (`app/static/track.js`): грузит сниппет сам, ловит email из форм,
+дренит `grDataLayer` и **читает готовые ecommerce-события GA4/GTM** из `window.dataLayer` —
+на витрине с GA4-разметкой код писать не нужно вообще. Диагностика интеграции — `?grdebug=1`
+на любой странице: логи вызовов + незнакомые каталогу `product_id` в ответе `/cart-ping`.
 
 Полный гайд разводки для витринной команды (события, edge-cases, примеры под
 Битрикс/сервер-рендер/SPA) — [docs/site_integration.md](docs/site_integration.md).

@@ -18,8 +18,11 @@
  *      БЕЗ consent — только деанонимизация сессии (email в cart_sessions), письма НЕ шлём
  *      (152-ФЗ: подписчик заводится лишь при явной галочке на оформлении/колесе).
  *   3. wheel (деф. выкл): грузит wheel.js и открывает попап колеса.
- *   4. autocart: НЕ универсальный DOM-скрейп (хрупко). Даёшь селекторы в grConfig.cart —
- *      трекер их читает; иначе состав корзины по-прежнему шлёт сайт через groster.cart().
+ *   4. datalayer (деф. вкл): дренит window.grDataLayer → cart()/identify(). Состав корзины
+ *      из вёрстки НЕ скрейпим (хрупко) — сайт пушит его сам (docs/site_integration.md).
+ *   5. ga4 (деф. вкл): читает ecommerce-события GA4/GTM из window.dataLayer, если они на
+ *      сайте уже есть → корзина без единой строки кода на витрине. Явный пуш в grDataLayer
+ *      старше: как только сайт сказал состав сам, адаптер замолкает.
  *
  * clid: сейчас бэкенд однотенантный — clid принимается, но не влияет на маршрутизацию.
  * ponytail: мультитенант по clid добавим, когда появится второй клиент (YAGNI).
@@ -75,8 +78,80 @@
     return null;
   }
 
+  // --- Адаптер GA4/GTM: используем разметку, которая на витрине уже есть ---
+  // Битрикс, Woo, Shopify, любая GTM-разметка электронной торговли пушат ecommerce-события
+  // GA4 в window.dataLayer. Читаем их — тогда витрине не нужно писать ни строки под нас.
+  // Состав корзины GA4 не отдаёт целиком, поэтому копим его сами: add/remove — дельты,
+  // view_cart/begin_checkout — полный снапшот (перезаписывает состояние), purchase — очистка.
+  var GA4_KIND = {
+    add_to_cart: 'add', remove_from_cart: 'remove',
+    view_cart: 'set', begin_checkout: 'set', purchase: 'clear',
+  };
+
+  // Событие бывает объектом ({event, ecommerce:{items}}) и gtag-массивом
+  // (['event','add_to_cart',{items}]). Возвращает {kind, items} или null (не про корзину).
+  function ga4Event(raw) {
+    if (!raw || typeof raw !== 'object') return null;
+    var name, payload;
+    if (typeof raw.length === 'number' && raw[0] === 'event') {
+      name = raw[1]; payload = raw[2] || {};            // gtag('event', 'add_to_cart', {...})
+    } else {
+      name = raw.event; payload = raw.ecommerce || raw; // GTM dataLayer.push({...})
+    }
+    var kind = GA4_KIND[name];
+    if (!kind) return null;
+    var src = payload.items || (payload.ecommerce && payload.ecommerce.items) || [];
+    var items = [];
+    for (var i = 0; i < src.length; i++) {
+      var it = src[i] || {};
+      // GA4 зовёт id товара item_id; UA-разметка и часть тем — id/item_sku.
+      var id = it.item_id != null ? it.item_id : (it.id != null ? it.id : it.item_sku);
+      if (id == null || id === '') continue;
+      var qty = Number(it.quantity != null ? it.quantity : it.qty) || 1;
+      var out = { product_id: String(id), qty: qty };
+      if (it.item_category) out.category_id = String(it.item_category);
+      var price = Number(it.price);
+      if (it.price != null && it.price !== '' && !isNaN(price)) out.price = price;
+      items.push(out);
+    }
+    return { kind: kind, items: items };
+  }
+
+  function copyItem(i) {
+    var o = { product_id: i.product_id, qty: i.qty };
+    if (i.category_id != null) o.category_id = i.category_id;
+    if (i.price != null) o.price = i.price;
+    return o;
+  }
+
+  // Чистый редьюсер: (состояние, событие) → новое состояние или null (событие не наше).
+  function applyGa4(state, raw) {
+    var e = ga4Event(raw);
+    if (!e) return null;
+    if (e.kind === 'clear') return [];
+    if (e.kind === 'set') return e.items;
+    var out = (state || []).map(copyItem);
+    for (var i = 0; i < e.items.length; i++) {
+      var it = e.items[i], hit = null;
+      for (var j = 0; j < out.length; j++) {
+        if (out[j].product_id === it.product_id) { hit = out[j]; break; }
+      }
+      if (e.kind === 'add') {
+        if (hit) hit.qty += it.qty;
+        else out.push(copyItem(it));
+      } else if (hit) {
+        hit.qty -= it.qty;
+        if (hit.qty <= 0) out.splice(out.indexOf(hit), 1);
+      }
+    }
+    return out;
+  }
+
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { isEmail: isEmail, findEmail: findEmail, normEvent: normEvent };
+    module.exports = {
+      isEmail: isEmail, findEmail: findEmail, normEvent: normEvent,
+      ga4Event: ga4Event, applyGa4: applyGa4,
+    };
     return; // под node дальше не идём — браузерной обвязке нужен document
   }
 
@@ -150,12 +225,16 @@
   // --- dataLayer: единый контракт для кастомной витрины ---
   // Сайт пушит события в массив (деф. window.grDataLayer), даже ДО загрузки track.js —
   // очередь дренится на старте. Классический паттерн: переопределяем push().
+  // Явный пуш корзины сайтом старше вывода из GA4: если витрина сама говорит состав,
+  // адаптер замолкает, чтобы дельты GA4 не боролись со снапшотами сайта.
+  var siteOwnsCart = false;
+
   function installDataLayer(name) {
     var q = root[name] = root[name] || [];
     function process(e) {
       var m = normEvent(e);
       if (!m || !root.groster) return;
-      if (m.call === 'cart') root.groster.cart(m.items);
+      if (m.call === 'cart') { siteOwnsCart = true; root.groster.cart(m.items); }
       else root.groster.identify(m.ids);
     }
     var buffered = q.slice(); // то, что сайт напушил до нас
@@ -170,12 +249,40 @@
     for (var j = 0; j < buffered.length; j++) process(buffered[j]);
   }
 
+  // Подписка на чужой (GA4/GTM) dataLayer. Массив НЕ трогаем и не чистим — он принадлежит
+  // GTM: только оборачиваем push, сохраняя исходное поведение, и разбираем уже накопленное.
+  function installGa4(name) {
+    var dl = root[name] = root[name] || [];
+    var state = [];
+    function process(raw) {
+      if (siteOwnsCart || !root.groster) return;
+      var next = applyGa4(state, raw);
+      if (!next) return;
+      state = next;
+      root.groster.cart(state);
+    }
+    var origPush = dl.push;
+    dl.push = function () {
+      var r = origPush.apply(dl, arguments);
+      for (var i = 0; i < arguments.length; i++) process(arguments[i]);
+      return r;
+    };
+    for (var j = 0; j < dl.length; j++) process(dl[j]);
+  }
+
   // --- Bootstrap ---
 
   loadScript('/trigger.js', function () {
-    if (root.groster) root.groster.init({ endpoint: ENDPOINT, intervalSec: cfg.interval });
+    if (root.groster) {
+      root.groster.init({ endpoint: ENDPOINT, intervalSec: cfg.interval, debug: cfg.debug });
+    }
     if (cfg.autoform !== false) installAutoForm();
     if (cfg.datalayer !== false) installDataLayer(cfg.datalayer || 'grDataLayer');
+    // Адаптер GA4 включён по умолчанию (решение владельца): интеграция «из коробки» важнее,
+    // чем независимость от чужой разметки. Принятый риск — правка item_id в GTM ломает
+    // корзину; ловится диагностикой «товары не из каталога» в админке. Выкл: grConfig.ga4=false.
+    var ga4 = cfg.ga4 === undefined ? 'dataLayer' : cfg.ga4;
+    if (ga4) installGa4(typeof ga4 === 'string' ? ga4 : 'dataLayer');
   });
 
   if (cfg.wheel) {

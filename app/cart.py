@@ -203,9 +203,12 @@ async def wheel_prize(p: WheelPrize) -> dict:
 
 
 class CartItem(BaseModel):
+    """Позиция корзины из пинга. Обязателен только product_id — цену/фото/название письмо
+    берёт из каталога (`products`), так что требовать их от витрины незачем.
+    category_id/price принимаем «на вырост» (подбор по категории корзины), но не требуем."""
     product_id: str
-    category_id: str
-    price: float
+    category_id: Optional[str] = None
+    price: Optional[float] = None
     qty: int = 1
 
 
@@ -258,16 +261,30 @@ async def cart_ping(ping: Ping) -> dict:
                      consent_at = COALESCE(subscribers.consent_at, EXCLUDED.consent_at)""",
                 uid, ping.email,
             )
-    return {"ok": True}
+        # Обратная связь витрине: какие product_id мы не нашли в каталоге. Такое письмо
+        # уйдёт без товарного блока (см. gate unknown_products), поэтому лучше, чтобы
+        # интегратор увидел опечатку сразу в devtools, а не через неделю по нулям в KPI.
+        unknown: list[str] = []
+        if ping.cart_items:
+            ids = list({i.product_id for i in ping.cart_items})
+            rows = await con.fetch(
+                "SELECT product_id FROM products WHERE product_id = ANY($1::text[])", ids)
+            known = {r["product_id"] for r in rows}
+            unknown = [pid for pid in ids if pid not in known]
+    return {"ok": True, "unknown": unknown}
 
 
 def cart_gate(
     has_items: bool, has_email: bool, order_placed: bool,
-    within_cooldown: bool, unsubscribed: bool,
+    within_cooldown: bool, unsubscribed: bool, products_found: bool = True,
 ) -> Optional[str]:
     """Gate-проверки перед отправкой (ТЗ 3.3). None = можно слать, иначе причина skip."""
     if not has_items:
         return "empty_cart"
+    if not products_found:
+        # Ни один product_id из пинга не найден в каталоге → письмо «вы забыли товары»
+        # ушло бы с пустым блоком. Это поломка интеграции/фида, а не повод спамить.
+        return "unknown_products"
     if not has_email:
         return "no_email"
     if order_placed:
@@ -360,6 +377,7 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         )
     )
     order_placed = await _order_placed(con, s["user_id"], s["email"], s["created_at"])
+    products = await _load_products(con, [i["product_id"] for i in items])
 
     reason = cart_gate(
         has_items=len(items) > 0,
@@ -367,6 +385,7 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         order_placed=order_placed,
         within_cooldown=within_cooldown,
         unsubscribed=bool(sub and sub["is_unsubscribed"]),
+        products_found=bool(products),
     )
     if reason is not None:
         await con.execute(
@@ -384,7 +403,6 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         )
         return False
 
-    products = await _load_products(con, [i["product_id"] for i in items])
     if blocks:
         html = render_blocks(blocks, products, sub["user_id"], "cart", look)
     else:
@@ -424,9 +442,12 @@ async def _load_products(con, product_ids: list[str]) -> list[dict]:
 
 
 def _demo() -> None:
-    """Self-check gate-логики (ТЗ 3.3). Порядок причин: пусто→email→заказ→отписка→кап."""
+    """Self-check gate-логики (ТЗ 3.3). Порядок: пусто→нет в каталоге→email→заказ→отписка→кап."""
     assert cart_gate(True, True, False, False, False) is None          # всё ок → слать
     assert cart_gate(False, True, False, False, False) == "empty_cart"
+    # Товары есть, но ни одного нет в каталоге → письмо было бы пустым.
+    assert cart_gate(True, True, False, False, False, products_found=False) == "unknown_products"
+    assert cart_gate(False, True, False, False, False, products_found=False) == "empty_cart"
     assert cart_gate(True, False, False, False, False) == "no_email"
     assert cart_gate(True, True, True, False, False) == "order_placed"  # заказ перебивает
     assert cart_gate(True, True, False, False, True) == "unsubscribed"

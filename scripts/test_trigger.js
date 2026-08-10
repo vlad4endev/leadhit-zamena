@@ -18,7 +18,18 @@ assert.strictEqual(cartHash([]), cartHash(null), 'пусто и null дают о
 // normItem: приведение к контракту Ping.CartItem + дефолты.
 assert.deepStrictEqual(
   normItem({ product_id: 42, category_id: 7, price: '99.5' }),
-  { product_id: '42', category_id: '7', price: 99.5, qty: 1 },
+  { product_id: '42', qty: 1, category_id: '7', price: 99.5 },
+);
+// Минимальный контракт: одного product_id достаточно — необязательные поля не выдумываем
+// (пустая строка/0 хуже отсутствия: бэкенд взял бы их за истину).
+assert.deepStrictEqual(normItem({ product_id: 'p1' }), { product_id: 'p1', qty: 1 });
+assert.deepStrictEqual(
+  normItem({ product_id: 'p1', category_id: '', price: '' }),
+  { product_id: 'p1', qty: 1 },
+);
+assert.deepStrictEqual(
+  normItem({ product_id: 'p1', price: '71,60 ₽', qty: 2 }),
+  { product_id: 'p1', qty: 2 }, 'цена-строка с валютой не превращается в 0',
 );
 
 console.log('trigger.js self-check OK');
