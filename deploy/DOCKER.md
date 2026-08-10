@@ -63,7 +63,21 @@ docker compose down                       # остановить (volume с да
 docker compose pull && docker compose up -d --build   # обновление
 ```
 
+## Обновление кода на проде (за NPM)
+```bash
+cd /opt/grosterhit && git pull && git log --oneline -1     # убедиться, что коммит приехал
+docker compose up -d --build api workers                   # ОБА: воркеры на том же образе
+docker compose -f docker-compose.edge.yml up -d --force-recreate edge   # конфиг смонтирован файлом
+```
+Признак, что обновление реально применилось: в сборке `COPY app ./app` **без** `CACHED`, новый sha
+образа и `Recreated`/`Started` у контейнеров. Если `CACHED` и `Running` — `git pull` не принёс
+изменений (типовая причина: коммиты не запушены в `origin`), пересборка тут не поможет.
+
 ## Заметки
+- **Новый публичный роут → правка edge-конфига.** Наружу отдаётся whitelist точных путей
+  (`deploy/nginx.npm.conf` за NPM, `deploy/nginx.docker.conf` без него), остальное — 404. Добавили
+  роут в приложение — добавьте `location =` в конфиг, иначе снаружи 404 при живом роуте внутри.
+  Отличить легко: edge отвечает HTML и `server: openresty`, приложение — JSON `{"detail":...}`.
 - **Схема при обновлениях**: initdb-скрипт срабатывает только на пустом `pgdata`. Изменения схемы
   после первого запуска применять отдельно (миграция/`psql`), автоперезаливки нет.
 - **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
