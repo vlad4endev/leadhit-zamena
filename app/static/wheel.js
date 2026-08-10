@@ -73,7 +73,7 @@
   --green:#35cc00; --green-d:#23a000; --yellow:#fecc00;
   font-family: Montserrat, -apple-system, "Segoe UI", Roboto, Arial, sans-serif;
 }
-.gw-stage { position:relative; width:min(88vw,420px); aspect-ratio:1; margin:0 auto; }
+.gw-stage { position:relative; width:min(86vw,72vh,420px); aspect-ratio:1; margin:0 auto; }
 .gw-svg { width:100%; height:100%; display:block; filter:drop-shadow(0 16px 34px rgba(0,0,0,.35)); border-radius:50%; }
 .gw-wheel { transform-origin:250px 250px; transition:transform 5.2s cubic-bezier(.12,.67,.12,.99); }
 .gw-label { font:800 16px Montserrat,-apple-system,"Segoe UI",Roboto,Arial,sans-serif; }
@@ -100,15 +100,33 @@
 .gw-error{ min-height:16px; margin-top:8px; padding:0 6px; color:#ffe08a; font-weight:600; font-size:12.5px; }
 .gw-modal-overlay{ position:fixed; inset:0; z-index:99999; display:flex; align-items:center; justify-content:center; padding:16px; background:rgba(30,6,40,.62); -webkit-backdrop-filter:blur(3px); backdrop-filter:blur(3px); opacity:0; transition:opacity .25s ease; }
 .gw-modal-overlay.gw-open{ opacity:1; }
-.gw-modal-card{ position:relative; width:100%; max-width:640px; max-height:94vh; overflow-y:auto; border-radius:26px; padding:30px 24px 36px; text-align:center; color:#fff; background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='46'><g fill='none' stroke='white' stroke-width='3' stroke-linecap='round' opacity='0.13'><path d='M12 6v12M6 12h12'/></g></svg>") 0 0/46px 46px, radial-gradient(120% 120% at 50% -10%,#d05cf5 0%,var(--purple) 44%,var(--purple-d) 100%); box-shadow:0 30px 70px rgba(0,0,0,.45); transform:translateY(14px) scale(.98); transition:transform .28s cubic-bezier(.2,.9,.3,1.2); }
+.gw-modal-card{ position:relative; width:100%; max-width:640px; max-height:94vh; max-height:94dvh; overflow-y:auto; overscroll-behavior:contain; border-radius:26px; padding:30px 24px 36px; text-align:center; color:#fff; background:url("data:image/svg+xml;utf8,<svg xmlns='http://www.w3.org/2000/svg' width='46' height='46'><g fill='none' stroke='white' stroke-width='3' stroke-linecap='round' opacity='0.13'><path d='M12 6v12M6 12h12'/></g></svg>") 0 0/46px 46px, radial-gradient(120% 120% at 50% -10%,#d05cf5 0%,var(--purple) 44%,var(--purple-d) 100%); box-shadow:0 30px 70px rgba(0,0,0,.45); transform:translateY(14px) scale(.98); transition:transform .28s cubic-bezier(.2,.9,.3,1.2); }
 .gw-modal-overlay.gw-open .gw-modal-card{ transform:none; }
-.gw-modal-card .gw-stage{ width:min(82vw,460px); }
+/* В попапе колесо ограничиваем и по высоте: выше — заголовок/форма, ниже — результат. */
+.gw-modal-card .gw-stage{ width:min(80vw,48vh,440px); }
 .gw-close{ position:absolute; top:14px; right:14px; width:34px; height:34px; border-radius:50%; border:0; cursor:pointer; background:rgba(255,255,255,.2); color:#fff; font-size:19px; line-height:1; display:grid; place-items:center; z-index:6; transition:background .15s ease; }
 .gw-close:hover{ background:rgba(255,255,255,.35); }
 .gw-m-title{ margin:4px 22px 6px; font-size:clamp(21px,4.5vw,29px); font-weight:900; line-height:1.1; }
 .gw-m-title .acc{ color:var(--yellow); }
 .gw-m-sub{ margin:0 0 20px; font-size:14px; font-weight:500; opacity:.92; }
 @media (max-width:600px){ .gw-modal-card{ padding:26px 16px 30px; border-radius:22px; } }
+/* Невысокий экран (маленькие телефоны, свёрнутое окно): ужимаем вертикальные отступы,
+   а пустой блок результата не резервирует место — иначе колесо+форма не влезают. */
+@media (max-height:680px){
+  .gw-m-sub{ margin-bottom:12px; }
+  .gw-lead{ margin-bottom:14px; }
+  .gw-result{ margin-top:14px; min-height:0; }
+}
+/* Ландшафт-телефон: колесо слева/справа от формы — иначе всё не влезает по высоте. */
+@media (orientation:landscape) and (max-height:560px){
+  .gw-modal-card{ padding:18px 22px 20px; max-width:760px; }
+  .gw-m-title{ font-size:19px; margin:0 34px 2px; }
+  .gw-m-sub{ margin-bottom:10px; font-size:12.5px; }
+  .gw-modal-card .gw-root{ display:grid; grid-template-columns:minmax(0,1fr) auto; column-gap:26px; align-items:center; }
+  .gw-lead{ grid-column:1; grid-row:1; margin:0; max-width:none; }
+  .gw-result{ grid-column:1; grid-row:2; margin-top:12px; }
+  .gw-modal-card .gw-stage{ grid-column:2; grid-row:1 / 3; width:min(44vw,70vh,300px); margin:0; }
+}
 `;
 
   function injectStyles() {
