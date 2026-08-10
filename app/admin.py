@@ -1071,6 +1071,9 @@ async def integration() -> dict:
         "onec_configured": onec.configured(),
         "onec_base_url": onec.base_url() or None,
         # Сигнал «сайт на связи»: свежий пинг = track.js реально шлёт события.
+        # Публичный адрес сервиса для сниппета: админка обычно открыта по SSH-туннелю
+        # (localhost:8000), поэтому location.origin в браузере для этого не годится.
+        "public_base_url": settings.public_base_url.rstrip("/"),
         "last_ping_at": _iso(last_ping),
         "sessions_today": int(sessions_today or 0),
         "cart_sessions_24h": int(diag["sessions"] or 0),

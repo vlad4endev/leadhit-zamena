@@ -1009,12 +1009,17 @@ function emptyEmails(){
     <a href="#/services" style="color:var(--accent);font-weight:600">Запустите сценарий</a>, чтобы появились отправки.</div></div>`;
 }
 
-// Один тег track.js (как lh_clid у LeadHIT): клиент вставляет перед </body>, тег не
-// меняется — вся логика правится в track.js на сервере. Endpoint = origin админки.
+// Один тег track.js (как lh_clid у LeadHIT): клиент вставляет на все страницы, тег не
+// меняется — вся логика правится в track.js на сервере.
+// Endpoint — из PUBLIC_BASE_URL сервиса, НЕ из location.origin: админка обычно открыта по
+// SSH-туннелю (localhost:8000), и такой сниппет на витрине стучался бы в никуда.
+function snippetBase(){
+  return (cache.integration && cache.integration.public_base_url) || location.origin;
+}
 function trackSnippet(){
-  const o=location.origin;
+  const o=snippetBase();
   return `<script>
-  window.grConfig = { clid: 'groster', wheel: true, autoform: true };
+  window.grConfig = { clid: 'groster', endpoint: '${o}', wheel: { delay: 15 } };
   (function(){ var s=document.createElement('script'); s.async=true;
     s.src='${o}/track.js?ver='+Math.floor(Date.now()/1e8);
     var f=document.getElementsByTagName('script')[0]; f.parentNode.insertBefore(s,f); })();
@@ -1044,16 +1049,23 @@ async function viewIntegration(){
       <div class="card">
         <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
           <div class="svc-name">Код для сайта</div><span class="pill live">один тег</span></div>
-        <div class="svc-sub" style="margin-bottom:8px">Вставьте перед <code>&lt;/body&gt;</code> на всех страницах сайта.
+        <div class="svc-sub" style="margin-bottom:8px">Вставьте перед <code>&lt;/head&gt;</code> на всех страницах сайта.
           Тег на сайте больше не трогаете — трекер, колесо и захват email правятся здесь.</div>
         <textarea class="inp wide" readonly rows="7" id="trackSnippet"
           style="font-family:ui-monospace,Menlo,monospace;font-size:12.5px;resize:vertical">${esc(trackSnippet())}</textarea>
         <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
           <button class="btn" onclick="copyFrom('trackSnippet')">Копировать код</button>
-          <a class="btn" href="/demo" target="_blank">Открыть демо-страницу</a>
+          <a class="btn" href="${esc(snippetBase())}/wheel" target="_blank">Проверить колесо</a>
+          <a class="btn" href="/demo" target="_blank">Демо-страница</a>
         </div>
-        <p class="legend"><code>wheel</code> — попап колеса, <code>autoform</code> — захват email из форм
-          (деанонимизация без письма). Состав корзины витрина шлёт через <code>grDataLayer.push(&#123;event:'cart',items&#125;)</code>.</p>
+        ${/^https?:\/\/(localhost|127\.)/.test(snippetBase()) ? `<div class="svc-sub" style="margin-top:8px;color:var(--warn)">
+          В коде стоит <span class="mono">${esc(snippetBase())}</span> — это локальный адрес: на сайте он не заработает.
+          Задайте <span class="mono">PUBLIC_BASE_URL</span> в <span class="mono">.env</span> сервиса и обновите страницу.</div>` : ''}
+        <p class="legend"><code>wheel.delay</code> — через сколько секунд всплывает колесо (частота
+          «раз в N дней» — в разделе колеса). Захват email из форм включён по умолчанию.
+          Корзина подхватывается из готовой GA4-разметки сайта либо приходит через
+          <code>grDataLayer.push(&#123;event:'cart',items&#125;)</code>. Отладка на сайте — добавьте
+          <code>?grdebug=1</code> к адресу страницы и смотрите консоль браузера.</p>
       </div>
 
       <div class="card">
@@ -1061,7 +1073,7 @@ async function viewIntegration(){
           <div class="svc-name">Связь с сайтом</div>${connPill}</div>
         <div class="field"><span class="k">Последний пинг</span><span class="mono">${esc(fresh.t)}</span></div>
         <div class="field"><span class="k">Сессий сегодня</span><span class="mono">${num(g.sessions_today)}</span></div>
-        <div class="field"><span class="k">Приём событий</span><span class="mono">${esc(location.origin)}/cart-ping</span></div>
+        <div class="field"><span class="k">Приём событий</span><span class="mono">${esc(snippetBase())}/cart-ping</span></div>
         <div class="field"><span class="k">Товары не из каталога (24ч)</span><span class="mono">${
           !g.cart_sessions_24h ? '—'
             : `${num(g.unknown_product_sessions_24h)} из ${num(g.cart_sessions_24h)} сессий`}</span></div>
