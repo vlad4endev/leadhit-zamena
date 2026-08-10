@@ -1111,6 +1111,88 @@ async def integration() -> dict:
     }
 
 
+def _probe(url: str) -> dict:
+    """GET на НАШ ЖЕ публичный адрес: виден ли файл снаружи (edge/whitelist/TLS).
+    Изнутри контейнера всё всегда 200 — ловится только запросом через публичный адрес,
+    как было с /track.js, не попавшим в whitelist прокси. URL берём из настроек, не от
+    пользователя, — гулять по произвольным адресам сервис не должен."""
+    import urllib.error
+    import urllib.request
+    try:
+        req = urllib.request.Request(url, headers={"User-Agent": "grosterhit-selftest"})
+        with urllib.request.urlopen(req, timeout=8) as r:
+            return {"status": r.status, "error": None}
+    except urllib.error.HTTPError as e:
+        return {"status": e.code, "error": None}
+    except Exception as e:                                   # DNS, TLS, таймаут, отказ
+        return {"status": None, "error": type(e).__name__}
+
+
+@router.get("/selftest")
+async def selftest(product_id: Optional[str] = None) -> dict:
+    """Самопроверка подключения «в один клик»: то же, что интегратор делал бы curl'ом.
+    Каждый чек — готовая строка для UI: статус + что это значит + что делать."""
+    from app.config import settings
+    base = settings.public_base_url.rstrip("/")
+    checks: list[dict] = []
+
+    local = bool(re.match(r"^https?://(localhost|127\.|0\.0\.0\.0)", base))
+    checks.append({
+        "id": "public_url", "t": "Публичный адрес сервиса",
+        "status": "fail" if local else "ok",
+        "detail": base or "не задан",
+        "hint": "Задайте PUBLIC_BASE_URL в .env — с локальным адресом тег на сайте не заработает."
+                if local else "Этот адрес подставляется в код для сайта.",
+    })
+
+    # Файлы, которые тянет витрина. Без публичного адреса проверять нечего.
+    if not local and base:
+        names = ["/track.js", "/trigger.js", "/wheel.js", "/wheel-config"]
+        res = await asyncio.gather(*(asyncio.to_thread(_probe, base + n) for n in names))
+        for name, r in zip(names, res):
+            ok = r["status"] == 200
+            checks.append({
+                "id": "file" + name, "t": f"Файл {name} отдаётся наружу",
+                "status": "ok" if ok else "fail",
+                "detail": f"HTTP {r['status']}" if r["status"] else f"нет ответа ({r['error']})",
+                "hint": "" if ok else "Сайт не сможет загрузить этот файл. Проверьте, что путь "
+                                      "разрешён на прокси/edge (whitelist) и сервис поднят.",
+            })
+
+    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    checks.append({
+        "id": "cors", "t": "Домены сайта в CORS",
+        "status": "ok" if origins else "warn",
+        "detail": ", ".join(origins) if origins else "разрешены любые домены (*)",
+        "hint": "" if origins else "Работать будет, но лучше перечислить домены витрины в "
+                                   "CORS_ORIGINS в .env — тогда события примем только с них.",
+    })
+
+    async with db.pool().acquire() as con:
+        products = await con.fetchval("SELECT count(*) FROM products")
+        found = None
+        if product_id:
+            found = await con.fetchrow(
+                "SELECT name, price FROM products WHERE product_id = $1", product_id.strip())
+    checks.append({
+        "id": "catalog", "t": "Каталог загружен",
+        "status": "ok" if products else "fail",
+        "detail": f"товаров: {products}" if products else "каталог пуст",
+        "hint": "" if products else "Импортируйте каталог (раздел «Товарные рекомендации») — "
+                                    "без него письма не соберутся.",
+    })
+    if product_id:
+        checks.append({
+            "id": "product", "t": f"Товар {product_id.strip()} есть в каталоге",
+            "status": "ok" if found else "fail",
+            "detail": f"{found['name']} · {found['price']} ₽" if found
+                      else "такого id в каталоге нет",
+            "hint": "" if found else "Сайт должен слать product_id ровно как в каталоге/1С. "
+                                     "Иначе письмо по такой корзине не уйдёт.",
+        })
+    return {"base": base, "checks": checks}
+
+
 _PAGE_PATH = os.path.join(os.path.dirname(__file__), "static", "admin.html")
 
 

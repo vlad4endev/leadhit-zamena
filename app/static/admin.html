@@ -247,6 +247,8 @@ select.inp{width:auto;font-family:var(--sans)}
 .check .mk{width:18px;height:18px;flex:0 0 auto;border-radius:5px;background:var(--surface-2);color:var(--muted);
   display:grid;place-items:center;font-size:12px;margin-top:1px}
 .check .mk.on{background:color-mix(in srgb,var(--ok) 16%,transparent);color:var(--ok)}
+.check .mk.warn{background:color-mix(in srgb,var(--warn) 16%,transparent);color:var(--warn)}
+.check .mk.bad{background:color-mix(in srgb,var(--alert) 16%,transparent);color:var(--alert)}
 .check .t{font-size:13px} .check .t small{display:block;color:var(--muted);font-size:12px}
 
 #toast{position:fixed;left:50%;bottom:26px;transform:translate(-50%,20px);opacity:0;pointer-events:none;
@@ -1132,37 +1134,58 @@ grDataLayer.push({ event: 'identify', consent: false });`,
      note:'<code>data-interval</code> — период heartbeat в секундах. Пинг уходит, только когда '+
           'вкладка активна и корзина непуста.'},
 
-    {id:'check', t:'Проверка', ok:null,
-     title:'Приёмка: убедиться, что всё дошло',
-     hint:'Откройте витрину с <code>?grdebug=1</code> — консоль печатает каждый вызов, ответ сервера '+
-          'и незнакомые каталогу id. Ниже — проверка приёмника без сайта.',
-     code:`# 1) события с сайта видно в консоли: https://<ваш-сайт>/?grdebug=1
-# 2) приёмник событий отвечает (unknown — id, которых нет в каталоге):
-curl -sS -X POST ${o}/cart-ping \\
-  -H 'Content-Type: application/json' \\
-  -d '{"session_id":"test-1","cart_items":[{"product_id":"0057412","qty":1}]}'`,
-     note:'После проверки статистика связи ниже обновится: тестовый пинг создаст сессию '+
-          '<code>test-1</code>. Товар с чужим id вернётся в <code>unknown</code> — это и есть самая '+
-          'частая поломка интеграции.'},
+    {id:'check', t:'Проверка', ok:null, self:true,
+     title:'Проверка подключения',
+     hint:'Сервис сам сходит по своему публичному адресу и проверит, что сайт сможет загрузить '+
+          'скрипты и достучаться до приёмника. Ничего копировать и запускать не нужно.',
+     note:'Проверяется наша сторона. Что именно доходит с сайта — в карточке «Что доходит с '+
+          'сайта» ниже. Живая отладка на витрине: добавьте <code>?grdebug=1</code> к адресу '+
+          'страницы, консоль напечатает каждый вызов.'},
   ];
 }
+
+// Самопроверка: результат /admin/selftest живёт между перерисовками вкладок.
+let selfTest={data:null, busy:false, pid:''};
+async function runSelfTest(){
+  selfTest.busy=true; renderSelfTest();
+  const q=selfTest.pid?('?product_id='+encodeURIComponent(selfTest.pid)):'';
+  try{ selfTest.data=await j('/admin/selftest'+q); }
+  catch(e){ selfTest.data={checks:[{t:'Проверка не выполнилась',status:'fail',
+    detail:String(e&&e.message||e), hint:'Похоже, сервис недоступен из админки — обновите страницу.'}]}; }
+  selfTest.busy=false; renderSelfTest();
+}
+function selfTestBox(){
+  const st=selfTest.data, MK={ok:['on','✓'],warn:['warn','!'],fail:['bad','✗']};
+  const rows = selfTest.busy ? '<div class="svc-sub">Проверяем…</div>'
+    : !st ? '<div class="svc-sub">Нажмите «Проверить сейчас».</div>'
+    : st.checks.map(c=>{const [cls,ch]=MK[c.status]||MK.fail;
+        return `<div class="check"><div class="mk ${cls}">${ch}</div><div class="t">${esc(c.t)}
+          <small>${esc(c.detail||'')}${c.hint?' — '+esc(c.hint):''}</small></div></div>`;}).join('');
+  const bad = st ? st.checks.filter(c=>c.status==='fail').length : 0;
+  const head = !st||selfTest.busy ? '' : bad
+    ? `<div class="svc-sub" style="color:var(--alert);margin-bottom:8px">Нашли проблем: ${bad} — что делать, написано в строках с ✗.</div>`
+    : '<div class="svc-sub" style="color:var(--ok);margin-bottom:8px">Наша сторона готова: сайт может грузить скрипты и слать события.</div>';
+  return `<div id="selfTestBox">${head}${rows}
+    <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+      <button class="btn" onclick="runSelfTest()" ${selfTest.busy?'disabled':''}>Проверить сейчас</button>
+      <input class="inp wide" style="width:220px" placeholder="id товара с сайта" value="${esc(selfTest.pid)}"
+        oninput="selfTest.pid=this.value" onkeydown="if(event.key==='Enter')runSelfTest()">
+      <span class="svc-sub">— проверим, есть ли такой товар в каталоге</span>
+    </div></div>`;
+}
+function renderSelfTest(){ const b=$('selfTestBox'); if(b) b.outerHTML=selfTestBox(); }
 
 let intTab='tag';
 function setIntTab(id){ intTab=id; renderIntTab(); }
 function renderIntTab(){
   const box=$('intSnips'); if(!box) return;
   const list=intSnippets(), s=list.find(x=>x.id===intTab)||list[0];
-  const rows=Math.min(16, s.code.split('\n').length+1);
   const mark=x=> x.ok===true?' <span style="color:var(--ok)">✓</span>':(x.ok===false?' <span style="color:var(--muted)">•</span>':'');
   const pill = s.ok===true?'<span class="pill live">данные приходят</span>'
     : s.ok===false?'<span class="pill dev">данных ещё не было</span>' : '';
-  box.innerHTML=`
-    <div class="tabbar" style="flex-wrap:wrap">${list.map(x=>
-      `<button class="tab ${x.id===s.id?'active':''}" onclick="setIntTab('${x.id}')">${esc(x.t)}${mark(x)}</button>`).join('')}</div>
-    <div class="card">
-      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
-        <div class="svc-name">${esc(s.title)}</div>${pill}</div>
-      <div class="svc-sub" style="margin-bottom:10px">${s.hint}</div>
+  const rows=s.code?Math.min(16, s.code.split('\n').length+1):0;
+  // Вкладка «Проверка» — не код, а результат: сервис проверяет себя сам (см. selfTestBox).
+  const body = s.self ? selfTestBox() : `
       <textarea class="inp wide" readonly id="intCode" rows="${rows}" spellcheck="false"
         style="width:100%;box-sizing:border-box;font-family:var(--mono);font-size:12.5px;resize:vertical"
         >${esc(s.code)}</textarea>
@@ -1170,13 +1193,21 @@ function renderIntTab(){
         <button class="btn" onclick="copyFrom('intCode')">Копировать код</button>
         ${s.id==='tag'?`<a class="btn" href="${esc(snippetBase())}/wheel" target="_blank">Проверить колесо</a>
           <a class="btn" href="/demo" target="_blank">Демо-страница</a>`:''}
-        ${s.id==='check'?'<button class="btn" onclick="viewIntegration()">Обновить статистику</button>':''}
       </div>
       ${/^https?:\/\/(localhost|127\.)/.test(snippetBase()) ? `<div class="svc-sub" style="margin-top:8px;color:var(--warn)">
         В коде стоит <span class="mono">${esc(snippetBase())}</span> — это локальный адрес: на сайте он не заработает.
-        Задайте <span class="mono">PUBLIC_BASE_URL</span> в <span class="mono">.env</span> сервиса и обновите страницу.</div>` : ''}
+        Задайте <span class="mono">PUBLIC_BASE_URL</span> в <span class="mono">.env</span> сервиса и обновите страницу.</div>` : ''}`;
+  box.innerHTML=`
+    <div class="tabbar" style="flex-wrap:wrap">${list.map(x=>
+      `<button class="tab ${x.id===s.id?'active':''}" onclick="setIntTab('${x.id}')">${esc(x.t)}${mark(x)}</button>`).join('')}</div>
+    <div class="card">
+      <div style="display:flex;justify-content:space-between;align-items:center;gap:12px;margin-bottom:6px">
+        <div class="svc-name">${esc(s.title)}</div>${pill}</div>
+      <div class="svc-sub" style="margin-bottom:10px">${s.hint}</div>
+      ${body}
       <p class="legend">${s.note}</p>
     </div>`;
+  if(s.self && !selfTest.data && !selfTest.busy) runSelfTest();  // открыл вкладку — проверили сразу
 }
 
 async function viewIntegration(){
