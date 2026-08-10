@@ -74,10 +74,18 @@
       <p class="muted">Подписчик с <code>consent_at</code> заведётся только при галочке. Корзина должна
         быть непустой — иначе сниппет не пингует и согласие не долетит (так и в бою).</p>
     </div>
+
+    <div class="card" style="margin-top:16px">
+      <h2>4. Заказ оформлен → <code>groster.order({order_id, total, items})</code></h2>
+      <div class="row"><button id="order">Оформить заказ (thank-you page)</button></div>
+      <p class="muted">Шлёт текущую корзину как покупку. Снимает все живые сессии покупателя с
+        рассылки (<code>converted</code>), кладёт заказ для атрибуции и ставит Постпродажу.
+        Повторный клик по тому же номеру сервер игнорирует — как F5 на странице «спасибо».</p>
+    </div>
   </div>
 
   <div class="card">
-    <h2>Живой лог отправок <code>/cart-ping</code></h2>
+    <h2>Живой лог отправок <code>/cart-ping</code> и <code>/order</code></h2>
     <div id="log"></div>
     <p class="muted">Каждое действие слева, пока вкладка активна и корзина непуста, порождает один POST.</p>
   </div>
@@ -93,9 +101,9 @@
   }
   var orig = window.fetch;
   window.fetch = function (url, opts) {
-    if (typeof url === 'string' && url.indexOf('/cart-ping') !== -1) {
+    if (typeof url === 'string' && /\/(cart-ping|order)$/.test(url)) {
       var body = opts && opts.body ? JSON.parse(opts.body) : {};
-      line('POST /cart-ping\n' + JSON.stringify(body, null, 2));
+      line('POST ' + url.replace(location.origin, '') + '\n' + JSON.stringify(body, null, 2));
     }
     return orig.apply(this, arguments);
   };
@@ -179,6 +187,24 @@
     window.__demoLine('groster.identify({ email: ' + JSON.stringify(email) + ', consent: ' + consent + ' })'
       + (Object.keys(cart).length ? '' : '\n⚠ корзина пуста → сниппет не пингует, согласие не долетит'));
   };
+
+  var orderNo = 0;
+  document.getElementById('order').onclick = function () {
+    var items = Object.keys(cart).map(function (id) {
+      return { product_id: id, price: cart[id].price, qty: cart[id].qty };
+    });
+    if (!items.length) { alert('Корзина пуста — нечего покупать'); return; }
+    // Номер держим стабильным между кликами: так видно, что повтор идемпотентен.
+    // Кнопка «Очистить корзину» начинает новый заказ.
+    orderNo = orderNo || Math.floor(Date.now() / 1000);
+    var total = items.reduce(function (s, i) { return s + i.price * i.qty; }, 0);
+    groster.order({ order_id: 'DEMO-' + orderNo, total: total, items: items });
+    window.__demoLine('groster.order({ order_id: "DEMO-' + orderNo + '", total: ' + total +
+      ', items: ' + items.length + ' поз. })');
+    cart = {};
+    renderCart();   // корзину чистим локально: order() уже погасил heartbeat на стороне сниппета
+  };
+  document.getElementById('clear').addEventListener('click', function () { orderNo = 0; });
 })();
 </script>
 </body>

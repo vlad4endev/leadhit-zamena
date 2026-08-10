@@ -9,13 +9,15 @@ from __future__ import annotations
 import json
 import os
 import re
+from datetime import datetime, timezone
+from types import SimpleNamespace
 from typing import Optional
 
 from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app import app_settings, db, onec, svc_config
+from app import app_settings, db, onec, postsale, svc_config
 from app.config import settings
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
@@ -276,6 +278,80 @@ async def cart_ping(ping: Ping) -> dict:
             known = {r["product_id"] for r in rows}
             unknown = [pid for pid in ids if pid not in known]
     return {"ok": True, "unknown": unknown}
+
+
+class OrderLine(BaseModel):
+    """Позиция купленного заказа. В отличие от корзины price/qty здесь значимы: из них
+    считается выручка, привязанная к письму (analytics.run_attribution)."""
+    product_id: str
+    price: float = 0
+    qty: int = 1
+
+
+class OrderPost(BaseModel):
+    """Транзакция со страницы «спасибо за заказ» (ТЗ 2 «код заказа»)."""
+    order_id: str
+    session_id: Optional[str] = None
+    user_id: Optional[str] = None
+    email: Optional[str] = None
+    total: Optional[float] = None   # сумма по версии CMS — только для сверки, не храним
+    items: list[OrderLine] = []
+
+
+@router.post("/order")
+async def order_post(o: OrderPost) -> dict:
+    """Покупка совершена: снимаем сессии покупателя с «брошенной корзины», кладём заказ
+    для атрибуции/KPI и ставим задачу Постпродажи.
+
+    Зовётся с thank-you page (groster.order(...)) либо сервер-сервер тем же телом.
+    Статусом заказа владеет 1С: существующий заказ НЕ переписываем, иначе F5 на странице
+    «спасибо» откатил бы уже проставленный 'paid' обратно в 'new'.
+    """
+    order_id = o.order_id.strip()
+    if not order_id:
+        raise HTTPException(status_code=422, detail="no_order_id")
+    email = o.email.strip() if valid_email(o.email) else None
+    total = round(sum(i.price * i.qty for i in o.items), 2)
+    items = json.dumps([i.model_dump() for i in o.items])
+
+    async with db.pool().acquire() as con:
+        # Стоп-кран рассылки. Снимаем ВСЕ живые сессии покупателя, а не только ту, из
+        # которой пришёл запрос: оформить могли во второй вкладке или на другом устройстве,
+        # и та сессия иначе доживёт до departed и пришлёт письмо уже купившему.
+        await con.execute(
+            """UPDATE cart_sessions SET state = 'converted'
+               WHERE state IN ('active', 'departed')
+                 AND (session_id = $1
+                      OR ($2::text IS NOT NULL AND user_id = $2)
+                      OR ($3::text IS NOT NULL AND email = $3))""",
+            o.session_id, o.user_id, email,
+        )
+        # user_id проставляем, только если такой подписчик уже есть (колонка под FK).
+        # Заводить подписчика по факту покупки нельзя: согласия на письма никто не давал
+        # (152-ФЗ) — подписчик появляется лишь по галочке, как и в cart_ping.
+        row = await con.fetchrow(
+            """INSERT INTO orders(order_id, user_id, email, order_date, status, items)
+               VALUES($1,
+                      (SELECT user_id FROM subscribers
+                        WHERE user_id = $2 OR ($3::text IS NOT NULL AND email = $3)
+                        LIMIT 1),
+                      $3, now(), 'new', $4::jsonb)
+               ON CONFLICT (order_id) DO NOTHING
+               RETURNING user_id""",
+            order_id, o.user_id, email, items,
+        )
+        # row is None → заказ уже был (повтор/1С успела раньше): ничего не трогаем.
+        if row is not None and row["user_id"]:
+            await postsale.enqueue_for_orders(con, [SimpleNamespace(
+                order_id=order_id, user_id=row["user_id"], status="new",
+                order_date=datetime.now(timezone.utc).isoformat())])
+
+    resp = {"ok": True, "total": total}
+    if o.total is not None and abs(o.total - total) > 0.01:
+        # Почти всегда это цены строкой с валютой → в позициях нули, и доход письма
+        # посчитается нулевым. Видно сразу в консоли витрины при ?grdebug=1.
+        resp["total_mismatch"] = o.total
+    return resp
 
 
 def cart_gate(

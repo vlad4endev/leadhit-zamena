@@ -101,4 +101,35 @@ const before = [{ product_id: 'p1', qty: 1 }];
 applyGa4(before, { event: 'add_to_cart', items: [{ item_id: 'p1', quantity: 1 }] });
 assert.deepStrictEqual(before, [{ product_id: 'p1', qty: 1 }], 'редьюсер чистый');
 
+// --- Код заказа (ТЗ 2) ---
+
+// Явный контракт витрины: событие order уходит в groster.order() как есть.
+assert.deepStrictEqual(
+  normEvent({ event: 'order', order_id: 'A-1', total: 100, items: [{ product_id: 'p1' }] }),
+  { call: 'order', order: { event: 'order', order_id: 'A-1', total: 100,
+                            items: [{ product_id: 'p1' }] } });
+
+// GA4 purchase несёт транзакцию: номер заказа и сумму берём из уже готовой разметки,
+// на thank-you page витрине дописывать нечего.
+const pur = ga4Event({ event: 'purchase', ecommerce: {
+  transaction_id: 'ГР-184213', value: 143.2,
+  items: [{ item_id: 'p1', price: 71.6, quantity: 2 }] } });
+assert.strictEqual(pur.kind, 'clear', 'purchase по-прежнему очищает корзину');
+assert.deepStrictEqual(pur.order, {
+  order_id: 'ГР-184213', total: 143.2,
+  items: [{ product_id: 'p1', qty: 2, price: 71.6 }] });
+
+// gtag-форма того же события.
+assert.strictEqual(
+  ga4Event(['event', 'purchase', { transaction_id: 'A-2', value: 10 }]).order.order_id, 'A-2');
+
+// purchase без номера заказа — только очистка корзины: атрибутировать нечего, а слать
+// заказ без order_id нельзя (идемпотентность на сервере держится именно на нём).
+assert.strictEqual(ga4Event({ event: 'purchase' }).order, undefined);
+assert.strictEqual(ga4Event({ event: 'purchase', ecommerce: { transaction_id: '' } }).order,
+  undefined);
+
+// Обычные события корзины заказа не порождают.
+assert.strictEqual(ga4Event({ event: 'add_to_cart', items: [{ item_id: 'p1' }] }).order, undefined);
+
 console.log('track.js self-check OK');

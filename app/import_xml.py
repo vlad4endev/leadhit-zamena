@@ -41,8 +41,15 @@ def parse(data: bytes) -> dict:
         root = ET.fromstring(data)  # уважает encoding из XML-декларации
     except ET.ParseError as e:
         raise ValueError(f"битый XML: {e}")
+    if root.tag == "yml_catalog":
+        # Стандартная выгрузка магазина (Яндекс.Маркет). Отдельной кнопки в админке нет
+        # намеренно: корень однозначен, поэтому та же «Импорт из файла» принимает оба
+        # формата, а дальше идёт общий import_all.
+        from app import import_yml
+        return import_yml.parse_root(root)
     if root.tag != "grosterhit-import":
-        raise ValueError(f"ожидался корень <grosterhit-import>, получен <{root.tag}>")
+        raise ValueError(
+            f"ожидался корень <grosterhit-import> или <yml_catalog>, получен <{root.tag}>")
 
     categories: dict[str, str] = {}   # category_id -> name (dedup, порядок появления)
     products: list[Product] = []

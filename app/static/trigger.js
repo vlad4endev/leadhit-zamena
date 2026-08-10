@@ -7,9 +7,10 @@
  *   <script src="https://groster.skypath.fun/trigger.js"
  *           data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
  *
- * Сайт кормит сниппет двумя вызовами:
+ * Сайт кормит сниппет тремя вызовами:
  *   groster.cart([{product_id, category_id, price, qty}])  // на каждое изменение корзины
  *   groster.identify({ user_id, email })                   // при логине / вводе email на оформлении
+ *   groster.order({ order_id, total, items })              // на thank-you page (ТЗ 2)
  *
  * Идентификация анонима (ROADMAP 3.4): приоритеты (залогинен > email в сессии > cookie)
  * решает интеграция на сайте — что передали в identify(), то и шлём. Cookie-приоритет
@@ -51,8 +52,35 @@
     return out;
   }
 
+  // Нормализация транзакции с thank-you page к контракту POST /order. null — слать нечего.
+  // В отличие от корзины price шлём всегда, пусть нулём: из позиций считается выручка
+  // письма в атрибуции, и «поля нет» бэкенду интерпретировать не во что.
+  function normOrder(o) {
+    o = o || {};
+    var id = String(o.order_id == null ? '' : o.order_id).trim();
+    if (!id) return null;
+    var src = o.items || [], items = [];
+    for (var i = 0; i < src.length; i++) {
+      var it = src[i] || {};
+      var pid = String(it.product_id == null ? '' : it.product_id).trim();
+      if (!pid) continue;
+      var price = Number(it.price);
+      items.push({
+        product_id: pid,
+        qty: Number(it.qty) || 1,
+        price: (it.price != null && it.price !== '' && !isNaN(price)) ? price : 0,
+      });
+    }
+    var out = { order_id: id, items: items };
+    var total = Number(o.total);
+    if (o.total != null && o.total !== '' && !isNaN(total)) out.total = total;
+    return out;
+  }
+
   if (typeof module !== 'undefined' && module.exports) {
-    module.exports = { cartHash: cartHash, shouldPing: shouldPing, normItem: normItem };
+    module.exports = {
+      cartHash: cartHash, shouldPing: shouldPing, normItem: normItem, normOrder: normOrder,
+    };
     return; // под node на этом всё — браузерный бутстрап ниже требует document
   }
 
@@ -96,18 +124,10 @@
     try { console.log.apply(console, ['[groster]'].concat([].slice.call(arguments))); } catch (e) {}
   }
 
-  function send() {
+  function post(path, body) {
     if (!S.endpoint) return;
-    var body = {
-      session_id: S.sid,
-      user_id: S.user_id || null,
-      email: S.email || null,
-      cart_items: S.items,
-      cart_hash: S.hash,
-      consent: S.consent || null,
-    };
     try {
-      var p = root.fetch(S.endpoint + '/cart-ping', {
+      var p = root.fetch(S.endpoint + path, {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify(body),
@@ -115,7 +135,7 @@
         credentials: 'omit',   // session_id в теле, cookie сервису не нужен
       });
       if (!S.debug) { p.catch(function () {}); return; } // fire-and-forget: сбой сети не ломает сайт
-      log('POST /cart-ping', body);
+      log('POST ' + path, body);
       p.then(function (r) { return r.ok ? r.json() : { http: r.status }; })
         .then(function (d) {
           log('ответ', d);
@@ -123,8 +143,23 @@
             console.warn('[groster] нет в каталоге product_id: ' + d.unknown.join(', ') +
               ' — письмо по такой корзине не уйдёт');
           }
+          if (d && d.total_mismatch != null) {
+            console.warn('[groster] сумма заказа по версии сайта ' + d.total_mismatch +
+              ' ≠ сумме позиций ' + d.total + ' — проверьте, что price идёт числом');
+          }
         }, function (e) { log('сеть недоступна', e); });
     } catch (e) { /* no-op */ }
+  }
+
+  function send() {
+    post('/cart-ping', {
+      session_id: S.sid,
+      user_id: S.user_id || null,
+      email: S.email || null,
+      cart_items: S.items,
+      cart_hash: S.hash,
+      consent: S.consent || null,
+    });
   }
 
   function pingIfDue() {
@@ -179,6 +214,23 @@
       log('identify()', { user_id: S.user_id, email: S.email, consent: S.consent });
       if (S.email && !S.consent) log('email без consent → только идентификация, письма не будет');
       pingIfDue();
+      return api;
+    },
+
+    // Покупка совершена (thank-you page). Останавливает серию «брошенная корзина» и даёт
+    // атрибуции факт заказа с выручкой. Повтор по тому же order_id сервер игнорирует —
+    // клиентский дедуп не нужен, F5 на странице «спасибо» безопасен.
+    order: function (o) {
+      var body = normOrder(o);
+      if (!body) { log('order() без order_id — игнор'); return api; }
+      body.session_id = S.sid;
+      body.user_id = S.user_id || null;
+      body.email = S.email || null;
+      log('order()', body);
+      post('/order', body);
+      // Корзины больше нет → heartbeat прекращается сам (shouldPing по itemCount).
+      S.items = [];
+      S.hash = cartHash(S.items);
       return api;
     },
   };

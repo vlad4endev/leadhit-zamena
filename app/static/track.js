@@ -23,6 +23,8 @@
  *   5. ga4 (деф. вкл): читает ecommerce-события GA4/GTM из window.dataLayer, если они на
  *      сайте уже есть → корзина без единой строки кода на витрине. Явный пуш в grDataLayer
  *      старше: как только сайт сказал состав сам, адаптер замолкает.
+ *   6. заказы (ТЗ 2): событие purchase из той же GA4-разметки → groster.order() с номером
+ *      заказа и суммой. Нет GA4 — витрина пушит { event:'order', ... } сама.
  *
  * clid: сейчас бэкенд однотенантный — clid принимается, но не влияет на маршрутизацию.
  * ponytail: мультитенант по clid добавим, когда появится второй клиент (YAGNI).
@@ -64,10 +66,12 @@
   //   { event:'cart', items:[{product_id,category_id,price,qty}] }  → groster.cart(items)
   //   { event:'clear' }                                             → groster.cart([])
   //   { event:'identify', user_id, email, consent }                 → groster.identify(...)
+  //   { event:'order', order_id, total, items }                     → groster.order(...)
   function normEvent(e) {
     if (!e || typeof e !== 'object') return null;
     if (e.event === 'cart') return { call: 'cart', items: Array.isArray(e.items) ? e.items : [] };
     if (e.event === 'clear') return { call: 'cart', items: [] };
+    if (e.event === 'order') return { call: 'order', order: e };
     if (e.event === 'identify') {
       var ids = {};
       if (e.user_id != null) ids.user_id = e.user_id;
@@ -114,7 +118,18 @@
       if (it.price != null && it.price !== '' && !isNaN(price)) out.price = price;
       items.push(out);
     }
-    return { kind: kind, items: items };
+    var out2 = { kind: kind, items: items };
+    // purchase несёт саму транзакцию — номер заказа и сумму. Это и есть «код заказа» из
+    // ТЗ 2, полученный из готовой разметки: на thank-you page витрине дописывать нечего.
+    if (kind === 'clear') {
+      var oid = payload.transaction_id != null ? payload.transaction_id : payload.order_id;
+      if (oid != null && String(oid).trim() !== '') {
+        out2.order = { order_id: String(oid), items: items };
+        var val = Number(payload.value);
+        if (payload.value != null && payload.value !== '' && !isNaN(val)) out2.order.total = val;
+      }
+    }
+    return out2;
   }
 
   function copyItem(i) {
@@ -124,10 +139,9 @@
     return o;
   }
 
-  // Чистый редьюсер: (состояние, событие) → новое состояние или null (событие не наше).
-  function applyGa4(state, raw) {
-    var e = ga4Event(raw);
-    if (!e) return null;
+  // Чистый редьюсер по УЖЕ разобранному событию. Отдельно от applyGa4, потому что
+  // installGa4 разбирает событие один раз: ему нужен ещё и заказ из purchase.
+  function reduceGa4(state, e) {
     if (e.kind === 'clear') return [];
     if (e.kind === 'set') return e.items;
     var out = (state || []).map(copyItem);
@@ -145,6 +159,12 @@
       }
     }
     return out;
+  }
+
+  // Чистый редьюсер: (состояние, сырое событие) → новое состояние или null (не наше).
+  function applyGa4(state, raw) {
+    var e = ga4Event(raw);
+    return e ? reduceGa4(state, e) : null;
   }
 
   if (typeof module !== 'undefined' && module.exports) {
@@ -247,6 +267,7 @@
       var m = normEvent(e);
       if (!m || !root.groster) return;
       if (m.call === 'cart') { siteOwnsCart = true; root.groster.cart(m.items); }
+      else if (m.call === 'order') root.groster.order(m.order);
       else root.groster.identify(m.ids);
     }
     var buffered = q.slice(); // то, что сайт напушил до нас
@@ -267,10 +288,14 @@
     var dl = root[name] = root[name] || [];
     var state = [];
     function process(raw) {
-      if (siteOwnsCart || !root.groster) return;
-      var next = applyGa4(state, raw);
-      if (!next) return;
-      state = next;
+      if (!root.groster) return;
+      var e = ga4Event(raw);
+      if (!e) return;
+      // Транзакцию отдаём всегда, даже когда состав корзины ведёт сайт: заказ на сервере
+      // идемпотентен по order_id, а потерять покупку дороже, чем прислать её дважды.
+      if (e.order) root.groster.order(e.order);
+      if (siteOwnsCart) return;
+      state = reduceGa4(state, e);
       root.groster.cart(state);
     }
     var origPush = dl.push;

@@ -924,8 +924,8 @@ async function viewFeeds(){
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
         <button class="btn" onclick="computeTop5()" title="Автоматически вычислить топ-5 по категориям из истории заказов">Пересчитать топ-5</button>
-        <input type="file" id="importFile" accept=".xml,.json,text/xml,application/xml,application/json" style="display:none" onchange="importFile(this)">
-        <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML/JSON)</button>
+        <input type="file" id="importFile" accept=".xml,.yml,.json,text/xml,application/xml,application/json" style="display:none" onchange="importFile(this)">
+        <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML/YML/JSON)</button>
       </div>
     </div>
     <div class="card statbar">
@@ -970,7 +970,8 @@ async function computeTop5(){
 async function importFile(input){
   const file=input.files&&input.files[0]; input.value='';
   if(!file)return;
-  const ep=/\.json$/i.test(file.name)?'/admin/import-json':'/admin/import-xml';  // маршрут по расширению
+  // Маршрут по расширению; XML и YML идут одним роутом — формат там распознаётся по корню файла.
+  const ep=/\.json$/i.test(file.name)?'/admin/import-json':'/admin/import-xml';
   const resp=await fetch(ep,{method:'POST',body:file});
   const r=await resp.json();
   if(r.ok){ const c=r.imported||{}; const parts=Object.keys(c).map(k=>`${k}: ${c[k]}`).join(', ');

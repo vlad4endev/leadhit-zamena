@@ -17,7 +17,8 @@ app/
   config.py      настройки + тайминги сценариев (из .env)
   db.py          пул asyncpg
   feeds.py       приём фидов: categories/products/top5/subscribers/orders
-  import_xml.py  импорт каталога/топ-5/подписчиков из XML-файла (админка)
+  import_xml.py  импорт каталога/топ-5/подписчиков из XML-файла (админка); диспетчер формата
+  import_yml.py  импорт каталога из YML (Yandex Market Language) — стандартной выгрузки витрины
   mailer.py      Mailer (абстракция) + LogMailer (dev); реальный ESP — одна реализация
   templates.py   общий email-макет (товарный блок + UTM + отписка)
   postsale.py    Сервис 3 — Постпродажа (delayed-job +7д)
@@ -59,6 +60,7 @@ delayed-job; атрибуция — по расписанию.
 | GET | `/demo` | dev/reference: эталон разводки `cart()`/`identify()` (см. docs/site_integration.md) |
 | PUT | `/feeds/{categories,products,top5,subscribers,orders}` | приём фидов |
 | POST | `/cart-ping` | heartbeat корзины (session-ping) |
+| POST | `/order` | код заказа с thank-you page: снимает сессии с рассылки, даёт выручку атрибуции |
 | POST | `/esp/webhook` | статусы письма от ESP |
 | GET | `/unsubscribe` | отписка по ссылке из футера (подтверждение → `confirm=1`) |
 | GET | `/kpi` | 6 метрик по сервису + бенчмарк + флаг просадки |
@@ -66,7 +68,7 @@ delayed-job; атрибуция — по расписанию.
 | GET/PUT | `/admin/config[/{service}]` | вкл/выкл + интервалы/cooldown (без перезапуска) |
 | GET | `/admin/{logs,feeds-status}` | просмотр логов, мониторинг актуальности фидов |
 | POST | `/admin/run/{service}` | ручной запуск воркера |
-| POST | `/admin/import-xml` | импорт каталога/топ-5/подписчиков из XML-файла (тело = файл) |
+| POST | `/admin/import-xml` | импорт каталога/топ-5/подписчиков из файла — свой XML или YML (тело = файл) |
 
 ## Триггер на сайте (брошенная корзина)
 Клиентская часть сервиса 2 — «намеренно тупой» сниппет (`app/static/trigger.js`,
@@ -99,13 +101,17 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
 Рабочий эталон с фейковой корзиной и живым логом — `GET /demo`.
 
 ## Источник данных
-- **Заказы**: живой HTTP из 1С (`/orders/exists`) — контракт в
-  [db/1c_contract.md](db/1c_contract.md), клиент в `app/onec.py`. Включается `ONEC_BASE_URL`
-  (+ `ONEC_TOKEN`) в `.env`; при сбое/выключенной 1С падаем на локальную таблицу `orders`.
-- **Каталог, топ-5, подписчики**: импорт **файлом** (XML, загрузка в админке `/admin` →
-  «Импорт из файла») — заменяет живой `/catalog` из 1С. Контракт и пример:
-  [db/import_contract.md](db/import_contract.md), [db/import_sample.xml](db/import_sample.xml).
-  Парсер — `app/import_xml.py` (переиспользует upsert'ы `feeds.py`).
+- **Заказы**: три источника, все идемпотентны по `order_id`. Живой HTTP из 1С
+  (`/orders/exists`, гейт «уже купил») — контракт в [db/1c_contract.md](db/1c_contract.md),
+  клиент в `app/onec.py`, включается `ONEC_BASE_URL`. Push сервер-сервер `PUT /feeds/orders`.
+  И `POST /order` со страницы «спасибо» (`groster.order()`): единственный путь, не требующий
+  ничего от 1С. Статусом заказа владеет 1С — существующий заказ витрина не переписывает.
+- **Каталог, топ-5, подписчики**: импорт **файлом** (загрузка в админке `/admin` →
+  «Импорт из файла») — заменяет живой `/catalog` из 1С. Принимаются свой XML
+  ([db/import_contract.md](db/import_contract.md), [пример](db/import_sample.xml),
+  парсер `app/import_xml.py`), стандартный **YML** Яндекс.Маркета (`app/import_yml.py`,
+  формат определяется по корню файла) и JSON-выгрузка витрины (`app/import_json.py`).
+  Все три сводятся к одной структуре и общему `import_xml.import_all` — upsert'ы из `feeds.py`.
 - **Корзина**: из 1С **не запрашивается** — истина на момент отправки берётся из пинга сниппета
   (`cart_sessions`, решение п.2).
 - **Дев/тест**: push-фиды `PUT /feeds/*` (см. `scripts/seed.py`).
