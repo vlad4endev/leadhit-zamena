@@ -98,23 +98,55 @@ def _color(c, default: str) -> str:
 
 
 def _utm(url: str, campaign: str) -> str:
-    sep = "&" if "?" in (url or "") else "?"
+    # Пустой url → "#": иначе получалось href="?utm_source=…" (ссылка на сам файл письма).
+    if not (url or "").strip():
+        return "#"
+    sep = "&" if "?" in url else "?"
     return f"{url}{sep}utm_source=trigger&utm_campaign={campaign}"
 
 
+def _price(v) -> str:
+    """Цена как в админке (priceRu): 71.6 → «71,60 ₽», 12 → «12 ₽».
+    int() округлял вниз и терял копейки — в письме была цена «71 ₽» вместо 71,60.
+    Разряды и пробел перед ₽ — неразрывные (U+00A0): цена не переносится по строкам."""
+    try:
+        n = float(v or 0)
+    except (TypeError, ValueError):
+        return ""
+    s = f"{n:,.2f}" if n % 1 else f"{n:,.0f}"
+    return s.replace(",", "\u00a0").replace(".", ",") + "\u00a0₽"
+
+
+CARDS_PER_ROW = 3  # 3×180px ≈ 600px влезает в 640px письма; больше — карточки уезжают за край
+
+
 def _card(p: dict, campaign: str, minimal: bool, lk: dict) -> str:
-    url = _utm(p["product_url"], campaign)
-    img = (f'<img src="{p["image_url"]}" width="150" style="max-width:150px;border-radius:8px" alt="">'
-           if p.get("image_url") else '<div style="height:150px;background:#eef2f8;border-radius:8px"></div>')
+    url = _esc(_utm(p.get("product_url"), campaign))
+    name = _esc(p.get("name"))
+    price = _price(p.get("price"))
     if minimal:
-        return f'<tr><td style="padding:6px 0"><a href="{url}">{p["name"]}</a> — {int(p["price"])} ₽</td></tr>'
+        return f'<tr><td style="padding:6px 0"><a href="{url}">{name}</a> — {price}</td></tr>'
+    # alt=название: если фото 404 (битый image_url в выгрузке), почтовик покажет название,
+    # а не пустой прямоугольник.
+    img = (f'<img src="{_esc(p["image_url"])}" width="150" alt="{name}" '
+           f'style="max-width:150px;border-radius:8px">'
+           if p.get("image_url") else '<div style="height:150px;background:#eef2f8;border-radius:8px"></div>')
     return (
         f'<td width="180" style="padding:10px;text-align:center;vertical-align:top">'
-        f'{img}<div style="font-weight:600;margin:8px 0 4px">{p["name"]}</div>'
-        f'<div style="color:#555;margin-bottom:8px">{int(p["price"])} ₽</div>'
+        f'{img}<div style="font-weight:600;margin:8px 0 4px">{name}</div>'
+        f'<div style="color:#555;margin-bottom:8px">{price}</div>'
         f'<a href="{url}" style="display:inline-block;background:{lk["brand_color"]};color:#fff;'
         f'text-decoration:none;padding:8px 16px;border-radius:8px;font-size:14px">{lk["button"]}</a></td>'
     )
+
+
+def _cards_table(products: list[dict], campaign: str, lk: dict) -> str:
+    """Сетка карточек по CARDS_PER_ROW в строке. Одной строкой 5–8 товаров вылезали
+    за границу письма (в почтовых клиентах нет горизонтального скролла)."""
+    rows = "".join(
+        f'<tr>{"".join(_card(p, campaign, False, lk) for p in products[i:i + CARDS_PER_ROW])}</tr>'
+        for i in range(0, len(products), CARDS_PER_ROW))
+    return f'<table role="presentation" style="margin:8px 0">{rows}</table>'
 
 
 def render_email(intro_html: str, products: list[dict], user_id: str,
@@ -132,14 +164,13 @@ def render_email(intro_html: str, products: list[dict], user_id: str,
             f'<a href="{unsub}">{lk["footer"]}</a></p></div>'
         )
 
-    cards = "".join(_card(p, campaign, False, lk) for p in products)
     return (
         f'<div style="font-family:sans-serif;max-width:640px;margin:0 auto;'
         f'border:1px solid #e6ebf3;border-radius:14px;overflow:hidden">'
         f'<div style="background:{lk["brand_color"]};color:#fff;padding:16px 24px;font-weight:700;font-size:18px">'
         f'{lk["header"]}</div>'
         f'<div style="padding:24px">{intro_html}'
-        f'<table><tr>{cards}</tr></table></div>'
+        f'{_cards_table(products, campaign, lk)}</div>'
         f'<div style="background:#f5f7fb;padding:16px 24px;font-size:12px;color:#888">'
         f'<a href="{unsub}" style="color:#888">{lk["footer"]}</a></div></div>'
     )
@@ -157,7 +188,7 @@ def _cta(text: str, url: str, lk: dict, campaign: str) -> str:
     )
 
 
-def _render_block(b: dict, products: list[dict], campaign: str, lk: dict) -> str:
+def _render_block(b: dict, products: list[dict], campaign: str, lk: dict, user_id: str = "") -> str:
     t = b.get("type")
     if t == "heading":
         size = _HEAD_SIZE.get(b.get("size", "m"), _HEAD_SIZE["m"])
@@ -176,8 +207,7 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict) -> str
                  f'{_font_css(b.get("font"))}')
         return f'<div style="{style}">{body}</div>'
     if t == "products":
-        cards = "".join(_card(p, campaign, False, lk) for p in products)
-        return f'<table role="presentation" style="margin:8px 0"><tr>{cards}</tr></table>'
+        return _cards_table(products, campaign, lk)
     if t == "button":
         return f'<div style="text-align:{_align(b.get("align", "center"))}">{_cta(b.get("text", "Перейти"), b.get("url", "#"), lk, campaign)}</div>'
     if t == "image":
@@ -216,9 +246,11 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict) -> str
             for label, url in items if url)
         return f'<div style="text-align:center;margin:14px 0">{pills}</div>' if pills else ""
     if t == "html":
-        # Сырой HTML от админа (доверенный источник) — отдаём как есть, без санитизации:
-        # это единственный способ сохранить табличную вёрстку готового письма.
-        return b.get("html") or ""
+        # Сырой HTML от админа (доверенный источник) — без санитизации: это единственный способ
+        # сохранить табличную вёрстку готового письма. Но через Jinja-слой: в импортированных
+        # письмах товары и фото приходят циклом {% for item in get_*() %} — без рендера
+        # в письмо уезжал сам код шаблона вместо карточек.
+        return render_html_template(b.get("html") or "", products, user_id, campaign)
     if t == "columns":
         left = sanitize_html(b.get("left") or "")
         right = sanitize_html(b.get("right") or "")
@@ -232,7 +264,8 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict) -> str
 def _mjml_items(products: list[dict] | None) -> list[dict]:
     """Адаптер: наши товары → объекты, которых ждёт MJML-шаблон LeadHit.
     Шаблон обращается к item.url/picture/name/price и делит цену на 100 (LeadHit хранил
-    копейки) — поэтому цену в рублях домножаем обратно."""
+    копейки) — поэтому цену в рублях домножаем обратно. Дополнительно даём item.price_str —
+    готовую цену «71,60 ₽» для своих шаблонов (в копейках/100 теряются копейки)."""
     out = []
     for p in (products or []):
         out.append({
@@ -240,6 +273,7 @@ def _mjml_items(products: list[dict] | None) -> list[dict]:
             "picture": p.get("image_url") or "",
             "name": p.get("name") or "",
             "price": int(round(float(p.get("price") or 0) * 100)),
+            "price_str": _price(p.get("price")),
         })
     return out
 
@@ -297,7 +331,10 @@ def _jinja_render(source: str, products: list[dict], user_id: str, campaign: str
     ctx["get_utc_time"] = lambda *a, **k: datetime.datetime.now(datetime.timezone.utc).isoformat()
     ctx["exit"] = ctx["abort"] = ctx["stop"] = lambda *a, **k: ""   # «не слать без данных» → no-op
     # ChainableUndefined: неизвестные переменные/атрибуты рендерятся пустыми, а не роняют шаблон.
-    env = jinja2.Environment(autoescape=False, undefined=jinja2.ChainableUndefined)
+    # autoescape=True: подставляем только текст/URL товаров, а имена вроде «Салфетка 30*30 "ГОРНИЦА"»
+    # с кавычками и & иначе рвут атрибуты вёрстки (alt/src/href). На саму разметку шаблона
+    # автоэкранирование не влияет — только на значения в {{ … }}.
+    env = jinja2.Environment(autoescape=True, undefined=jinja2.ChainableUndefined)
     return env.from_string(source).render(**ctx)
 
 
@@ -360,11 +397,14 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
             return render_html_template(raw, products, user_id, campaign)
     # Импорт, разбитый на секции: все блоки html → склеиваем как есть, без брендовой обёртки
     # (у письма своя шапка/футер). Так «разбито по блокам», а вид остаётся 1-в-1.
+    # Склейку прогоняем через Jinja-слой целиком: цикл товаров может быть разрезан на секции,
+    # и тогда {% for %} и {% endfor %} лежат в разных блоках — по отдельности не отрендерятся.
     if blocks and all((b or {}).get("type") == "html" for b in blocks):
-        return "".join((b.get("html") or "") for b in blocks).replace("{{unsubscribe_url}}", unsub)
+        return render_html_template("".join((b.get("html") or "") for b in blocks),
+                                    products, user_id, campaign)
     parts = []
     for b in blocks:
-        html = _render_block(b, products, campaign, lk)
+        html = _render_block(b, products, campaign, lk, user_id)
         if html:
             box = []
             if _valid_color(b.get("bg")):
@@ -409,3 +449,42 @@ DEFAULT_BLOCKS: dict[str, list[dict]] = {
         {"type": "products"},
     ],
 }
+
+
+def _demo() -> None:
+    """Self-check рендера товаров/фото (без БД и почты)."""
+    P = [{"product_id": str(i), "name": f'Товар & "{i}"', "price": 71.6 if i == 1 else i,
+          "image_url": f"https://static.groster.me/{i}.png" if i < 5 else None,
+          "product_url": "" if i == 2 else f"https://groster.me/p/{i}"} for i in range(1, 8)]
+
+    # Цена: копейки не теряются (было int(71.6) == 71), формат как в админке, пробелы NBSP.
+    assert _price(71.6) == "71,60\u00a0₽" and _price(12) == "12\u00a0₽"
+    assert _price(1234.5) == "1\u00a0234,50\u00a0₽" and _price(None) == "0\u00a0₽"
+    # Пустой product_url → "#", а не href="?utm_source=…".
+    assert _utm("", "cart") == "#" and _utm("https://a/b", "cart").endswith("utm_campaign=cart")
+
+    card = _card(P[0], "cart", False, LOOK_DEFAULTS)
+    assert "71,60\u00a0₽" in card                              # цена с копейками
+    assert '&amp; &quot;1&quot;' in card                        # имя экранировано (кавычки в alt)
+    assert 'alt="Товар' in card                                 # битое фото → видно название
+    # 7 товаров → 3 строки карточек (по CARDS_PER_ROW), иначе вёрстка уезжает за 640px.
+    assert _cards_table(P, "cart", LOOK_DEFAULTS).count("<tr>") == 3
+
+    # Импортированное письмо, разрезанное на секции: цикл товаров ЖИВОЙ (был текстом в письме).
+    secs = [{"type": "html", "html": '<div>{% for item in get_cart_items() %}<img src="{{ item.picture }}">'},
+            {"type": "html", "html": '<b>{{ item.name }}</b>{% endfor %}</div>'}]
+    out = render_blocks(secs, P[:2], "u1", "cart")
+    assert "{% for" not in out and "{{ item" not in out, out
+    assert "static.groster.me/1.png" in out and "Товар &amp;" in out
+
+    # html-блок рядом с нативными блоками — тоже через Jinja + подстановка отписки.
+    mixed = render_blocks([{"type": "heading", "text": "Привет"},
+                           {"type": "html", "html": '{% for i in get_x() %}<i>{{ i.name }}</i>{% endfor %}'
+                                                    '<a href="{{unsubscribe_url}}">off</a>'}],
+                          P[:1], "u9", "best_offer")
+    assert "<i>Товар &amp;" in mixed and "unsubscribe?u=u9" in mixed and "{%" not in mixed
+    print("templates._demo OK")
+
+
+if __name__ == "__main__":
+    _demo()

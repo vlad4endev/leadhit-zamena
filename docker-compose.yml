@@ -76,6 +76,10 @@ services:
 
   nginx:
     image: nginx:1.27-alpine
+    # Профиль: обычный `docker compose up -d` этот сервис НЕ поднимает. На хостах за NPM
+    # (Nginx Proxy Manager) 80/443 держит он, и запуск падал с «port is already allocated».
+    # Standalone-хост (TLS терминирует сам этот nginx): docker compose --profile standalone up -d
+    profiles: ["standalone"]
     ports:
       - "80:80"
       - "443:443"
