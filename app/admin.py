@@ -1061,6 +1061,26 @@ async def integration() -> dict:
                       (SELECT count(DISTINCT session_id) FROM bad) AS bad_sessions,
                       (SELECT array_agg(pid) FROM (SELECT DISTINCT pid FROM bad LIMIT 5) s)
                         AS sample""")
+        # Стата связи по шагам интеграции: какие вызовы витрина реально делает.
+        # Пустой счётчик здесь = шаг на сайте не подключён (а не «нет трафика»).
+        conn = await con.fetchrow(
+            """SELECT
+                 (SELECT count(*) FROM cart_sessions
+                   WHERE last_ping_at >= now() - interval '24 hours') AS sessions_24h,
+                 (SELECT count(*) FROM cart_sessions
+                   WHERE last_ping_at >= now() - interval '24 hours'
+                     AND user_id IS NOT NULL) AS logged_in_24h,
+                 (SELECT count(*) FROM cart_sessions
+                   WHERE last_ping_at >= now() - interval '24 hours'
+                     AND email IS NOT NULL) AS identified_24h,
+                 (SELECT max(last_ping_at) FROM cart_sessions
+                   WHERE email IS NOT NULL) AS last_identify_at,
+                 (SELECT count(*) FROM subscribers
+                   WHERE consent_at >= now() - interval '24 hours') AS consent_24h,
+                 (SELECT max(consent_at) FROM subscribers) AS last_consent_at,
+                 (SELECT count(*) FROM orders
+                   WHERE order_date >= now() - interval '24 hours') AS orders_24h,
+                 (SELECT max(order_date) FROM orders) AS last_order_at""")
     return {
         "mailer": mailer,
         "live": mailer != "LogMailer",
@@ -1079,6 +1099,15 @@ async def integration() -> dict:
         "cart_sessions_24h": int(diag["sessions"] or 0),
         "unknown_product_sessions_24h": int(diag["bad_sessions"] or 0),
         "unknown_product_sample": list(diag["sample"] or []),
+        # Шаги интеграции по факту данных (раздел «Интеграция» → «Связь с сайтом»).
+        "sessions_24h": int(conn["sessions_24h"] or 0),
+        "logged_in_24h": int(conn["logged_in_24h"] or 0),
+        "identified_24h": int(conn["identified_24h"] or 0),
+        "last_identify_at": _iso(conn["last_identify_at"]),
+        "consent_24h": int(conn["consent_24h"] or 0),
+        "last_consent_at": _iso(conn["last_consent_at"]),
+        "orders_24h": int(conn["orders_24h"] or 0),
+        "last_order_at": _iso(conn["last_order_at"]),
     }
 
 
