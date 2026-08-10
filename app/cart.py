@@ -143,9 +143,13 @@ class WheelPrize(BaseModel):
     label: Optional[str] = None
 
 
-def _wheel_prize_html(code: str, label: Optional[str]) -> str:
-    """Простое брендированное письмо с промокодом. Без каталога — только код и CTA."""
-    site = settings.public_base_url.rstrip("/")
+def _wheel_prize_html(code: str, label: Optional[str], site: Optional[str] = None) -> str:
+    """Простое брендированное письмо с промокодом. Без каталога — только код и CTA.
+
+    site — адрес МАГАЗИНА (деф. SHOP_URL), не домен сервиса рассылок. Параметром, а не
+    только из настроек, чтобы self-check ловил регресс на public_base_url.
+    """
+    site = (site or settings.shop_url).rstrip("/")
     title = label or "Ваш приз"
     return f"""\
 <div style="font-family:Montserrat,Arial,sans-serif;max-width:520px;margin:0 auto;color:#3a1152">
@@ -460,6 +464,12 @@ def _demo() -> None:
     assert valid_email("a@b.ru") and valid_email(" user.name+x@mail.example.com ")
     assert not valid_email(None) and not valid_email("") and not valid_email("noatsign")
     assert not valid_email("a@b") and not valid_email("a b@c.ru") and not valid_email("a@@b.ru")
+    # Письмо с промокодом ведёт в МАГАЗИН, а не на домен сервиса рассылок: регресс сюда
+    # посылает покупателя на 404 домена рассылок. Явный site → ассерт ловит подмену.
+    prize = _wheel_prize_html("GROSTER5", "Скидка 5%", site="https://shop.example/")
+    assert 'href="https://shop.example"' in prize    # хвостовой / срезан
+    assert settings.public_base_url.rstrip("/") not in prize
+    assert "GROSTER5" in prize and "Скидка 5%" in prize
     print("cart._demo OK")
 
 
