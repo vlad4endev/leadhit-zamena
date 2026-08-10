@@ -30,9 +30,11 @@ CREATE TABLE products (
     category_id  TEXT NOT NULL REFERENCES categories(category_id),
     product_url  TEXT NOT NULL,
     in_stock     BOOLEAN NOT NULL DEFAULT TRUE,
+    tags         TEXT[] NOT NULL DEFAULT '{}',   -- членство в фидах: Новинка/Топ/Сопутствующий
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX products_category_idx ON products(category_id) WHERE in_stock;
+CREATE INDEX products_tags_idx ON products USING GIN (tags);
 
 -- Фид «топ-5 по категориям» от заказчика (источник релевантности вместо ML).
 CREATE TABLE top5_by_category (

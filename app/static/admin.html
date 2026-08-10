@@ -170,6 +170,11 @@ section+section{margin-top:32px}
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:32px}
 .recprice{font-family:var(--mono);font-weight:600;font-size:13px}
 .recflag{font-size:11px;margin-top:4px}
+.tagrow{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
+.tagchip{font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--surface-2);color:var(--muted);border:1px solid var(--border)}
+.tagchip.tag-new{background:#e8f7ee;color:#1a7f45;border-color:#bfe8cf}
+.tagchip.tag-top{background:#fff3e0;color:#b26a00;border-color:#ffdca8}
+.tagchip.tag-rel{background:#eef1ff;color:#3a49b8;border-color:#cdd4f7}
 .listrow{display:flex;align-items:center;gap:12px;padding:8px 16px;border-bottom:1px solid var(--border);font-size:13px}
 .listrow:last-child{border-bottom:none}
 .listrow.dim{opacity:.5}
@@ -814,7 +819,7 @@ async function viewAnalytics(){
 function priceRu(v){ return v==null?'—':v.toLocaleString('ru-RU',{minimumFractionDigits:(v%1?2:0),maximumFractionDigits:2})+' ₽'; }
 // Битый src (404/недоступен) → плейсхолдер «нет фото» вместо сломанной иконки.
 function imgOnerr(el){ el.onerror=null; const d=document.createElement('div'); d.className='recimg ph'; d.textContent='нет фото'; el.replaceWith(d); }
-let recCat='', recView='cards', recProblems=false;
+let recCat='', recView='cards', recProblems=false, recTag='';
 function setRecView(v){ recView=v; viewFeeds(); }
 function recStatusPill(pr){
   if(!pr.exists) return '<span class="pill unsubscribed">нет в каталоге</span>';
@@ -877,21 +882,24 @@ async function viewFeeds(){
       <span class="lr-price mono">${priceRu(pr.price)}</span>
       ${recStatusPill(pr)}</div>`).join('')}</div></section>`).join('');
 
-  // Каталог: все товары карточками (в отличие от карточек топ-5). Фильтр по категории тот же.
+  // Каталог: все товары карточками (в отличие от карточек топ-5). Фильтры: категория + тег.
+  const tagCls={'Новинка':'tag-new','Топ':'tag-top','Сопутствующий':'tag-rel'};
   let ccats = catData ? (recCat?catData.categories.filter(c=>c.category_id===recCat):catData.categories) : [];
+  if(recTag) ccats = ccats.map(c=>({...c, products:c.products.filter(p=>(p.tags||[]).includes(recTag))})).filter(c=>c.products.length);
   const catalogCards = ccats.map(c=>{
     const items=c.products.map(pr=>{
       const dim = pr.in_stock ? '' : ' dim';
       const img = pr.image_url
         ? `<img class="recimg" src="${esc(pr.image_url)}" alt="" onerror="imgOnerr(this)">`
         : `<div class="recimg ph">нет фото</div>`;
+      const chips=(pr.tags||[]).map(t=>`<span class="tagchip ${tagCls[t]||''}">${esc(t)}</span>`).join('');
       const flag = pr.in_stock ? '<div class="recflag" style="color:var(--ok)">в наличии</div>'
         : '<div class="recflag" style="color:var(--warn)">нет в наличии</div>';
       const label = esc(pr.name||('id '+pr.product_id));
       const name = pr.product_url
         ? `<a class="recname" href="${esc(pr.product_url)}" target="_blank" rel="noopener" title="${esc(pr.name||pr.product_id)}">${label}</a>`
         : `<div class="recname" title="${esc(pr.name||pr.product_id)}">${label}</div>`;
-      return `<div class="recitem${dim}">${img}${name}
+      return `<div class="recitem${dim}">${img}${chips?`<div class="tagrow">${chips}</div>`:''}${name}
         <div class="recprice">${priceRu(pr.price)}</div>${flag}</div>`;
     }).join('');
     return `<section><div class="eyebrow">
@@ -899,8 +907,9 @@ async function viewFeeds(){
         <span class="rule"></span></div>
       <div class="recgrid">${items}</div></section>`;
   }).join('');
+  const catShown = ccats.reduce((s,c)=>s+c.products.length,0);
   const catalogSection = (catData && catData.product_count)
-    ? catalogCards
+    ? (ccats.length?catalogCards:'<section><div class="tablewrap"><div class="empty">Нет товаров с этим тегом.</div></div></section>')
     : '<section><div class="tablewrap"><div class="empty">Каталог пуст. Импортируйте товары из файла.</div></div></section>';
 
   const seg=(v,l)=>`<button class="${recView===v?'active':''}" onclick="setRecView('${v}')">${l}</button>`;
@@ -928,13 +937,17 @@ async function viewFeeds(){
     <div class="toolbar">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
         <select class="inp" onchange="recCat=this.value;viewFeeds()">${catOpts}</select>
-        <label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
-          <span class="track"></span><span class="lbl">только проблемные</span></label>
+        ${recView==='catalog'
+          ? `<select class="inp" onchange="recTag=this.value;viewFeeds()">
+               ${opt('','Все теги',recTag)}${(catData&&catData.tags||[]).map(t=>opt(t.tag,`${t.tag} (${t.count})`,recTag)).join('')}
+             </select>`
+          : `<label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
+               <span class="track"></span><span class="lbl">только проблемные</span></label>`}
       </div>
       <div class="seg">${seg('cards','Топ-5')}${seg('catalog','Каталог')}${seg('table','Таблица')}${seg('list','Список')}</div>
     </div>
     <p class="legend" style="margin:0 2px 4px">${recView==='catalog'
-      ? 'Весь каталог товаров. Топ-5 для писем вычисляется из истории заказов — кнопка <b>«Пересчитать топ-5»</b>.'
+      ? `Каталог${recTag?` · тег «${esc(recTag)}»`:''}: показано <b>${num(catShown)}</b> тов. Теги проставляются автоматически по типу файла (Новинка/Топ/Сопутствующий).`
       : 'Топ-5 используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции в письмо не попадут.'}</p>
   </section>
   ${recView==='catalog'? catalogSection

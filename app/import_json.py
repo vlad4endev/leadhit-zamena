@@ -18,6 +18,18 @@ from app.feeds import Product
 MAX_BYTES = 50 * 1024 * 1024  # ~5к товаров с запасом; защита trust-boundary (как в XML-импорте)
 
 
+def _feed_tag(p: dict):
+    """Тип фида по структуре товара (поле tags в файле бесполезно — у всех «Новинка»).
+    Порядок важен: у «сопутствующих» есть и qty_purchase, поэтому проверяем их первыми."""
+    if p.get("product_related"):
+        return "Сопутствующий"
+    if p.get("date_new"):
+        return "Новинка"
+    if "qty_purchase" in p:
+        return "Топ"
+    return None
+
+
 def parse(data: bytes) -> dict:
     """JSON bytes → {'categories':[{category_id,category_name}], 'products':[Product],
     'top5':[], 'subscribers':[]}. ValueError на кривом файле."""
@@ -48,6 +60,7 @@ def parse(data: bytes) -> dict:
             raise ValueError(f"товар {pid}: цена не число ({price!r})")
         cname = str(p.get("category_name") or "").strip() or cid
         categories.setdefault(cid, cname)  # гарантия FK: категория товара точно есть
+        tag = _feed_tag(p)
         products.append(Product(
             product_id=pid,
             name=str(p.get("name") or pid),
@@ -56,6 +69,7 @@ def parse(data: bytes) -> dict:
             category_id=cid,
             product_url=(p.get("product_url") or ""),
             in_stock=bool(p.get("in_stock", True)),
+            tags=[tag] if tag else [],
         ))
 
     cat_list = [{"category_id": cid, "category_name": name} for cid, name in categories.items()]
@@ -85,6 +99,14 @@ def _demo() -> None:
     assert r["products"][1].in_stock is False
     assert r["products"][1].image_url is None and r["products"][1].product_url == ""
     assert r["top5"] == [] and r["subscribers"] == []
+    assert r["products"][0].tags == []  # обычный каталог — без фид-тега
+
+    # Авто-тег по структуре: product_related → Сопутствующий (важнее qty_purchase),
+    # date_new → Новинка, qty_purchase → Топ.
+    assert _feed_tag({"qty_purchase": 5}) == "Топ"
+    assert _feed_tag({"date_new": "2026-06-11T11:25:12+03:00"}) == "Новинка"
+    assert _feed_tag({"product_related": ["x"], "qty_purchase": 5}) == "Сопутствующий"
+    assert _feed_tag({}) is None
 
     for bad, why in [(b"{}", "не массив"), (b"[1,2]", "не объекты"), (b"", "пустой"), (b"[", "битый")]:
         try:

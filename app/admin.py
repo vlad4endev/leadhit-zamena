@@ -338,22 +338,27 @@ async def catalog() -> dict:
     """Весь каталог, сгруппированный по категориям — для просмотра карточками."""
     rows = await db.pool().fetch(
         """SELECT p.category_id, c.name AS category_name, c.sort_order,
-                  p.product_id, p.name, p.price, p.image_url, p.product_url, p.in_stock
+                  p.product_id, p.name, p.price, p.image_url, p.product_url, p.in_stock, p.tags
            FROM products p JOIN categories c ON c.category_id = p.category_id
            ORDER BY c.sort_order, lower(p.name)""")
     cats: dict = {}
+    all_tags: dict[str, int] = {}
     for r in rows:
         cat = cats.setdefault(r["category_id"], {
             "category_id": r["category_id"], "category_name": r["category_name"], "products": []})
+        tags = list(r["tags"] or [])
+        for t in tags:
+            all_tags[t] = all_tags.get(t, 0) + 1
         cat["products"].append({
             "product_id": r["product_id"], "name": r["name"],
             "price": float(r["price"]) if r["price"] is not None else None,
             "image_url": r["image_url"], "product_url": r["product_url"],
-            "in_stock": bool(r["in_stock"]),
+            "in_stock": bool(r["in_stock"]), "tags": tags,
         })
     out = list(cats.values())
     return {"categories": out, "category_count": len(out),
-            "product_count": sum(len(c["products"]) for c in out)}
+            "product_count": sum(len(c["products"]) for c in out),
+            "tags": [{"tag": t, "count": n} for t, n in sorted(all_tags.items())]}
 
 
 # Топ-5 по категориям из истории заказов. Ранжирование: продано (qty) ↓ → число
@@ -534,6 +539,19 @@ class TestEmail(BaseModel):
     email: str
 
 
+async def _sample_products(con, limit: int = 6) -> list[dict]:
+    """Товары для превью и тест-письма. Сначала те, у которых есть фото: иначе LIMIT без
+    сортировки вытаскивал первые строки каталога (часто без image_url), и превью показывало
+    серые плейсхолдеры при живом каталоге. Порядок стабильный — превью не «дёргается»
+    между рендерами. 6 штук = две строки карточек по 3."""
+    rows = await con.fetch(
+        """SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE in_stock
+           ORDER BY (image_url IS NULL OR image_url = ''), product_id
+           LIMIT $1""", limit)
+    return [dict(r, price=float(r["price"])) for r in rows]
+
+
 @router.post("/scenario/{service}/test")
 async def scenario_test(service: str, body: TestEmail) -> dict:
     """Тест-письмо сценария на указанный адрес (реальный рендер активного/стандартного шаблона)."""
@@ -545,9 +563,7 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         cfg = await svc_config.load(con, service)
         look = await app_settings.template_look(con)
         tpl = await app_settings.active_template(con, service)
-        rows = await con.fetch(
-            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 8")
-    products = [dict(r, price=float(r["price"])) for r in rows]
+        products = await _sample_products(con)
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service, [])
     html = render_blocks(blocks, products, "test", service, look)
     mailer = get_mailer()
@@ -621,11 +637,9 @@ async def template_preview(id: Optional[int] = None, service: str = "best_offer"
         else:
             tpl = await app_settings.active_template(con, service)
             blocks = tpl["blocks"] if tpl else None
-        rows = await con.fetch(
-            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 8")
+        products = await _sample_products(con)
     override = {"brand_color": brand_color, "header": header, "button": button, "footer": footer}
     look = {**look, **{k: v for k, v in override.items() if v}}
-    products = [dict(r, price=float(r["price"])) for r in rows]
     blocks = blocks if blocks else DEFAULT_BLOCKS.get(service, [])
     return render_blocks(blocks, products, "preview", service, look)
 
@@ -640,9 +654,7 @@ async def template_render(body: dict) -> str:
     async with db.pool().acquire() as con:
         if look is None:
             look = await app_settings.template_look(con)
-        rows = await con.fetch(
-            "SELECT product_id, name, price, image_url, product_url FROM products WHERE in_stock LIMIT 8")
-    products = [dict(r, price=float(r["price"])) for r in rows]
+        products = await _sample_products(con)
     return render_blocks(blocks, products, "preview", service, look)
 
 

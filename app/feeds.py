@@ -30,6 +30,7 @@ class Product(BaseModel):
     category_id: str
     product_url: str
     in_stock: bool = True
+    tags: list[str] = []  # членство в фидах: Новинка/Топ/Сопутствующий
 
 
 class Top5Row(BaseModel):
@@ -84,15 +85,18 @@ async def upsert_subscribers_rows(con, rows: list[Subscriber]) -> None:
 async def upsert_products_rows(con, rows: list[Product]) -> None:
     await con.executemany(
         """INSERT INTO products(product_id, name, price, image_url,
-                                category_id, product_url, in_stock, updated_at)
-           VALUES($1, $2, $3, $4, $5, $6, $7, now())
+                                category_id, product_url, in_stock, tags, updated_at)
+           VALUES($1, $2, $3, $4, $5, $6, $7, $8, now())
            ON CONFLICT (product_id) DO UPDATE SET
              name = EXCLUDED.name, price = EXCLUDED.price,
              image_url = EXCLUDED.image_url, category_id = EXCLUDED.category_id,
              product_url = EXCLUDED.product_url, in_stock = EXCLUDED.in_stock,
+             -- union-merge тегов: товар накапливает членство в фидах (Новинка+Топ и т.п.)
+             tags = COALESCE((SELECT array_agg(DISTINCT x)
+                              FROM unnest(products.tags || EXCLUDED.tags) AS x), '{}'),
              updated_at = now()""",
         [(p.product_id, p.name, p.price, p.image_url,
-          p.category_id, p.product_url, p.in_stock) for p in rows],
+          p.category_id, p.product_url, p.in_stock, p.tags) for p in rows],
     )
 
 
