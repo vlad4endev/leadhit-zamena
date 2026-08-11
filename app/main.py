@@ -16,8 +16,13 @@ from app.feeds import router as feeds_router
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await db.connect()
-    async with db.pool().acquire() as con:
-        await app_settings.load_site(con)   # адреса и домены из админки поверх .env
+    # Адреса и домены из админки поверх .env. Не фатально: без них работаем на значениях
+    # .env, а вот упавший старт означал бы 502 на всей витрине из-за одной настройки.
+    try:
+        async with db.pool().acquire() as con:
+            await app_settings.load_site(con)
+    except Exception as e:  # noqa: BLE001 — БД/таблица недоступна: логируем и живём на .env
+        print(f"[startup] настройки адресов не прочитаны ({type(e).__name__}): работаем на .env")
     yield
     await db.disconnect()
 
