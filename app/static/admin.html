@@ -106,6 +106,22 @@ main{min-width:0;display:flex;flex-direction:column;height:100vh;overflow:hidden
 .crumb h1{font-size:17px;font-weight:650;margin:0;letter-spacing:-.01em}
 .crumb small{color:var(--muted);font-size:12px}
 .updated{color:var(--muted);font-size:12px;white-space:nowrap}
+/* Индикатор связи с сайтом: цвет = состояние, текст = что именно измерено. */
+.conn{display:inline-flex;align-items:center;gap:7px;white-space:nowrap;font-size:12.5px;font-weight:550;
+  color:var(--muted);text-decoration:none;border:1px solid var(--border);border-radius:999px;padding:5px 11px}
+.conn:hover{background:var(--surface-2);color:var(--text)}
+.conn .cdot{width:8px;height:8px;border-radius:50%;background:var(--muted);flex:none}
+.conn.live{color:var(--ok)} .conn.live .cdot{background:var(--ok);animation:cpulse 2.4s ease-out infinite}
+.conn.warn{color:var(--warn)} .conn.warn .cdot{background:var(--warn)}
+.conn.down{color:var(--alert)} .conn.down .cdot{background:var(--alert)}
+@keyframes cpulse{0%{box-shadow:0 0 0 0 color-mix(in srgb,var(--ok) 55%,transparent)}
+  70%{box-shadow:0 0 0 7px transparent}100%{box-shadow:0 0 0 0 transparent}}
+/* Плашка состояния в разделе «Интеграция» */
+.connbar{display:flex;gap:12px;align-items:flex-start;border:1px solid var(--border);border-radius:12px;padding:14px 16px}
+.connbar .big{width:12px;height:12px;border-radius:50%;margin-top:4px;flex:none;background:var(--muted)}
+.connbar.live .big{background:var(--ok)} .connbar.warn .big{background:var(--warn)}
+.connbar.down .big{background:var(--alert)}
+.connbar .h{font-weight:650;font-size:14.5px} .connbar .s{color:var(--muted);font-size:12.5px;margin-top:3px}
 .themebtn{display:flex;align-items:center;gap:7px;border:1px solid var(--border);background:var(--bg);
   color:var(--text);border-radius:999px;padding:6px 12px;font:inherit;font-size:12.5px;font-weight:550;cursor:pointer}
 .themebtn:hover{background:var(--surface-2)}
@@ -288,6 +304,7 @@ select.inp{width:auto;font-family:var(--sans)}
   .topbar{padding:12px 16px;gap:10px}
   .view{padding:18px 16px}
   .updated{display:none}
+  .conn span:last-child{display:none} .conn{padding:7px}   /* на узком экране — только точка */
   .crumb h1{font-size:15.5px}
   section+section{margin-top:24px}
   .card{padding:16px}
@@ -443,6 +460,7 @@ select.inp{width:auto;font-family:var(--sans)}
     <button class="burger" id="burger" title="Свернуть меню" aria-label="Свернуть меню">
       <svg viewBox="0 0 24 24" fill="none" stroke="currentColor" stroke-width="2" stroke-linecap="round"><path d="M3 6h18M3 12h18M3 18h18"/></svg></button>
     <div class="crumb"><h1 id="title">—</h1><small id="subtitle"></small></div>
+    <a class="conn" id="conn" href="#/integration" title="Связь с сайтом"><span class="cdot"></span><span id="connText">связь: —</span></a>
     <span class="updated" id="updated"></span>
     <button class="themebtn" id="themebtn" title="Сменить тему"></button>
     <button class="themebtn" id="logoutbtn" title="Выйти" aria-label="Выйти">
@@ -547,6 +565,7 @@ async function loadCore(){
   cache={config,kpi,feeds,integration,meta};
   config.forEach(s=>{const d=document.querySelector(`[data-sdot="${s.service}"]`); if(d)d.className='sdot'+(s.enabled?'':' off');});
   $('updated').textContent='обновлено '+new Date().toLocaleTimeString('ru-RU');
+  renderConn();
 }
 
 /* Components */
@@ -580,6 +599,48 @@ function logsTable(rows){
       <td>${esc(SVC[e.service]?.ru||e.service)}</td><td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
       <td class="mono">${esc((e.product_ids||[]).join(', '))}</td><td class="mono">${esc(e.attributed_order_id||'—')}</td>
       <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('')+`</tbody></table></div>`;
+}
+/* Связь с сайтом — единый источник правды для индикатора в шапке и плашки в разделе.
+   Два независимых сигнала:
+     • загрузка тега (script_hits) — «код физически стоит на страницах»;
+     • cart-ping (last_ping_at)   — «события доходят».
+   Честность важнее красоты: cart-ping идёт ТОЛЬКО при непустой корзине и активной вкладке,
+   поэтому его молчание само по себе не означает поломку. Зелёный — лишь при свежих
+   событиях; красный — лишь когда молчат оба сигнала. Промежуточное состояние называем
+   своими словами и объясняем, что именно измерено. */
+function connAgo(m){
+  if(m===Infinity) return 'ни разу';
+  if(m<1) return 'только что';
+  if(m<60) return Math.round(m)+' мин назад';
+  if(m<1440) return Math.round(m/60)+' ч назад';
+  return Math.round(m/1440)+' дн назад';
+}
+function connState(g){
+  g=g||{};
+  const mins=t=>t?(Date.now()-new Date(t))/6e4:Infinity;
+  const ping=mins(g.last_ping_at), tag=mins(g.last_script_at);
+  const both=`События: ${connAgo(ping)}. Загрузка тега: ${connAgo(tag)}.`;
+  if(ping===Infinity && tag===Infinity) return {level:'', short:'не подключён',
+    title:'Сайт не подключён',
+    text:'Тег ещё ни разу не загружался с сайта и событий не приходило. Вставьте код из шага 1 и откройте любую страницу витрины.'};
+  if(ping<15) return {level:'live', short:'на связи', title:'На связи',
+    text:both+' Тег стоит, корзины доходят — это рабочее состояние.'};
+  if(tag<180) return {level:'warn', short:'тег есть, событий нет',
+    title:'Тег грузится, событий нет',
+    text:both+' Пинг идёт только при непустой корзине и активной вкладке, так что при пустых корзинах это норма. Если товары в корзины кладут — смотрите вкладку «Корзина».'};
+  if(ping<1440||tag<1440) return {level:'warn', short:'тишина',
+    title:'Тишина последние часы',
+    text:both+' Похоже на отсутствие посетителей. Если на сайте есть трафик — проверьте, что тег не сняли со страниц.'};
+  return {level:'down', short:'нет сигнала сутки+',
+    title:'Нет сигнала больше суток',
+    text:both+' Проверьте, что код стоит на страницах и не блокируется, и запустите проверку подключения.'};
+}
+function renderConn(){
+  const el=$('conn'); if(!el) return;
+  const s=connState(cache.integration);
+  el.className='conn '+s.level;
+  $('connText').textContent='связь: '+s.short;
+  el.title=s.title+'. '+s.text;
 }
 function freshInfo(iso){ if(!iso)return{t:'—',stale:true};
   const d=new Date(iso),h=(Date.now()-d)/36e5;
@@ -1234,13 +1295,8 @@ async function viewIntegration(){
   const g=cache.integration;
   const check=(on,t,s)=>`<div class="check"><div class="mk ${on?'on':''}">${on?'✓':'!'}</div><div class="t">${t}<small>${s}</small></div></div>`;
 
-  // Статус связи: свежий пинг (< 15 мин) → сайт реально шлёт события. cart-ping идёт ~раз/30с.
-  const minAgo = g.last_ping_at ? (Date.now()-new Date(g.last_ping_at))/6e4 : Infinity;
-  const online = minAgo < 15;
   const fresh = freshInfo(g.last_ping_at);
-  const connPill = !g.last_ping_at ? '<span class="pill dev">нет пингов</span>'
-    : online ? '<span class="pill live">на связи</span>'
-    : `<span class="pill dev">молчит ${fresh.stale?'&gt;24ч':'&lt;24ч'}</span>`;
+  const conn = connState(g);   // тот же расчёт, что у индикатора в шапке
 
   // Шаги интеграции по факту данных за 24ч: пусто = шаг на сайте не подключён.
   const steps=[
@@ -1283,9 +1339,14 @@ async function viewIntegration(){
     <div class="eyebrow" style="margin-top:20px"><h2>Статистика связи</h2><span class="rule"></span></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">
       <div class="card">
-        <div style="display:flex;justify-content:space-between;align-items:center;margin-bottom:6px">
-          <div class="svc-name">Связь с сайтом</div>${connPill}</div>
-        <div class="field"><span class="k">Последний пинг</span><span class="mono">${esc(fresh.t)}</span></div>
+        <div class="svc-name" style="margin-bottom:10px">Связь с сайтом</div>
+        <div class="connbar ${conn.level}">
+          <div class="big"></div>
+          <div><div class="h">${esc(conn.title)}</div><div class="s">${esc(conn.text)}</div></div>
+        </div>
+        <div class="field" style="margin-top:8px"><span class="k">Последний пинг с сайта</span><span class="mono">${esc(fresh.t)}</span></div>
+        <div class="field"><span class="k">Последняя загрузка тега</span><span class="mono">${esc(freshInfo(g.last_script_at).t)}</span></div>
+        <div class="field"><span class="k">Загрузок тега (2 дня)</span><span class="mono">${num(g.script_hits_2d)}</span></div>
         <div class="field"><span class="k">Сессий сегодня</span><span class="mono">${num(g.sessions_today)}</span></div>
         <div class="field"><span class="k">Сессий за 24ч</span><span class="mono">${num(g.sessions_24h)}</span></div>
         <div class="field"><span class="k">С товарами в корзине (24ч)</span><span class="mono">${num(g.cart_sessions_24h)}</span></div>
@@ -1301,11 +1362,10 @@ async function viewIntegration(){
             esc((g.unknown_product_sample||[]).join(', '))}</span>) — письма по таким корзинам
           не уходят. Передайте интегратору: <span class="mono">product_id</span> должен совпадать
           с каталогом/1С, проверка на сайте — <span class="mono">?grdebug=1</span>.</div>` : ''}
-        <div class="svc-sub" style="margin-top:10px">${online
-          ? 'Сайт на связи — cart-ping приходит. Тег установлен корректно.'
-          : (g.last_ping_at
-            ? 'Пингов давно нет. Проверьте, что тег стоит на страницах и не блокируется CORS/адблоком.'
-            : 'Пингов ещё не было. Установите тег и откройте сайт — здесь появится статус.')}</div>
+        <p class="legend">Загрузки тега считаются по обращениям к <code>track.js</code>/<code>trigger.js</code>
+          и занижены: браузер держит их в кэше час. Пинг корзины уходит только при непустой
+          корзине и активной вкладке — по нему одному «сайт лежит» не диагностируется, поэтому
+          индикатор смотрит на оба сигнала.</p>
         <div style="margin-top:10px"><button class="btn" onclick="viewIntegration()">Обновить</button></div>
       </div>
 
@@ -2535,6 +2595,13 @@ applyTheme(localStorage.theme||null);
 buildNav();
 route();
 setInterval(()=>{ const h=(location.hash||'#/overview').slice(2); if(h==='overview'||h==='analytics')route(); }, 20000);
+// Индикатор связи живёт на всех экранах: тихий опрос (без полосы загрузки) раз в минуту,
+// только когда вкладка админки открыта — иначе фоновые вкладки молотили бы запросы зря.
+setInterval(()=>{
+  if(document.visibilityState!=='visible') return;
+  fetch('/admin/integration').then(r=>r.ok?r.json():null).then(d=>{ if(d){ cache.integration=d; renderConn(); } })
+    .catch(()=>{});
+}, 60000);
 </script>
 </body>
 </html>

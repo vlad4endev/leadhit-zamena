@@ -42,9 +42,32 @@ def valid_email(email: Optional[str]) -> bool:
     return bool(email) and _EMAIL_RE.match(email.strip()) is not None and len(email) <= 254
 
 
+async def _note_hit(path: str) -> None:
+    """Отметить загрузку скрипта витриной (агрегат за день, без ПД) — источник для
+    индикатора связи в админке. Ошибку БД глотаем: отдача скрипта важнее статистики.
+
+    Занижает реальные показы: скрипты кэшируются браузером на час, а страницы за
+    статикой могут кэшироваться прокси. Для «тег жив / тега нет» этого достаточно.
+
+    ponytail: один UPDATE горячей строки на запрос. При десятках rps за статикой — считать
+    в памяти процесса и сбрасывать в БД раз в минуту.
+    """
+    try:
+        await db.pool().execute(
+            """INSERT INTO script_hits(day, path, hits, last_at)
+               VALUES(current_date, $1, 1, now())
+               ON CONFLICT (day, path) DO UPDATE
+                 SET hits = script_hits.hits + 1, last_at = now()""",
+            path,
+        )
+    except Exception:      # noqa: BLE001 — БД недоступна: сайт всё равно должен получить тег
+        pass
+
+
 @router.get("/trigger.js")
 async def trigger_js() -> FileResponse:
     """Триггер-сниппет для встраивания на groster.me (session-ping корзины)."""
+    await _note_hit("/trigger.js")
     return FileResponse(
         _TRIGGER_JS,
         media_type="application/javascript; charset=utf-8",
@@ -56,6 +79,7 @@ async def trigger_js() -> FileResponse:
 async def track_js() -> FileResponse:
     """Универсальный загрузчик-трекер (аналог track.leadhit.io): один тег с clid грузит
     trigger.js/wheel.js и включает авто-захват email из форм. См. docs/site_integration.md."""
+    await _note_hit("/track.js")
     return FileResponse(
         _TRACK_JS,
         media_type="application/javascript; charset=utf-8",
@@ -72,6 +96,7 @@ async def demo_page() -> FileResponse:
 @router.get("/wheel.js")
 async def wheel_js() -> FileResponse:
     """Виджет «Колесо фортуны» для встраивания на groster.me."""
+    await _note_hit("/wheel.js")
     return FileResponse(
         _WHEEL_JS,
         media_type="application/javascript; charset=utf-8",

@@ -79,7 +79,13 @@ docker compose -f docker-compose.edge.yml up -d --force-recreate edge   # кон
   роут в приложение — добавьте `location =` в конфиг, иначе снаружи 404 при живом роуте внутри.
   Отличить легко: edge отвечает HTML и `server: openresty`, приложение — JSON `{"detail":...}`.
 - **Схема при обновлениях**: initdb-скрипт срабатывает только на пустом `pgdata`. Изменения схемы
-  после первого запуска применять отдельно (миграция/`psql`), автоперезаливки нет.
+  после первого запуска применять отдельно (миграция/`psql`), автоперезаливки нет. Миграции
+  лежат в `db/migrations/` и идемпотентны — применяются так:
+  ```bash
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_script_hits.sql
+  ```
+  Без `003` индикатор связи в админке останется в состоянии «тег не грузился» (таблицы нет —
+  счётчик молча не пишется), остальное работает.
 - **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты

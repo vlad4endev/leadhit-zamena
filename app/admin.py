@@ -1081,7 +1081,12 @@ async def integration() -> dict:
                  (SELECT max(consent_at) FROM subscribers) AS last_consent_at,
                  (SELECT count(*) FROM orders
                    WHERE order_date >= now() - interval '24 hours') AS orders_24h,
-                 (SELECT max(order_date) FROM orders) AS last_order_at""")
+                 (SELECT max(order_date) FROM orders) AS last_order_at,
+                 -- Загрузки тега витриной: отличают «тега на сайте нет» от «тег стоит,
+                 -- но корзины пустые» (cart-ping идёт только при непустой корзине).
+                 (SELECT max(last_at) FROM script_hits) AS last_script_at,
+                 (SELECT COALESCE(sum(hits), 0) FROM script_hits
+                   WHERE day >= current_date - 1) AS script_hits_2d""")
     return {
         "mailer": mailer,
         "live": mailer != "LogMailer",
@@ -1111,6 +1116,8 @@ async def integration() -> dict:
         "last_consent_at": _iso(conn["last_consent_at"]),
         "orders_24h": int(conn["orders_24h"] or 0),
         "last_order_at": _iso(conn["last_order_at"]),
+        "last_script_at": _iso(conn["last_script_at"]),
+        "script_hits_2d": int(conn["script_hits_2d"] or 0),
     }
 
 
