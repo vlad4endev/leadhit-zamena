@@ -79,6 +79,21 @@ docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_s
 образа и `Recreated`/`Started` у контейнеров. Если `CACHED` и `Running` — `git pull` не принёс
 изменений (типовая причина: коммиты не запушены в `origin`), пересборка тут не поможет.
 
+### 502 сразу после обновления
+Первое, что проверить — жив ли сам api (он слушает loopback хоста):
+```bash
+curl -s -o /dev/null -w "%{http_code}\n" http://127.0.0.1:8000/health   # 200 → приложение работает
+docker compose logs --tail=40 api                                        # иначе смотреть причину здесь
+```
+Если api отвечает 200, а снаружи 502 — протух адрес апстрима в edge: nginx резолвит имя
+`api` один раз при старте, а `up -d --build api` создаёт контейнер с новым IP. Лечится
+пересозданием edge:
+```bash
+docker compose -f docker-compose.edge.yml up -d --force-recreate edge
+```
+Конфиги в репозитории уже резолвят имя на каждый запрос (`resolver 127.0.0.11` + переменная
+в `proxy_pass`), так что после разового обновления edge этот 502 больше не возникает.
+
 ## Заметки
 - **Новый публичный роут → правка edge-конфига.** Наружу отдаётся whitelist точных путей
   (`deploy/nginx.npm.conf` за NPM, `deploy/nginx.docker.conf` без него), остальное — 404. Добавили
