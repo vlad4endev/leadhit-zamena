@@ -1210,7 +1210,7 @@ function renderIntTab(){
       <div style="display:flex;gap:8px;margin-top:10px;flex-wrap:wrap">
         <button class="btn" onclick="copyFrom('intCode')">Копировать код</button>
         ${s.id==='tag'?`<a class="btn" href="${esc(snippetBase())}/wheel" target="_blank">Проверить колесо</a>
-          <a class="btn" href="/demo" target="_blank">Демо-страница</a>`:''}
+          <a class="btn" href="${esc(snippetBase())}/demo" target="_blank">Демо-страница</a>`:''}
       </div>
       ${/^https?:\/\/(localhost|127\.)/.test(snippetBase()) ? `<div class="svc-sub" style="margin-top:8px;color:var(--warn)">
         В коде стоит <span class="mono">${esc(snippetBase())}</span> — это локальный адрес: на сайте он не заработает.

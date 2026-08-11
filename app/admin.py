@@ -1114,21 +1114,27 @@ async def integration() -> dict:
     }
 
 
-def _probe(url: str) -> dict:
-    """GET на НАШ ЖЕ публичный адрес: виден ли файл снаружи (edge/whitelist/TLS).
+def _lower(headers) -> dict:
+    """Заголовки ключами в нижнем регистре: HTTP/2 отдаёт их строчными, HTTP/1.1 — как есть."""
+    return {k.lower(): v for k, v in (headers or {}).items()}
+
+
+def _probe(url: str, method: str = "GET", headers: Optional[dict] = None) -> dict:
+    """Запрос на НАШ ЖЕ публичный адрес: видно ли снаружи (edge/whitelist/TLS).
     Изнутри контейнера всё всегда 200 — ловится только запросом через публичный адрес,
     как было с /track.js, не попавшим в whitelist прокси. URL берём из настроек, не от
     пользователя, — гулять по произвольным адресам сервис не должен."""
     import urllib.error
     import urllib.request
+    h = {"User-Agent": "grosterhit-selftest", **(headers or {})}
     try:
-        req = urllib.request.Request(url, headers={"User-Agent": "grosterhit-selftest"})
+        req = urllib.request.Request(url, method=method, headers=h)
         with urllib.request.urlopen(req, timeout=8) as r:
-            return {"status": r.status, "error": None}
+            return {"status": r.status, "headers": _lower(r.headers), "error": None}
     except urllib.error.HTTPError as e:
-        return {"status": e.code, "error": None}
+        return {"status": e.code, "headers": _lower(e.headers), "error": None}
     except Exception as e:                                   # DNS, TLS, таймаут, отказ
-        return {"status": None, "error": type(e).__name__}
+        return {"status": None, "headers": {}, "error": type(e).__name__}
 
 
 @router.get("/selftest")
@@ -1162,6 +1168,17 @@ async def selftest(product_id: Optional[str] = None) -> dict:
                 "hint": "" if ok else "Сайт не сможет загрузить этот файл. Проверьте, что путь "
                                       "разрешён на прокси/edge (whitelist) и сервис поднят.",
             })
+        # Демо-страница по умолчанию закрыта на edge — это не поломка, но кнопка «Демо»
+        # в разделе тогда ведёт в 404, поэтому показываем статус явно.
+        demo = await asyncio.to_thread(_probe, base + "/demo")
+        checks.append({
+            "id": "demo", "t": "Демо-страница /demo",
+            "status": "ok" if demo["status"] == 200 else "warn",
+            "detail": "открыта — можно дать интегратору"
+                      if demo["status"] == 200 else f"закрыта снаружи (HTTP {demo['status']})",
+            "hint": "" if demo["status"] == 200 else "Так и задумано: страница не в whitelist "
+                    "прокси. Нужна интегратору — добавьте /demo в deploy/nginx.npm.conf.",
+        })
 
     origins = [o.strip() for o in site["cors_origins"].split(",") if o.strip()]
     checks.append({
@@ -1171,6 +1188,27 @@ async def selftest(product_id: Optional[str] = None) -> dict:
         "hint": "" if origins else "Работать будет, но лучше перечислить домены витрины в "
                                    "карточке «Адреса и домены» — тогда события примем только с них.",
     })
+
+    # Главная проверка глазами браузера: preflight с домена витрины на приём событий.
+    # GET файлов её не заменяет — cart-ping идёт кросс-доменно, и именно здесь ломается
+    # интеграция, когда домен витрины не в списке (браузер режет запрос, в логах пусто).
+    site_origin = (origins[0] if origins else site["shop_url"]) or ""
+    if not local and base and site_origin:
+        r = await asyncio.to_thread(
+            _probe, base + "/cart-ping", "OPTIONS",
+            {"Origin": site_origin, "Access-Control-Request-Method": "POST",
+             "Access-Control-Request-Headers": "content-type"})
+        allow = r["headers"].get("access-control-allow-origin")
+        ok = r["status"] == 200 and allow in (site_origin, "*")
+        checks.append({
+            "id": "cors_live", "t": f"Сайт {site_origin} может слать события",
+            "status": "ok" if ok else "fail",
+            "detail": "браузер получит разрешение на cart-ping" if ok
+                      else (f"приёмник ответил {r['status']}, разрешение: {allow or 'нет'}"
+                            if r["status"] else f"нет ответа ({r['error']})"),
+            "hint": "" if ok else "Добавьте домен витрины в «Адреса и домены» — без этого "
+                                  "браузер заблокирует события, а в логах сервиса будет пусто.",
+        })
 
     async with db.pool().acquire() as con:
         products = await con.fetchval("SELECT count(*) FROM products")
