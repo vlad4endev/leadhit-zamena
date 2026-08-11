@@ -148,10 +148,10 @@ class WheelPrize(BaseModel):
 def _wheel_prize_html(code: str, label: Optional[str], site: Optional[str] = None) -> str:
     """Простое брендированное письмо с промокодом. Без каталога — только код и CTA.
 
-    site — адрес МАГАЗИНА (деф. SHOP_URL), не домен сервиса рассылок. Параметром, а не
-    только из настроек, чтобы self-check ловил регресс на public_base_url.
+    site — адрес МАГАЗИНА (деф. SHOP_URL из админки/.env), не домен сервиса рассылок.
+    Параметром, а не только из настроек, чтобы self-check ловил регресс на public_base_url.
     """
-    site = (site or settings.shop_url).rstrip("/")
+    site = (site or app_settings.shop_url()).rstrip("/")
     title = label or "Ваш приз"
     return f"""\
 <div style="font-family:Montserrat,Arial,sans-serif;max-width:520px;margin:0 auto;color:#3a1152">
@@ -401,6 +401,7 @@ async def run_due(con, mailer=None, force: bool = False) -> int:
            FOR UPDATE SKIP LOCKED""",
         cfg["grace_sec"],
     )
+    await app_settings.load_site(con)   # адреса из админки: ссылка отписки и CTA в магазин
     look = await app_settings.template_look(con)
     tpl = await app_settings.active_template(con, "cart")
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get("cart")

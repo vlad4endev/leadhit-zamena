@@ -6,8 +6,7 @@ from contextlib import asynccontextmanager
 from fastapi import FastAPI
 from fastapi.middleware.cors import CORSMiddleware
 
-from app import auth, db
-from app.config import settings
+from app import app_settings, auth, db
 from app.admin import router as admin_router
 from app.analytics import router as analytics_router
 from app.cart import router as cart_router
@@ -17,18 +16,33 @@ from app.feeds import router as feeds_router
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await db.connect()
+    async with db.pool().acquire() as con:
+        await app_settings.load_site(con)   # адреса и домены из админки поверх .env
     yield
     await db.disconnect()
 
 
 app = FastAPI(title="GrosterHit", lifespan=lifespan)
 
+
+class DynamicCORS(CORSMiddleware):
+    """Домены витрины правятся в админке («Интеграция»), поэтому список читается на каждый
+    запрос, а не фиксируется при старте: смена домена магазина не должна требовать рестарта.
+    Пусто → пускаем любой origin (дев и «ещё не заполнили»), как и раньше с "*"."""
+
+    def is_allowed_origin(self, origin: str) -> bool:
+        raw = app_settings.site()["cors_origins"]
+        allowed = [o.strip().rstrip("/") for o in raw.split(",") if o.strip()]
+        return not allowed or origin.rstrip("/") in allowed
+
+
 # CORS для триггер-сниппета: cart-ping шлётся кросс-доменно с groster.me.
 # credentials не нужны — session_id едет в теле, а не в cookie сервиса.
-_origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()] or ["*"]
+# allow_origins непустой и без "*" — иначе Starlette зашьёт заголовок "*" на старте и
+# is_allowed_origin спрашивать не будет.
 app.add_middleware(
-    CORSMiddleware,
-    allow_origins=_origins,
+    DynamicCORS,
+    allow_origins=["https://dynamic.invalid"],
     allow_methods=["GET", "POST", "OPTIONS"],
     allow_headers=["Content-Type"],
 )

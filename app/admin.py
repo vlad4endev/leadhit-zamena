@@ -1041,6 +1041,7 @@ async def integration() -> dict:
     mailer = type(get_mailer()).__name__
     async with db.pool().acquire() as con:
         await onec.load_overrides(con)
+        site = await app_settings.load_site(con)
         last_ping = await con.fetchval("SELECT max(last_ping_at) FROM cart_sessions")
         sessions_today = await con.fetchval(
             "SELECT count(*) FROM cart_sessions WHERE last_ping_at >= date_trunc('day', now())")
@@ -1091,9 +1092,11 @@ async def integration() -> dict:
         "onec_configured": onec.configured(),
         "onec_base_url": onec.base_url() or None,
         # Сигнал «сайт на связи»: свежий пинг = track.js реально шлёт события.
-        # Публичный адрес сервиса для сниппета: админка обычно открыта по SSH-туннелю
-        # (localhost:8000), поэтому location.origin в браузере для этого не годится.
-        "public_base_url": settings.public_base_url.rstrip("/"),
+        # Адреса — из админки поверх .env (app_settings.site): в сниппет нельзя подставлять
+        # location.origin, админка обычно открыта по SSH-туннелю (localhost:8000).
+        "public_base_url": site["public_base_url"],
+        "shop_url": site["shop_url"],
+        "cors_origins": site["cors_origins"],
         "last_ping_at": _iso(last_ping),
         "sessions_today": int(sessions_today or 0),
         "cart_sessions_24h": int(diag["sessions"] or 0),
@@ -1132,8 +1135,9 @@ def _probe(url: str) -> dict:
 async def selftest(product_id: Optional[str] = None) -> dict:
     """Самопроверка подключения «в один клик»: то же, что интегратор делал бы curl'ом.
     Каждый чек — готовая строка для UI: статус + что это значит + что делать."""
-    from app.config import settings
-    base = settings.public_base_url.rstrip("/")
+    async with db.pool().acquire() as con:
+        site = await app_settings.load_site(con)
+    base = site["public_base_url"]
     checks: list[dict] = []
 
     local = bool(re.match(r"^https?://(localhost|127\.|0\.0\.0\.0)", base))
@@ -1141,8 +1145,8 @@ async def selftest(product_id: Optional[str] = None) -> dict:
         "id": "public_url", "t": "Публичный адрес сервиса",
         "status": "fail" if local else "ok",
         "detail": base or "не задан",
-        "hint": "Задайте PUBLIC_BASE_URL в .env — с локальным адресом тег на сайте не заработает."
-                if local else "Этот адрес подставляется в код для сайта.",
+        "hint": "Впишите адрес сервиса в карточке «Адреса и домены» — с локальным адресом "
+                "тег на сайте не заработает." if local else "Этот адрес подставляется в код для сайта.",
     })
 
     # Файлы, которые тянет витрина. Без публичного адреса проверять нечего.
@@ -1159,13 +1163,13 @@ async def selftest(product_id: Optional[str] = None) -> dict:
                                       "разрешён на прокси/edge (whitelist) и сервис поднят.",
             })
 
-    origins = [o.strip() for o in settings.cors_origins.split(",") if o.strip()]
+    origins = [o.strip() for o in site["cors_origins"].split(",") if o.strip()]
     checks.append({
         "id": "cors", "t": "Домены сайта в CORS",
         "status": "ok" if origins else "warn",
         "detail": ", ".join(origins) if origins else "разрешены любые домены (*)",
         "hint": "" if origins else "Работать будет, но лучше перечислить домены витрины в "
-                                   "CORS_ORIGINS в .env — тогда события примем только с них.",
+                                   "карточке «Адреса и домены» — тогда события примем только с них.",
     })
 
     async with db.pool().acquire() as con:

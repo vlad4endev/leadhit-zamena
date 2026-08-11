@@ -6,11 +6,13 @@
 from __future__ import annotations
 
 import json
+import re
 
 from app.config import settings
 
 # key -> (тип, группа, подпись, «нужен перезапуск воркеров»)
 # Отправитель почты настраивается в разделе «Почта» (mailer-service), не здесь — без дублей.
+# Группа site правится в разделе «Интеграция» (адреса и домены), а не в «Настройках».
 EDITABLE = {
     "attribution_window_hours": ("number", "attr", "Окно атрибуции, часов", False),
     "onec_sync_tick_sec": ("number", "onec", "Синхронизация каталога 1С, сек", True),
@@ -18,7 +20,39 @@ EDITABLE = {
     "postsale_tick_sec": ("number", "workers", "Тик постпродажи, сек", True),
     "attribution_tick_sec": ("number", "workers", "Тик атрибуции, сек", True),
     "best_offer_tick_sec": ("number", "workers", "Тик Best Offer, сек", True),
+    "public_base_url": ("url", "site", "Адрес сервиса (endpoint для сайта)", False),
+    "shop_url": ("url", "site", "Адрес магазина (куда ведут письма)", False),
+    "cors_origins": ("csv", "site", "Домены витрины (CORS)", True),
 }
+
+# ── Адреса и домены: один источник для сниппетов, писем и самопроверки ──
+# Кэш модульный, потому что рендер письма (templates.unsub_base) зовётся без соединения
+# с БД. Наполняется load_site() — в админ-эндпоинтах и в начале каждого прогона воркера,
+# тем же приёмом, что onec.load_overrides. Пусто → значение из .env.
+SITE_KEYS = ("public_base_url", "shop_url", "cors_origins")
+_site: dict = {}
+
+
+async def load_site(con) -> dict:
+    global _site
+    rows = await con.fetch(
+        "SELECT key, value FROM app_config WHERE key = ANY($1::text[])", list(SITE_KEYS))
+    _site = {r["key"]: (json.loads(r["value"]) if isinstance(r["value"], str) else r["value"])
+             for r in rows}
+    return site()
+
+
+def site() -> dict:
+    """Текущие адреса: БД поверх .env (без хвостовых слэшей)."""
+    return {k: (_site.get(k) or getattr(settings, k) or "").rstrip("/") for k in SITE_KEYS}
+
+
+def public_base_url() -> str:
+    return site()["public_base_url"]
+
+
+def shop_url() -> str:
+    return site()["shop_url"]
 
 
 def _env_defaults() -> dict:
@@ -109,9 +143,41 @@ async def set_many(con, patch: dict) -> None:
         meta = EDITABLE.get(key)
         if not meta:
             continue
-        val = int(val) if meta[0] == "number" else str(val)
+        if meta[0] in ("url", "csv"):
+            val = str(val or "").strip().rstrip("/")
+            if not val:            # пусто → снимаем оверрайд, возвращаемся к .env
+                await con.execute("DELETE FROM app_config WHERE key = $1", key)
+                continue
+            if meta[0] == "url" and not re.match(r"^https?://[^\s/]+", val):
+                continue           # не адрес — молча не сохраняем, в UI останется прежнее
+        else:
+            val = int(val) if meta[0] == "number" else str(val)
         await con.execute(
             """INSERT INTO app_config(key, value) VALUES($1, $2::jsonb)
                ON CONFLICT (key) DO UPDATE SET value = EXCLUDED.value""",
             key, json.dumps(val),
         )
+    await load_site(con)   # адреса разъезжаются молча — обновляем кэш сразу после записи
+
+
+def _demo() -> None:
+    """Self-check адресов: оверрайд поверх .env, срез хвостового слэша, откат на .env.
+
+    Ловит регресс, из-за которого письма и сниппет разъезжаются по разным доменам.
+    """
+    global _site
+    saved = _site
+    try:
+        _site = {}
+        assert public_base_url() == settings.public_base_url.rstrip("/")
+        _site = {"public_base_url": "https://svc.example.com/", "shop_url": ""}
+        assert public_base_url() == "https://svc.example.com"       # слэш срезан
+        assert shop_url() == settings.shop_url.rstrip("/")          # пусто → .env
+        assert site()["cors_origins"] == settings.cors_origins.rstrip("/")
+    finally:
+        _site = saved
+    print("app_settings._demo OK")
+
+
+if __name__ == "__main__":
+    _demo()

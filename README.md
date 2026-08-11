@@ -77,8 +77,7 @@ delayed-job; атрибуция — по расписанию.
 ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбора поведения (152-ФЗ).
 Встраивание на groster.me:
 ```html
-<script src="https://groster.skypath.fun/trigger.js"
-        data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
+<script src="https://groster.skypath.fun/trigger.js" data-interval="45"></script>
 <script>
   // на каждое изменение корзины:
   groster.cart([{ product_id: 'A1', qty: 1 }]);   // обязателен только product_id
@@ -89,9 +88,10 @@ ROADMAP 3.1): один таймер + один POST `/cart-ping`, без сбо�
 </script>
 ```
 Сниппет сам держит `session_id` (cookie `gr_sid`, 1 год), пингует только при активной
-вкладке и непустой корзине, помнит последнюю личность (cookie-приоритет 3.4). Для
-прода задать `CORS_ORIGINS` в `.env` (домены groster.me). Self-check логики:
-`node scripts/test_trigger.js`.
+вкладке и непустой корзине, помнит последнюю личность (cookie-приоритет 3.4). Адрес сервиса
+берётся из `src` тега (`data-endpoint` — переопределение). Домены витрины для CORS — в админке
+(«Интеграция» → «Адреса и домены») поверх `CORS_ORIGINS` из `.env`, применяются без рестарта.
+Self-check логики: `node scripts/test_trigger.js`.
 
 Проще — один тег `track.js` (`app/static/track.js`): грузит сниппет сам, ловит email из форм,
 дренит `grDataLayer` и **читает готовые ecommerce-события GA4/GTM** из `window.dataLayer` —

@@ -114,6 +114,7 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
     if not force and int(cfg.get("send_hour", 9)) != (await con.fetchval("SELECT extract(hour from now())")):
         return 0
     max_per_day = int(cfg.get("max_per_day", 0))
+    await app_settings.load_site(con)   # адреса из админки: ссылка отписки и CTA в магазин
     look = await app_settings.template_look(con)
     tpl = await app_settings.active_template(con, "best_offer")
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get("best_offer")

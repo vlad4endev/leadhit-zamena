@@ -1113,17 +1113,16 @@ grDataLayer.push({ event: 'identify', consent: false });`,
      hint:'Обычно не нужно: колесо включается параметром <code>wheel</code> в теге из шага 1. '+
           'Этот вариант — если колесо нужно только на отдельных страницах.',
      code:`<script src="${o}/wheel.js"
-        data-endpoint="${o}"
         data-auto="15"
         data-once-days="7"><\/script>`,
      note:'<code>data-auto</code> — задержка показа в секундах (0 — не показывать самому), '+
-          '<code>data-once-days</code> — не показывать повторно N дней. Призы и вид — в разделе «Колесо».'},
+          '<code>data-once-days</code> — не показывать повторно N дней. Адрес сервиса скрипт '+
+          'берёт из своего <code>src</code>. Призы и вид — в разделе «Колесо».'},
 
     {id:'manual', t:'Ручной trigger.js', ok:null,
      title:'Альтернатива: trigger.js без загрузчика',
      hint:'Если сайт не хочет автоматики (захват форм, GA4-адаптер) и готов звать всё руками.',
-     code:`<script src="${o}/trigger.js"
-        data-endpoint="${o}" data-interval="45"><\/script>
+     code:`<script src="${o}/trigger.js" data-interval="45"><\/script>
 <script>
   groster.cart([{ product_id: '0057412', qty: 2 }]);   // на изменение корзины
   groster.identify({ user_id: '42817' });              // после логина
@@ -1132,7 +1131,8 @@ grDataLayer.push({ event: 'identify', consent: false });`,
                   items: [{ product_id: '0057412', price: 71.60, qty: 2 }] });
 <\/script>`,
      note:'<code>data-interval</code> — период heartbeat в секундах. Пинг уходит, только когда '+
-          'вкладка активна и корзина непуста.'},
+          'вкладка активна и корзина непуста. Адрес сервиса берётся из <code>src</code> тега — '+
+          'отдельно его указывать не нужно (переопределяется атрибутом <code>data-endpoint</code>).'},
 
     {id:'check', t:'Проверка', ok:null, self:true,
      title:'Проверка подключения',
@@ -1142,6 +1142,24 @@ grDataLayer.push({ event: 'identify', consent: false });`,
           'сайта» ниже. Живая отладка на витрине: добавьте <code>?grdebug=1</code> к адресу '+
           'страницы, консоль напечатает каждый вызов.'},
   ];
+}
+
+// Адреса сервиса/магазина и домены витрины: /admin/settings поверх .env. После записи
+// перерисовываем весь раздел — сниппеты и проверка собираются из этих же значений.
+async function saveSite(){
+  const url=v=>/^https?:\/\/[^\s\/]+/.test(v);
+  const patch={
+    public_base_url:$('cfgPublicUrl').value.trim(),
+    shop_url:$('cfgShopUrl').value.trim(),
+    cors_origins:$('cfgCors').value.trim(),
+  };
+  for(const [k,l] of [['public_base_url','Адрес сервиса'],['shop_url','Адрес магазина']]){
+    if(patch[k] && !url(patch[k])){ toast(l+': нужен полный адрес с https://'); return; }
+  }
+  await j('/admin/settings',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
+  selfTest.data=null;                 // адреса другие — прошлая проверка уже не про них
+  await viewIntegration();
+  toast('Адреса сохранены');
 }
 
 // Самопроверка: результат /admin/selftest живёт между перерисовками вкладок.
@@ -1236,6 +1254,31 @@ async function viewIntegration(){
 
   $('view').innerHTML=`<section>
     <div id="intSnips"></div>
+
+    <div class="eyebrow" style="margin-top:20px"><h2>Адреса и домены</h2><span class="rule"></span></div>
+    <div class="card">
+      <div class="svc-sub">Один источник для всего: отсюда адрес подставляется в код выше, в ссылку
+        отписки и кнопки «в магазин» в письмах и в проверку подключения. Пустое поле — берём
+        значение из <span class="mono">.env</span> сервиса.</div>
+      <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:0 18px">
+        <label class="tf"><span>Адрес сервиса — сюда сайт шлёт события</span>
+          <input class="inp" id="cfgPublicUrl" type="url" placeholder="https://groster.skypath.fun"
+            value="${esc(g.public_base_url||'')}"></label>
+        <label class="tf"><span>Адрес магазина — куда ведут кнопки в письмах</span>
+          <input class="inp" id="cfgShopUrl" type="url" placeholder="https://groster.me"
+            value="${esc(g.shop_url||'')}"></label>
+        <label class="tf"><span>Домены витрины через запятую (CORS)</span>
+          <input class="inp" id="cfgCors" type="text" placeholder="https://groster.me,https://www.groster.me"
+            value="${esc(g.cors_origins||'')}"></label>
+      </div>
+      <div style="display:flex;gap:8px;margin-top:12px;flex-wrap:wrap;align-items:center">
+        <button class="btn primary" onclick="saveSite()">Сохранить</button>
+        <span class="svc-sub">Применяется сразу — ни перезапуска, ни правки тега на сайте.</span>
+      </div>
+      <p class="legend">Адрес сервиса меняйте только вместе с реальным переездом: тег на сайте
+        грузится с этого домена, скрипты берут адрес из своего же <code>src</code>.
+        Домены витрины пустые — принимаем события с любого сайта (годится для теста).</p>
+    </div>
 
     <div class="eyebrow" style="margin-top:20px"><h2>Статистика связи</h2><span class="rule"></span></div>
     <div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(340px,1fr))">

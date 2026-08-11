@@ -479,13 +479,18 @@
   };
 
   // Авто-открытие из data-атрибутов тега <script> (как у trigger.js):
-  //   <script src="wheel.js" data-endpoint="https://..." data-auto="12" data-once-days="7"></script>
+  //   <script src="wheel.js" data-auto="12" data-once-days="7"></script>
   // data-auto — задержка в секундах перед показом; data-once-days — не чаще раза в N дней.
   var self = document.currentScript;
   if (self && self.hasAttribute('data-auto')) {
     var delay = Math.max(0, parseInt(self.getAttribute('data-auto'), 10) || 0);
     var onceDays = parseInt(self.getAttribute('data-once-days'), 10);
+    // Как и в trigger.js: адрес сервиса уже стоит в src тега, дублировать его в
+    // data-endpoint не нужно — атрибут остаётся переопределением.
     var endpoint = self.getAttribute('data-endpoint');
+    if (!endpoint) {
+      try { endpoint = new URL(self.src, document.baseURI).origin; } catch (e) { endpoint = ''; }
+    }
     var launch = function () {
       var o = { endpoint: endpoint || '' };
       if (!isNaN(onceDays)) o.onceDays = onceDays; // не задан в теге → возьмём once_days из конфига

@@ -4,8 +4,9 @@
  * клики, история) — только heartbeat «вкладка жива + корзина непуста» (152-ФЗ).
  *
  * Подключение (авто-init из data-атрибутов тега):
- *   <script src="https://groster.skypath.fun/trigger.js"
- *           data-endpoint="https://groster.skypath.fun" data-interval="45"></script>
+ *   <script src="https://groster.skypath.fun/trigger.js" data-interval="45"></script>
+ *   (endpoint по умолчанию — origin, откуда загрузился сам файл; data-endpoint — только
+ *    когда тег и API на разных доменах)
  *
  * Сайт кормит сниппет тремя вызовами:
  *   groster.cart([{product_id, category_id, price, qty}])  // на каждое изменение корзины
@@ -113,6 +114,7 @@
     items: [],
     hash: null,
     timer: null,
+    bound: false,     // слушатель visibilitychange уже навешен (init может звучать дважды)
     debug: false,
   };
 
@@ -187,9 +189,14 @@
       if (S.timer) clearInterval(S.timer);
       S.timer = setInterval(pingIfDue, S.intervalSec * 1000);
       // Возврат на вкладку → сразу heartbeat (иначе ложный «уход» на переключении табов).
-      doc.addEventListener('visibilitychange', function () {
-        if (doc.visibilityState !== 'hidden') pingIfDue();
-      });
+      // Вешаем один раз: init зовётся повторно (авто-init из тега + вызов из track.js),
+      // а второй слушатель дал бы двойной пинг на каждое переключение вкладки.
+      if (!S.bound) {
+        S.bound = true;
+        doc.addEventListener('visibilitychange', function () {
+          if (doc.visibilityState !== 'hidden') pingIfDue();
+        });
+      }
       log('init', { endpoint: S.endpoint, intervalSec: S.intervalSec, session_id: S.sid });
       return api;
     },
@@ -237,13 +244,22 @@
 
   root.groster = api;
 
-  // Авто-init из data-атрибутов тега <script>, если заданы.
+  // Авто-init из data-атрибутов тега <script>. Endpoint по умолчанию — origin, откуда
+  // загрузился сам trigger.js: адрес сервиса и так стоит в src, дублировать его в
+  // data-endpoint незачем (атрибут остаётся для случая «тег и API на разных доменах»).
   var self = doc.currentScript;
-  if (self && self.getAttribute('data-endpoint')) {
-    api.init({
-      endpoint: self.getAttribute('data-endpoint'),
-      intervalSec: self.getAttribute('data-interval'),
-      debug: self.hasAttribute('data-debug'),
-    });
+  if (self && !root.grLoader) {   // грузит track.js → init сделает он, со своими параметрами
+    var ep = self.getAttribute('data-endpoint') || selfOrigin(self);
+    if (ep) {
+      api.init({
+        endpoint: ep,
+        intervalSec: self.getAttribute('data-interval'),
+        debug: self.hasAttribute('data-debug'),
+      });
+    }
+  }
+
+  function selfOrigin(tag) {
+    try { return new URL(tag.src, doc.baseURI).origin; } catch (e) { return ''; }
   }
 })(typeof window !== 'undefined' ? window : this);

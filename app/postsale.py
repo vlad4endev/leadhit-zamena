@@ -69,6 +69,7 @@ async def run_due(con: asyncpg.Connection, mailer=None, force: bool = False) -> 
     if not force and not cfg["enabled"]:
         return 0
     mailer = mailer or get_mailer()
+    await app_settings.load_site(con)   # адреса из админки: ссылка отписки и CTA в магазин
     look = await app_settings.template_look(con)
     tpl = await app_settings.active_template(con, "postsale")
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get("postsale")

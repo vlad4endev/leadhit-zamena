@@ -309,6 +309,10 @@
 
   // --- Bootstrap ---
 
+  // Метка «сниппет грузит загрузчик»: trigger.js увидит её и не станет авто-инициализироваться
+  // сам — параметры (endpoint, интервал, debug) задаём мы строкой ниже.
+  root.grLoader = true;
+
   loadScript('/trigger.js', function () {
     if (root.groster) {
       root.groster.init({ endpoint: ENDPOINT, intervalSec: cfg.interval, debug: cfg.debug });

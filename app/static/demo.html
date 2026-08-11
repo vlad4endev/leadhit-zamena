@@ -117,7 +117,9 @@
 <!-- Разводка витрины: ровно то, что команда сайта делает у себя. -->
 <script>
 (function () {
-  groster.init({ endpoint: location.origin, intervalSec: 20 });
+  // endpoint не передаём: сниппет берёт его из src своего тега. Здесь только ускоряем
+  // heartbeat, чтобы демо не ждало 45 секунд.
+  groster.init({ intervalSec: 20 });
   document.getElementById('sid').textContent =
     (document.cookie.match(/(?:^|; )gr_sid=([^;]*)/) || [])[1] || '(создан)';
 

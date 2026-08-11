@@ -11,9 +11,12 @@ from html.parser import HTMLParser
 
 from app.config import settings
 
-# Публичный адрес сервиса из конфига (не хардкод домена) — ссылка отписки должна вести
-# туда, где реально отвечает /unsubscribe.
-UNSUB_BASE = settings.public_base_url.rstrip("/") + "/unsubscribe"
+# Публичный адрес сервиса — из настроек (админка → «Интеграция», поверх .env), а не
+# константой на импорте: адрес меняется в рантайме, ссылка отписки должна вести туда,
+# где реально отвечает /unsubscribe.
+def unsub_base() -> str:
+    from app import app_settings
+    return app_settings.public_base_url() + "/unsubscribe"
 
 # Разрешённый набор тегов для rich-text (текст/колонки). Всё остальное вырезается.
 _RT_TAGS = {"b", "strong", "i", "em", "u", "s", "a", "br", "p", "ul", "ol", "li", "h3", "h4", "span"}
@@ -152,7 +155,7 @@ def _cards_table(products: list[dict], campaign: str, lk: dict) -> str:
 def render_email(intro_html: str, products: list[dict], user_id: str,
                  campaign: str, template: str = "default", look: dict | None = None) -> str:
     lk = _look(look)
-    unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
     minimal = template == "minimal"
 
     if minimal:
@@ -319,7 +322,7 @@ def _jinja_render(source: str, products: list[dict], user_id: str, campaign: str
     неизвестные переменные (lead.name, alert_name, …) → пусто, управляющие хелперы → no-op."""
     import datetime
     import jinja2
-    unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
     items = _mjml_items(products)
     # Все вызовы get_*() (get_recommendations/get_cart_items/get_order_items/…) означают
     # «дай товары сценария» — ни одна питон/jinja-функция не начинается с get_.
@@ -342,7 +345,7 @@ def render_html_template(raw: str, products: list[dict], user_id: str, campaign:
     """Готовый HTML-шаблон целиком. Если внутри есть Jinja ({{…}}/{%…%}) — прогоняем через
     тот же Jinja-слой (заполнит {{unsubscribe_url}}, циклы; неизвестное — пусто). Если Jinja
     не нужна или сломалась — отдаём как есть, подставив ссылку отписки."""
-    unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
     if "{{" in raw or "{%" in raw:
         try:
             return _jinja_render(raw, products, user_id, campaign)
@@ -363,7 +366,7 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
         low = rendered.lower()
         i = low.find("<mjml")
         if i == -1:                             # это не MJML (нет <mjml>) — отдаём как HTML
-            return rendered.replace("{{unsubscribe_url}}", f'{UNSUB_BASE}?u={user_id}&c={campaign}')
+            return rendered.replace("{{unsubscribe_url}}", f'{unsub_base()}?u={user_id}&c={campaign}')
         j = low.rfind("</mjml>")
         mjml_str = rendered[i:(j + 7 if j != -1 else None)]
         try:
@@ -384,7 +387,7 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
                   campaign: str, look: dict | None = None) -> str:
     """Рендер письма из блоков конструктора. Шапка/футер берутся из look (единый бренд)."""
     lk = _look(look)
-    unsub = f'{UNSUB_BASE}?u={user_id}&c={campaign}'
+    unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
     blocks = blocks or []
     # Импортированное письмо целиком (единственный блок) → отдаём документ, минуя брендовую обёртку.
     # MJML (type=mjml или содержимое с <mjml>) компилируем; сырой HTML отдаём как есть.
