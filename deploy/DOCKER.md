@@ -66,8 +66,14 @@ docker compose pull && docker compose up -d --build   # обновление
 ## Обновление кода на проде (за NPM)
 ```bash
 cd /opt/grosterhit && git pull && git log --oneline -1     # убедиться, что коммит приехал
+ls db/migrations                                           # появились новые файлы — применить (ниже)
 docker compose up -d --build api workers                   # ОБА: воркеры на том же образе
 docker compose -f docker-compose.edge.yml up -d --force-recreate edge   # конфиг смонтирован файлом
+```
+Миграции применяются **после `git pull`** (до него файла на сервере просто нет) и до пересборки;
+все они идемпотентны, повтор безопасен:
+```bash
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_script_hits.sql
 ```
 Признак, что обновление реально применилось: в сборке `COPY app ./app` **без** `CACHED`, новый sha
 образа и `Recreated`/`Started` у контейнеров. Если `CACHED` и `Running` — `git pull` не принёс
