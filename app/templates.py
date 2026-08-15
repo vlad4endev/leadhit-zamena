@@ -18,6 +18,17 @@ def unsub_base() -> str:
     from app import app_settings
     return app_settings.public_base_url() + "/unsubscribe"
 
+
+def img_src(url: str | None) -> str:
+    """Ссылка на фото для письма. В БД картинка лежит относительной (/img/<имя> —
+    резолвер расширения, см. app/images.py), а в письме src обязан быть абсолютным."""
+    if not url:
+        return ""
+    if url.startswith("/"):
+        from app import app_settings
+        return app_settings.public_base_url().rstrip("/") + url
+    return url
+
 # Разрешённый набор тегов для rich-text (текст/колонки). Всё остальное вырезается.
 _RT_TAGS = {"b", "strong", "i", "em", "u", "s", "a", "br", "p", "ul", "ol", "li", "h3", "h4", "span"}
 
@@ -131,7 +142,7 @@ def _card(p: dict, campaign: str, minimal: bool, lk: dict) -> str:
         return f'<tr><td style="padding:6px 0"><a href="{url}">{name}</a> — {price}</td></tr>'
     # alt=название: если фото 404 (битый image_url в выгрузке), почтовик покажет название,
     # а не пустой прямоугольник.
-    img = (f'<img src="{_esc(p["image_url"])}" width="150" alt="{name}" '
+    img = (f'<img src="{_esc(img_src(p["image_url"]))}" width="150" alt="{name}" '
            f'style="max-width:150px;border-radius:8px">'
            if p.get("image_url") else '<div style="height:150px;background:#eef2f8;border-radius:8px"></div>')
     return (
@@ -273,7 +284,7 @@ def _mjml_items(products: list[dict] | None) -> list[dict]:
     for p in (products or []):
         out.append({
             "url": p.get("product_url") or "#",
-            "picture": p.get("image_url") or "",
+            "picture": img_src(p.get("image_url")),
             "name": p.get("name") or "",
             "price": int(round(float(p.get("price") or 0) * 100)),
             "price_str": _price(p.get("price")),

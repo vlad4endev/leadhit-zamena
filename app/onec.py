@@ -11,6 +11,7 @@ import json
 import urllib.parse
 import urllib.request
 
+from app import images
 from app.config import settings
 
 
@@ -82,7 +83,8 @@ async def order_exists(user_id: str, since: str) -> dict:
 # --- Маппинг товара 1С -> строка products ---
 
 def map_product(p: dict) -> tuple:
-    return (p["product_id"], p["name"], p["price"], p.get("image_url"),
+    return (p["product_id"], p["name"], p["price"],
+            images.proxied(p.get("image_url"), p["product_id"]),
             p["category_id"], p["product_url"], bool(p.get("in_stock", True)))
 
 
@@ -90,7 +92,9 @@ _UPSERT_PRODUCT = """
 INSERT INTO products(product_id, name, price, image_url, category_id, product_url, in_stock, updated_at)
 VALUES($1, $2, $3, $4, $5, $6, $7, now())
 ON CONFLICT (product_id) DO UPDATE SET
-  name=EXCLUDED.name, price=EXCLUDED.price, image_url=EXCLUDED.image_url,
+  name=EXCLUDED.name, price=EXCLUDED.price,
+  -- как в feeds.upsert_products_rows: отсутствие картинки не затирает известную ссылку
+  image_url=COALESCE(EXCLUDED.image_url, products.image_url),
   category_id=EXCLUDED.category_id, product_url=EXCLUDED.product_url,
   in_stock=EXCLUDED.in_stock, updated_at=now()"""
 

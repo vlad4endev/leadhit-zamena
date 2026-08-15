@@ -32,6 +32,7 @@ test:                      ## Self-check чистой логики всех се
 	$(PY) -m app.app_settings
 	$(PY) -m app.import_xml
 	$(PY) -m app.import_yml
+	$(PY) -m app.images
 	node scripts/test_trigger.js && node scripts/test_track.js && node scripts/test_wheel.js
 
 worker-postsale:    ; $(PY) scripts/run_worker.py postsale
