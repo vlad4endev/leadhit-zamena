@@ -21,8 +21,11 @@ COPY app ./app
 COPY scripts ./scripts
 COPY db ./db
 
-# Непривилегированный пользователь.
-RUN useradd --system --uid 10001 grosterhit && chown -R grosterhit /app
+# Непривилегированный пользователь. Каталог загрузок создаётся здесь (в git его нет),
+# иначе docker создаст точку монтирования volume от root и запись упадёт по правам.
+RUN useradd --system --uid 10001 grosterhit \
+ && mkdir -p app/static/uploads \
+ && chown -R grosterhit /app
 USER grosterhit
 
 EXPOSE 8000
