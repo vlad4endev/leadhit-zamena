@@ -154,6 +154,10 @@ async def wheel_lead(lead: WheelLead) -> dict:
                ON CONFLICT (user_id) DO UPDATE SET
                  email = COALESCE(EXCLUDED.email, subscribers.email),
                  consent_at = COALESCE(subscribers.consent_at, EXCLUDED.consent_at),
+                 -- Лид пришёл сам и дал согласие сейчас — он больше не «холодный контакт
+                 -- из старой выгрузки»: снимаем теплоту импорта (NULL = свой лид), иначе
+                 -- порог постепенного запуска глушил бы живого подписчика.
+                 engagement = NULL,
                  wheel_spun_at = now()
                WHERE subscribers.wheel_spun_at IS NULL
                RETURNING wheel_spun_at""",
@@ -289,7 +293,9 @@ async def cart_ping(ping: Ping) -> dict:
                    VALUES($1, $2, now())
                    ON CONFLICT (user_id) DO UPDATE SET
                      email = COALESCE(EXCLUDED.email, subscribers.email),
-                     consent_at = COALESCE(subscribers.consent_at, EXCLUDED.consent_at)""",
+                     consent_at = COALESCE(subscribers.consent_at, EXCLUDED.consent_at),
+                     -- согласие с витрины: лид снова «свой», не холодный (см. wheel_lead)
+                     engagement = NULL""",
                 uid, ping.email,
             )
         # Обратная связь витрине: какие product_id мы не нашли в каталоге. Такое письмо

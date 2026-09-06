@@ -12,6 +12,7 @@ import os
 import re
 from typing import Optional
 
+import asyncpg
 from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
@@ -136,7 +137,7 @@ async def leads(q: Optional[str] = None, status: Optional[str] = None,
     rows = await db.pool().fetch(
         """SELECT s.user_id, s.email, s.is_unsubscribed, s.consent_at,
                   s.last_purchase_at, s.last_purchase_category_id,
-                  s.wheel_spun_at, s.wheel_prize_code,
+                  s.wheel_spun_at, s.wheel_prize_code, s.engagement,
                   (SELECT count(*) FROM orders o WHERE o.user_id = s.user_id) AS orders_count,
                   (SELECT COALESCE(SUM(
                        (SELECT COALESCE(SUM((i->>'price')::numeric*(i->>'qty')::int),0)
@@ -161,6 +162,7 @@ async def leads(q: Optional[str] = None, status: Optional[str] = None,
              "last_purchase_at": _iso(r["last_purchase_at"]),
              "category": r["last_purchase_category_id"],
              "source": "wheel" if r["wheel_spun_at"] else "",  # источник лида (пока знаем только колесо)
+             "engagement": r["engagement"],   # NULL — свой лид, иначе теплота импорта
              "wheel_spun_at": _iso(r["wheel_spun_at"]),
              "wheel_prize": r["wheel_prize_code"],
              "orders_count": r["orders_count"],
@@ -176,7 +178,7 @@ async def lead(user_id: str) -> dict:
             """SELECT user_id, email, is_unsubscribed, consent_at, last_purchase_at,
                       last_purchase_category_id, rotation_pointer_category_id,
                       last_sent_best_offer_at, last_sent_cart_at, last_sent_postsale_at,
-                      wheel_spun_at, wheel_prize_code
+                      wheel_spun_at, wheel_prize_code, engagement
                FROM subscribers WHERE user_id = $1""", user_id)
         if s is None:
             return {"found": False}
@@ -199,6 +201,7 @@ async def lead(user_id: str) -> dict:
             "last_sent_cart": _iso(s["last_sent_cart_at"]),
             "last_sent_postsale": _iso(s["last_sent_postsale_at"]),
             "source": "wheel" if s["wheel_spun_at"] else "",
+            "engagement": s["engagement"],
             "wheel_spun_at": _iso(s["wheel_spun_at"]),
             "wheel_prize": s["wheel_prize_code"],
         },
@@ -216,14 +219,22 @@ async def lead(user_id: str) -> dict:
 @router.get("/audience")
 async def audience() -> dict:
     """Сводка по подписчикам."""
-    r = await db.pool().fetchrow(
-        """SELECT count(*) AS total,
-                  count(*) FILTER (WHERE email IS NOT NULL) AS with_email,
-                  count(*) FILTER (WHERE is_unsubscribed) AS unsubscribed,
-                  count(*) FILTER (WHERE consent_at IS NOT NULL) AS consented,
-                  count(*) FILTER (WHERE last_purchase_at IS NOT NULL) AS with_purchase
-           FROM subscribers""")
-    return dict(r)
+    async with db.pool().acquire() as con:
+        # Порог прогрева живёт в параметрах Best Offer: та же цифра, что и в выборке
+        # сервиса, иначе плитка «в рассылке» врала бы после правки порога.
+        threshold = int((await svc_config.load(con, "best_offer")).get("min_engagement", 0))
+        r = await con.fetchrow(
+            """SELECT count(*) AS total,
+                      count(*) FILTER (WHERE email IS NOT NULL) AS with_email,
+                      count(*) FILTER (WHERE is_unsubscribed) AS unsubscribed,
+                      count(*) FILTER (WHERE consent_at IS NOT NULL) AS consented,
+                      count(*) FILTER (WHERE last_purchase_at IS NOT NULL) AS with_purchase,
+                      count(*) FILTER (WHERE email IS NOT NULL AND NOT is_unsubscribed
+                                         AND COALESCE(engagement, 100) >= $1) AS mailable,
+                      count(*) FILTER (WHERE email IS NOT NULL AND NOT is_unsubscribed
+                                         AND COALESCE(engagement, 100) < $1) AS cold
+               FROM subscribers""", threshold)
+    return {**dict(r), "min_engagement": threshold}
 
 
 @router.get("/trends/weekday")
@@ -303,7 +314,8 @@ async def services_summary() -> list[dict]:
 
 @router.get("/recommendations")
 async def recommendations() -> dict:
-    """Топ-5 товаров по категориям с деталями — то, что реально идёт в письма (Best Offer, Постпродажа)."""
+    """Подборка товаров по категориям с деталями — то, что реально идёт в письма
+    (Best Offer, Постпродажа). Порядок позиций = порядок в письме."""
     rows = await db.pool().fetch(
         """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
                   t.product_id, t.updated_at,
@@ -330,7 +342,8 @@ async def recommendations() -> dict:
     total_usable = sum(1 for c in out for p in c["products"] if p["usable"])
     total = sum(len(c["products"]) for c in out)
     return {"categories": out, "category_count": len(out),
-            "position_count": total, "usable_count": total_usable}
+            "position_count": total, "usable_count": total_usable,
+            "max_items": svc_config.MAX_ITEMS_PER_EMAIL}
 
 
 @router.get("/catalog")
@@ -356,12 +369,17 @@ async def catalog() -> dict:
             "in_stock": bool(r["in_stock"]), "tags": tags,
         })
     out = list(cats.values())
+    # «Без фото» — товары, у которых ссылки нет вовсе (пустой image_url в выгрузке или
+    # ссылка, собранная из артикула, — см. app/images.proxied). Битые ссылки этим числом
+    # не считаются: их видно в карточке плейсхолдером «нет фото».
+    no_photo = sum(1 for c in out for p in c["products"] if not p["image_url"])
     return {"categories": out, "category_count": len(out),
             "product_count": sum(len(c["products"]) for c in out),
+            "no_photo_count": no_photo,
             "tags": [{"tag": t, "count": n} for t, n in sorted(all_tags.items())]}
 
 
-# Топ-5 по категориям из истории заказов. Ранжирование: продано (qty) ↓ → число
+# Подборка по категориям из истории заказов. Ранжирование: продано (qty) ↓ → число
 # заказов ↓ → цена ↓ → product_id (детерминизм). Только в наличии. Товары без продаж
 # естественно сортируются по цене ↓ (премиум вперёд) — единый оконный проход, без
 # отдельной ветки для «нет продаж». Отменённые/возвращённые заказы не учитываем.
@@ -384,21 +402,60 @@ ranked AS (
   FROM products p LEFT JOIN sold s ON s.product_id = p.product_id
   WHERE p.in_stock
 )
-SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_id, rn
+SELECT category_id, product_id, rn FROM ranked WHERE rn <= $1 ORDER BY category_id, rn
 """
 
 
 @router.post("/compute-top5")
-async def compute_top5() -> dict:
-    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена."""
+async def compute_top5(limit: int = svc_config.MAX_ITEMS_PER_EMAIL) -> dict:
+    """Автоподбор товаров по категориям из заказов (замена ручного фида). Полная замена."""
     from app.feeds import Top5Row, upsert_top5_rows
+    limit = max(1, min(svc_config.MAX_ITEMS_PER_EMAIL, limit))
     async with db.pool().acquire() as con:
-        rows = await con.fetch(_TOP5_SQL)
+        rows = await con.fetch(_TOP5_SQL, limit)
         top5 = [Top5Row(category_id=r["category_id"], position=r["rn"], product_id=r["product_id"])
                 for r in rows]
         if top5:
             await upsert_top5_rows(con, top5)  # TRUNCATE + insert (актуальный срез целиком)
     return {"ok": True, "categories": len({r["category_id"] for r in rows}), "positions": len(rows)}
+
+
+class RecoPatch(BaseModel):
+    product_ids: list[str]
+
+
+@router.put("/recommendations/{category_id}")
+async def set_recommendations(category_id: str, patch: RecoPatch) -> dict:
+    """Ручной подбор товаров категории для писем: список заменяется целиком, порядок = позиции.
+
+    Один эндпоинт закрывает все жесты админки (добавить/убрать/очистить/добавить показанные):
+    UI держит текущий список и присылает новый.
+    """
+    ids: list[str] = []
+    for pid in patch.product_ids:                       # дедуп с сохранением порядка
+        if pid and pid not in ids:
+            ids.append(pid)
+    if len(ids) > svc_config.MAX_ITEMS_PER_EMAIL:
+        return {"ok": False, "reason": f"максимум {svc_config.MAX_ITEMS_PER_EMAIL} товаров в письме"}
+    async with db.pool().acquire() as con:
+        if not await con.fetchval("SELECT 1 FROM categories WHERE category_id = $1", category_id):
+            return {"ok": False, "reason": "категории нет в каталоге"}
+        known = {r["product_id"] for r in await con.fetch(
+            "SELECT product_id FROM products WHERE product_id = ANY($1::text[])", ids)}
+        missing = [p for p in ids if p not in known]
+        if missing:      # FK всё равно не даст вставить — отвечаем внятно, а не 500-й
+            return {"ok": False, "reason": "нет в каталоге: " + ", ".join(missing[:3])}
+        try:
+            async with con.transaction():
+                await con.execute("DELETE FROM top5_by_category WHERE category_id = $1", category_id)
+                await con.executemany(
+                    """INSERT INTO top5_by_category(category_id, position, product_id, updated_at)
+                       VALUES($1, $2, $3, now())""",
+                    [(category_id, i, pid) for i, pid in enumerate(ids, 1)])
+        except asyncpg.CheckViolationError:
+            # Миграция 007 не применена: в БД ещё старый CHECK position 1..5.
+            return {"ok": False, "reason": "примените миграцию db/migrations/007_items_per_email.sql"}
+    return {"ok": True, "count": len(ids)}
 
 
 @router.get("/kpi")
@@ -589,7 +646,8 @@ async def scenario_reach(service: str) -> dict:
     async with db.pool().acquire() as con:
         if service == "best_offer":
             cfg = await svc_config.load(con, "best_offer")
-            rows = await best_offer._candidates(con, cfg["interval_days"], cfg["after_purchase_days"])
+            rows = await best_offer._candidates(con, cfg["interval_days"], cfg["after_purchase_days"],
+                                                int(cfg.get("min_engagement", 0)))
             n = len(rows)
         elif service == "postsale":
             n = await con.fetchval(
@@ -1033,6 +1091,37 @@ async def import_json_upload(request: Request) -> dict:
     return {"ok": True, "imported": counts}
 
 
+@router.post("/import-leads")
+async def import_leads_upload(request: Request, consent: bool = False) -> dict:
+    """Импорт лидов старой базы из CSV/XLSX (сырое тело файла). Атомарно.
+
+    consent=true — админ подтвердил, что согласие на рассылку в старой базе собрано:
+    берём дату из файла, где её нет — дату импорта. Отчёт по строкам возвращаем
+    подробный: в выгрузке старой системы мусор и анонимы — норма, и админу надо
+    видеть, что именно не заехало, а не только «импортировано N».
+    """
+    from app import import_leads
+    data = await request.body()
+    try:
+        # Разбор книги на 30к строк — это ~0.6 с чистого CPU. В event loop это заморозка
+        # всего сервиса, включая cart-ping витрины, поэтому уводим в поток.
+        parsed = await asyncio.to_thread(import_leads.parse, data, consent)
+    except ValueError as e:
+        return {"ok": False, "reason": str(e)}
+    async with db.pool().acquire() as con:
+        res = await import_leads.import_rows(con, parsed["rows"])
+        cfg = await svc_config.load(con, "best_offer")
+    # Главный вопрос после импорта — «кому это теперь уйдёт». Считаем прямо здесь,
+    # иначе админ узнает ответ только из виджета охвата в другом разделе.
+    threshold = int(cfg.get("min_engagement", 0))
+    warm = sum(1 for r in parsed["rows"] if not r.is_unsubscribed and r.engagement >= threshold)
+    return {"ok": True, "total": parsed["total"], "imported": len(parsed["rows"]),
+            "min_engagement": threshold, "warm": warm,
+            "columns": parsed["columns"], "skipped": parsed["skipped"],
+            "skipped_count": parsed["skipped_count"], "blank_count": parsed["blank_count"],
+            "sheets": parsed["sheets"], **res}
+
+
 @router.get("/integration")
 async def integration() -> dict:
     """Статус интеграции: режим отправки, домен, 1С. Секреты НЕ отдаём."""
@@ -1157,6 +1246,10 @@ async def selftest(product_id: Optional[str] = None) -> dict:
     Каждый чек — готовая строка для UI: статус + что это значит + что делать."""
     async with db.pool().acquire() as con:
         site = await app_settings.load_site(con)
+        # Образец фото каталога для проверки картинок в письмах (см. ниже).
+        sample_img = await con.fetchval(
+            """SELECT image_url FROM products
+               WHERE image_url LIKE '/img/%' ORDER BY updated_at DESC LIMIT 1""")
     base = site["public_base_url"]
     checks: list[dict] = []
 
@@ -1193,6 +1286,21 @@ async def selftest(product_id: Optional[str] = None) -> dict:
             "hint": "" if demo["status"] == 200 else "Так и задумано: страница не в whitelist "
                     "прокси. Нужна интегратору — добавьте /demo в deploy/nginx.npm.conf.",
         })
+
+        # Фото товара глазами почтового клиента получателя. GET скриптов это не заменяет:
+        # /img/<имя> — отдельный путь, и он уже уезжал мимо whitelist прокси (как /track.js).
+        # Картинку в письме никто не «не заметит»: ссылка битая у всех получателей сразу.
+        if sample_img:
+            r = await asyncio.to_thread(_probe, base + sample_img)
+            ok = r["status"] == 200
+            checks.append({
+                "id": "img", "t": "Фото товара открывается в письме",
+                "status": "ok" if ok else "fail",
+                "detail": f"{sample_img} → HTTP {r['status']}" if r["status"]
+                          else f"{sample_img} → нет ответа ({r['error']})",
+                "hint": "" if ok else "У получателей письма фото будет битым. Проверьте, что "
+                        "путь /img/ разрешён на прокси/edge (whitelist), а файл есть на static.",
+            })
 
     origins = [o.strip() for o in site["cors_origins"].split(",") if o.strip()]
     checks.append({

@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from app import app_settings, svc_config
+from app import app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -23,7 +23,9 @@ def rotate_and_pick(
     """Ротация категорий с дедупом (ТЗ 2.4).
 
     Идём по категориям от start циклично. Первая, где после исключения recent осталось
-    >= min_items товаров, — берётся. Возвращает (категория, товары, СЛЕДУЮЩИЙ указатель).
+    >= min_items товаров, — берётся целиком: сколько из неё уйдёт в письмо, решается
+    после загрузки из каталога (нет в наличии и без фото уходят первыми, см. run_batch).
+    Возвращает (категория, товары, СЛЕДУЮЩИЙ указатель).
     Если ни одна не набирает min_items — фолбэк: первая категория с любыми товарами
     (ослабленный дедуп), чтобы не уйти в пустоту у «выжженного» юзера.
     """
@@ -34,14 +36,14 @@ def rotate_and_pick(
 
     for k in range(n):
         cat = order[(idx0 + k) % n]
-        picked = [p for p in top5.get(cat, []) if p not in recent][:5]
+        picked = [p for p in top5.get(cat, []) if p not in recent]
         if len(picked) >= min_items:
             return cat, picked, order[(idx0 + k + 1) % n]
 
     # Фолбэк: весь фид «выжжен» дедупом — берём лучшее доступное.
     for k in range(n):
         cat = order[(idx0 + k) % n]
-        picked = top5.get(cat, [])[:5]
+        picked = top5.get(cat, [])
         if picked:
             return cat, picked, order[(idx0 + k + 1) % n]
     return None, [], start
@@ -75,12 +77,18 @@ async def _recent_products(con, user_id: str) -> set[str]:
     return recent
 
 
-async def _candidates(con, interval_days: int, after_purchase_days: int):
-    """Выборка по условию 30/20 дней + фильтры (ТЗ 2.2). Покупка перебивает 30-дневный таймер."""
+async def _candidates(con, interval_days: int, after_purchase_days: int, min_engagement: int = 0):
+    """Выборка по условию 30/20 дней + фильтры (ТЗ 2.2). Покупка перебивает 30-дневный таймер.
+
+    min_engagement — порог постепенного запуска на импортированную базу: 3 кликали,
+    2 открывали, 1 покупали, 0 все. Своих лидов (engagement IS NULL — колесо, корзина,
+    фид магазина) порог не касается никогда, они с явным свежим согласием.
+    """
     return await con.fetch(
         """SELECT user_id, email, rotation_pointer_category_id, last_purchase_category_id
            FROM subscribers
            WHERE email IS NOT NULL AND NOT is_unsubscribed
+             AND COALESCE(engagement, 100) >= $3                        -- порог прогрева домена
              AND (last_any_trigger_at IS NULL
                   OR last_any_trigger_at < now() - interval '24 hours')     -- антидубль
              AND (
@@ -91,7 +99,7 @@ async def _candidates(con, interval_days: int, after_purchase_days: int):
                  OR ((last_purchase_at IS NULL OR last_purchase_at <= last_sent_best_offer_at)
                      AND last_sent_best_offer_at + make_interval(days => $1) <= now())  -- 30д от отправки
              )""",
-        interval_days, after_purchase_days,
+        interval_days, after_purchase_days, min_engagement,
     )
 
 
@@ -114,6 +122,7 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
     if not force and int(cfg.get("send_hour", 9)) != (await con.fetchval("SELECT extract(hour from now())")):
         return 0
     max_per_day = int(cfg.get("max_per_day", 0))
+    limit = svc_config.items_limit(cfg)   # сколько товаров кладём в письмо (до 30)
     await app_settings.load_site(con)   # адреса из админки: ссылка отписки и CTA в магазин
     look = await app_settings.template_look(con)
     tpl = await app_settings.active_template(con, "best_offer")
@@ -125,7 +134,8 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
     default_start = order[0] if order else None
     sent = 0
 
-    for cand in await _candidates(con, cfg["interval_days"], cfg["after_purchase_days"]):
+    for cand in await _candidates(con, cfg["interval_days"], cfg["after_purchase_days"],
+                                  int(cfg.get("min_engagement", 0))):
         if max_per_day and sent >= max_per_day:
             break  # дневной лимит писем (как «Макс. кол-во писем в день» в LeadHit)
         start = cand["rotation_pointer_category_id"] or cand["last_purchase_category_id"] or default_start
@@ -134,7 +144,13 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         if not product_ids:
             continue  # нечего предложить
 
-        products = await _load_products(con, product_ids)
+        # Лимит применяем ПОСЛЕ загрузки: _load_products отбрасывает «нет в наличии»,
+        # photo_first — уводит в хвост товары без фото. Обрежь подборку раньше — слоты
+        # письма съедят позиции, которые до карточек всё равно не доходят.
+        products = images.photo_first(await _load_products(con, product_ids), limit)
+        if not products:
+            continue  # ни одного живого товара — письмо с пустым блоком не шлём
+        product_ids = [p["product_id"] for p in products]   # в лог — что реально ушло (дедуп)
         if blocks:
             html = render_blocks(blocks, products, cand["user_id"], "best_offer", look)
         else:

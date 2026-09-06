@@ -11,7 +11,7 @@ from __future__ import annotations
 
 import xml.etree.ElementTree as ET
 
-from app import onec
+from app import onec, svc_config
 from app.feeds import (
     Product, Subscriber, Top5Row,
     upsert_products_rows, upsert_subscribers_rows, upsert_top5_rows,
@@ -102,8 +102,9 @@ def parse(data: bytes) -> dict:
                 except ValueError:
                     raise ValueError(f"top5 {cid}: position не число")
                 pid = (pr.text or "").strip()
-                if not pid or not (1 <= pos <= 5):
-                    raise ValueError(f"top5 {cid}: нужен product_id и position 1..5")
+                if not pid or not (1 <= pos <= svc_config.MAX_ITEMS_PER_EMAIL):
+                    raise ValueError(
+                        f"top5 {cid}: нужен product_id и position 1..{svc_config.MAX_ITEMS_PER_EMAIL}")
                 top5.append(Top5Row(category_id=cid, position=pos, product_id=pid))
 
     subs = root.find("subscribers")

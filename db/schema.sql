@@ -36,10 +36,12 @@ CREATE TABLE products (
 CREATE INDEX products_category_idx ON products(category_id) WHERE in_stock;
 CREATE INDEX products_tags_idx ON products USING GIN (tags);
 
--- Фид «топ-5 по категориям» от заказчика (источник релевантности вместо ML).
+-- Подборка товаров по категориям (источник релевантности вместо ML): фид заказчика,
+-- автопересчёт по заказам или ручной выбор в админке. До 30 позиций — столько уходит
+-- в одно письмо (см. app/svc_config.MAX_ITEMS_PER_EMAIL). Имя таблицы историческое.
 CREATE TABLE top5_by_category (
     category_id  TEXT NOT NULL REFERENCES categories(category_id),
-    position     INT  NOT NULL CHECK (position BETWEEN 1 AND 5),
+    position     INT  NOT NULL CHECK (position BETWEEN 1 AND 30),
     product_id   TEXT NOT NULL REFERENCES products(product_id),
     updated_at   TIMESTAMPTZ NOT NULL DEFAULT now(),
     PRIMARY KEY (category_id, position)
@@ -59,7 +61,10 @@ CREATE TABLE subscribers (
     last_sent_best_offer_at    TIMESTAMPTZ,
     last_sent_cart_at          TIMESTAMPTZ,
     last_sent_postsale_at      TIMESTAMPTZ,
-    last_any_trigger_at        TIMESTAMPTZ                  -- антидубль (1 триггер/день)
+    last_any_trigger_at        TIMESTAMPTZ,                 -- антидубль (1 триггер/день)
+    engagement                 SMALLINT                     -- теплота импортированного лида:
+        -- 3 кликал по письмам, 2 открывал, 1 покупал, 0 только визит. NULL — лид добыт этой
+        -- системой (колесо/корзина/фид), порог прогрева его не отсекает. См. 006_lead_engagement.sql.
 );
 CREATE INDEX subscribers_email_idx ON subscribers(email) WHERE email IS NOT NULL;
 

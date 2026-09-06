@@ -34,24 +34,50 @@ _NAME_RE = re.compile(r"^[0-9A-Za-z_-]{4,64}\.(png|jpe?g)$")
 _resolved: dict[str, str] = {}
 
 
+def _built_from_product_id(url: str, product_id: str) -> bool:
+    """Ссылка собрана из артикула: имя файла = product_id + расширение картинки.
+
+    Проверка на ЛЮБОМ хосте, а не только на static: 1С-контракт долго показывал пример
+    `https://groster.me/upload/iblock/<артикул>.jpg`, и выгрузки его повторяли — таких
+    файлов нет ни на одном хосте (проверка 2026-09-06: 12 из 12 → 404 на groster.me,
+    ранее 60 из 60 на static). Имя картинки — GUID из CMS, из артикула не выводится.
+    """
+    name = url.split("?")[0].split("#")[0].rsplit("/", 1)[-1].lower()
+    return name in {product_id.lower() + e for e in EXTS}
+
+
 def proxied(url: str | None, product_id: str | None = None) -> str | None:
     """URL картинки из выгрузки → относительная ссылка на резолвер.
 
     Чужие хосты, пустые значения и уже проксированное — возвращаем как есть.
 
-    Ссылку, собранную из артикула (`…/shop/<product_id>.png`), считаем отсутствующей
-    и отдаём None: файлов с такими именами на CDN нет ни в одном расширении (проверка
-    2026-08-15: 60 из 60 → 404), а GUID из артикула не выводится. Так «Топ-50
-    сопутствующих» перестаёт затирать рабочую ссылку того же товара из другой выгрузки.
+    Ссылку, собранную из артикула, считаем отсутствующей и отдаём None: файла по ней
+    нет, а битую ссылку хранить вреднее, чем пустоту — она затирает рабочую ссылку того
+    же товара из другой выгрузки (см. COALESCE в app/feeds.py) и уезжает в письмо
+    сломанной картинкой. Товар покажет плейсхолдер «нет фото», пока не придёт GUID-URL.
     """
-    if not url or not url.startswith(PREFIX):
+    if not url:
+        return url
+    if product_id and _built_from_product_id(url, product_id):
+        return None
+    if not url.startswith(PREFIX):
         return url
     name = url[len(PREFIX):]
     if not _NAME_RE.match(name):
         return url
-    if product_id and name.rpartition(".")[0] == product_id:
-        return None
     return "/img/" + name
+
+
+def photo_first(products: list[dict], limit: int) -> list[dict]:
+    """Товары для письма: сначала с фото, потом остальные, всего не больше limit.
+
+    Сортировка устойчивая — внутри групп сохраняется порядок подборки (позиции из
+    админки/фида). Так карточки-плейсхолдеры «нет фото» уходят в хвост и обрезаются
+    первыми: пока выгрузка 1С не отдаёт GUID-ссылки, без фото сидит заметная часть
+    каталога (см. проверку в шапке модуля), и письмо из одних плейсхолдеров — худшее,
+    что можно показать. Тот же порядок у превью шаблона в админке.
+    """
+    return sorted(products, key=lambda p: not p.get("image_url"))[:limit]
 
 
 def _head_ok(url: str) -> bool:
@@ -98,12 +124,28 @@ def _demo() -> None:
     assert proxied("") == "" and proxied(None) is None
     assert proxied(PREFIX + "../../etc/passwd") == PREFIX + "../../etc/passwd"
     assert proxied(PREFIX + "a/b.png") == PREFIX + "a/b.png"
-    # Ссылка из артикула («сопутствующие») — считаем, что фото нет.
+    # Ссылка из артикула («сопутствующие») — считаем, что фото нет. Хост любой:
+    # тот же мусор приходит с groster.me/upload/iblock (пример из 1С-контракта).
     assert proxied(PREFIX + "0126367.png", "0126367") is None
     assert proxied(PREFIX + "0126367.jpg", "0126367") is None
+    assert proxied("https://groster.me/upload/iblock/0057412.jpg", "0057412") is None
+    assert proxied("https://groster.me/upload/iblock/0057412.JPG?v=2", "0057412") is None
+    # Без product_id (фид без артикула в этом месте) — ссылку не трогаем.
+    assert proxied("https://groster.me/upload/iblock/0057412.jpg") \
+        == "https://groster.me/upload/iblock/0057412.jpg"
+    # Артикул — часть имени, но не всё имя: это нормальная ссылка.
+    assert proxied("https://groster.me/upload/iblock/0057412-2.jpg", "0057412") \
+        == "https://groster.me/upload/iblock/0057412-2.jpg"
     # Тот же артикул, но имя — GUID: нормальная ссылка, не трогаем.
     assert proxied(PREFIX + "6aecaf12-c045-11ee-8805-ac1f6b855a52.png", "0126367") \
         == "/img/6aecaf12-c045-11ee-8805-ac1f6b855a52.png"
+
+    # Фото вперёд, порядок подборки внутри групп сохраняется, лишнее обрезается.
+    pp = [{"product_id": "a"}, {"product_id": "b", "image_url": "/img/b.png"},
+          {"product_id": "c", "image_url": ""}, {"product_id": "d", "image_url": "/img/d.png"}]
+    assert [x["product_id"] for x in photo_first(pp, 10)] == ["b", "d", "a", "c"]
+    assert [x["product_id"] for x in photo_first(pp, 2)] == ["b", "d"]   # без фото обрезаются первыми
+    assert photo_first([], 5) == []
 
     global _head_ok
     real, alive = _head_ok, set()

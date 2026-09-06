@@ -186,6 +186,13 @@ section+section{margin-top:32px}
   display:-webkit-box;-webkit-line-clamp:2;-webkit-box-orient:vertical;overflow:hidden;min-height:32px}
 .recprice{font-family:var(--mono);font-weight:600;font-size:13px}
 .recflag{font-size:11px;margin-top:4px}
+.pickbtn{font:inherit;font-weight:600;font-size:11.5px;cursor:pointer;width:100%;margin-top:8px;
+  padding:6px 8px;border-radius:8px;border:1px solid var(--border);background:var(--surface);color:var(--muted)}
+.pickbtn:hover{background:var(--surface-2);color:var(--text)}
+.pickbtn.on{background:var(--grad);border:0;color:#fff}
+.recdel{position:absolute;top:6px;right:6px;width:22px;height:22px;border-radius:7px;cursor:pointer;
+  border:1px solid var(--border);background:var(--surface);color:var(--muted);font-size:13px;line-height:1;padding:0}
+.recdel:hover{background:var(--alert);border-color:var(--alert);color:#fff}
 .tagrow{display:flex;flex-wrap:wrap;gap:4px;margin-top:8px}
 .tagchip{font-size:10px;font-weight:600;padding:1px 7px;border-radius:999px;background:var(--surface-2);color:var(--muted);border:1px solid var(--border)}
 .tagchip.tag-new{background:#e8f7ee;color:#1a7f45;border-color:#bfe8cf}
@@ -486,7 +493,7 @@ const rub = v => v==null ? '—' : Math.round(v).toLocaleString('ru-RU')+' ₽';
 const num = v => (+v||0).toLocaleString('ru-RU');
 
 const SVC = {
-  best_offer:{ru:'Best Offer', sub:'плановая рассылка топ-5 по категориям'},
+  best_offer:{ru:'Best Offer', sub:'плановая рассылка подборки по категориям'},
   cart:{ru:'Брошенная корзина', sub:'событийная, near-real-time'},
   postsale:{ru:'Постпродажа', sub:'отложенное письмо после заказа'},
 };
@@ -649,7 +656,7 @@ function feedTiles(f){
   const p=freshInfo(f.products.last_updated),t=freshInfo(f.top5.last_updated),o=freshInfo(f.orders.last_order);
   return `<div class="grid tiles">
     <div class="tile"><div class="l">Каталог</div><div class="n">${num(f.products.count)}</div><div class="s ${p.stale?'stale':''}">обновлён ${esc(p.t)}</div></div>
-    <div class="tile"><div class="l">Топ-5 категорий</div><div class="n">${num(f.top5.categories)}</div><div class="s ${t.stale?'stale':''}">обновлён ${esc(t.t)}</div></div>
+    <div class="tile"><div class="l">Категорий с подборкой</div><div class="n">${num(f.top5.categories)}</div><div class="s ${t.stale?'stale':''}">обновлён ${esc(t.t)}</div></div>
     <div class="tile"><div class="l">Заказы</div><div class="n">${num(f.orders.count)}</div><div class="s">последний ${esc(o.t)}</div></div>
     <div class="tile"><div class="l">Подписчики</div><div class="n">${num(f.subscribers)}</div><div class="s">в базе</div></div></div>`;
 }
@@ -882,7 +889,30 @@ async function viewAnalytics(){
 function priceRu(v){ return v==null?'—':v.toLocaleString('ru-RU',{minimumFractionDigits:(v%1?2:0),maximumFractionDigits:2})+' ₽'; }
 // Битый src (404/недоступен) → плейсхолдер «нет фото» вместо сломанной иконки.
 function imgOnerr(el){ el.onerror=null; const d=document.createElement('div'); d.className='recimg ph'; d.textContent='нет фото'; el.replaceWith(d); }
-let recCat='', recView='cards', recProblems=false, recTag='';
+let recCat='', recView='cards', recProblems=false, recTag='', recQ='', recCache=null, recMax=30;
+// Товары в письме = позиции категории в подборке. Все жесты (добавить/убрать/очистить)
+// шлют новый список категории целиком: сервер заменяет позиции, порядок = порядок в письме.
+const jsq = v => esc(String(v==null?'':v).replace(/\\/g,'\\\\').replace(/'/g,"\\'"));
+let recShown={};        // cid → показанные под фильтрами product_id (для «Добавить показанные»)
+const recIds = cid => ((recCache&&recCache.categories||[]).find(c=>c.category_id===cid)?.products||[]).map(p=>p.product_id);
+async function saveRec(cid, ids, msg){
+  const r=await j('/admin/recommendations/'+encodeURIComponent(cid),
+    {method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify({product_ids:ids})});
+  if(!r.ok){ toast(r.reason||'не сохранено'); return false; }
+  toast(msg); viewFeeds(); return true;
+}
+function toggleRec(cid,pid){
+  const ids=recIds(cid);
+  if(ids.includes(pid)) return saveRec(cid, ids.filter(x=>x!==pid), 'Убрано из рассылки');
+  if(ids.length>=recMax){ toast(`В письмо уходит максимум ${recMax} товаров — уберите лишние`); return; }
+  return saveRec(cid, [...ids, pid], 'Добавлено в рассылку');
+}
+function clearRec(cid){ return saveRec(cid, [], 'Категория очищена'); }
+function addShownRec(cid){
+  const ids=recIds(cid), add=(recShown[cid]||[]).filter(p=>!ids.includes(p)).slice(0, Math.max(0, recMax-ids.length));
+  if(!add.length){ toast(ids.length>=recMax?`Уже ${recMax} товаров — предел письма`:'Всё показанное уже в рассылке'); return; }
+  return saveRec(cid, [...ids, ...add], `Добавлено ${add.length} тов.`);
+}
 function setRecView(v){ recView=v; viewFeeds(); }
 function recStatusPill(pr){
   if(!pr.exists) return '<span class="pill unsubscribed">нет в каталоге</span>';
@@ -890,9 +920,10 @@ function recStatusPill(pr){
   return '<span class="pill sent">в наличии</span>';
 }
 async function viewFeeds(){
-  setTitle('Товарные рекомендации','топ-5 по категориям из 1С — что идёт в письма');
+  setTitle('Товарные рекомендации','подборка по категориям — что идёт в письма');
   await loadCore();
   const [rec] = await Promise.all([j('/admin/recommendations')]);
+  recCache=rec; recMax=rec.max_items||30;   // подборку правим на клиенте, PUT'ом отдаём целиком
   const catData = recView==='catalog' ? await j('/admin/catalog') : null;  // весь каталог — только по запросу
   const oc=cache.integration.onec_configured;
   const p=(iso)=>{const f=freshInfo(iso);return f;};
@@ -913,14 +944,16 @@ async function viewFeeds(){
         : !pr.in_stock ? '<div class="recflag" style="color:var(--warn)">нет в наличии</div>'
         : '<div class="recflag" style="color:var(--ok)">в наличии</div>';
       return `<div class="recitem${dim}">
-        <div class="recpos">${pr.position}</div>${img}
+        <div class="recpos">${pr.position}</div>
+        <button class="recdel" title="Убрать из рассылки" onclick="toggleRec('${jsq(c.category_id)}','${jsq(pr.product_id)}')">✕</button>${img}
         <div class="recname" title="${esc(pr.name||pr.product_id)}">${esc(pr.name||('id '+pr.product_id))}</div>
         <div class="recprice">${priceRu(pr.price)}</div>${flag}</div>`;
     }).join('');
     const usable=c.products.filter(x=>x.usable).length;
     return `<section><div class="eyebrow">
-        <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${usable}/${c.products.length} в письмах</span></h2>
-        <span class="rule"></span></div>
+        <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${c.products.length}/${recMax} в письме, ${usable} доступно</span></h2>
+        <span class="rule"></span>
+        <button class="btn" onclick="clearRec('${jsq(c.category_id)}')">Очистить</button></div>
       <div class="recgrid">${items}</div></section>`;
   }).join('');
 
@@ -949,6 +982,11 @@ async function viewFeeds(){
   const tagCls={'Новинка':'tag-new','Топ':'tag-top','Сопутствующий':'tag-rel'};
   let ccats = catData ? (recCat?catData.categories.filter(c=>c.category_id===recCat):catData.categories) : [];
   if(recTag) ccats = ccats.map(c=>({...c, products:c.products.filter(p=>(p.tags||[]).includes(recTag))})).filter(c=>c.products.length);
+  const q=recQ.trim().toLowerCase();   // поиск по названию/артикулу: без него 30 товаров не наберёшь
+  if(q) ccats = ccats.map(c=>({...c, products:c.products.filter(p=>
+      (p.name||'').toLowerCase().includes(q) || (p.product_id||'').toLowerCase().includes(q))})).filter(c=>c.products.length);
+  const selIds=new Set(rec.categories.flatMap(c=>c.products.map(p=>p.product_id)));
+  recShown={};
   const catalogCards = ccats.map(c=>{
     const items=c.products.map(pr=>{
       const dim = pr.in_stock ? '' : ' dim';
@@ -962,12 +1000,17 @@ async function viewFeeds(){
       const name = pr.product_url
         ? `<a class="recname" href="${esc(pr.product_url)}" target="_blank" rel="noopener" title="${esc(pr.name||pr.product_id)}">${label}</a>`
         : `<div class="recname" title="${esc(pr.name||pr.product_id)}">${label}</div>`;
+      const on = selIds.has(pr.product_id);
+      const pick = `<button class="pickbtn${on?' on':''}" onclick="toggleRec('${jsq(c.category_id)}','${jsq(pr.product_id)}')">${on?'✓ в рассылке':'+ в рассылку'}</button>`;
       return `<div class="recitem${dim}">${img}${chips?`<div class="tagrow">${chips}</div>`:''}${name}
-        <div class="recprice">${priceRu(pr.price)}</div>${flag}</div>`;
+        <div class="recprice">${priceRu(pr.price)}</div>${flag}${pick}</div>`;
     }).join('');
+    const inCat=recIds(c.category_id).length;
+    recShown[c.category_id]=c.products.map(p=>p.product_id);
     return `<section><div class="eyebrow">
-        <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${c.products.length} тов.</span></h2>
-        <span class="rule"></span></div>
+        <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${c.products.length} тов. · ${inCat}/${recMax} в рассылке</span></h2>
+        <span class="rule"></span>
+        <button class="btn" onclick="addShownRec('${jsq(c.category_id)}')">Добавить показанные</button></div>
       <div class="recgrid">${items}</div></section>`;
   }).join('');
   const catShown = ccats.reduce((s,c)=>s+c.products.length,0);
@@ -982,20 +1025,21 @@ async function viewFeeds(){
     <div class="card srcbar">
       <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap">
         <span class="pill ${oc?'live':'dev'}">${oc?'Источник: 1С':'Источник: push-фиды'}</span>
-        <span class="svc-sub">${oc?esc(cache.integration.onec_base_url||''):'1С не подключена'} · топ-5 обновлён ${esc(cat.t)}${cat.stale?' · <b style="color:var(--warn)">устарел &gt;24ч</b>':''}</span>
+        <span class="svc-sub">${oc?esc(cache.integration.onec_base_url||''):'1С не подключена'} · подборка обновлена ${esc(cat.t)}${cat.stale?' · <b style="color:var(--warn)">устарел &gt;24ч</b>':''}</span>
       </div>
       <div style="display:flex;gap:8px;align-items:center">
         <button class="btn" ${oc?'':'disabled'} onclick="syncCatalog()">Синхронизировать из 1С</button>
-        <button class="btn" onclick="computeTop5()" title="Автоматически вычислить топ-5 по категориям из истории заказов">Пересчитать топ-5</button>
+        <button class="btn" onclick="computeTop5()" title="Заменить подборку всех категорий бестселлерами из истории заказов">Пересчитать автоматически</button>
         <input type="file" id="importFile" accept=".xml,.yml,.json,text/xml,application/xml,application/json" style="display:none" onchange="importFile(this)">
         <button class="btn primary" onclick="document.getElementById('importFile').click()">Импорт из файла (XML/YML/JSON)</button>
       </div>
     </div>
     <div class="card statbar">
-      <div class="stat"><b>${num(rec.category_count)}</b><span>категорий с топ-5</span></div>
-      <div class="stat"><b>${num(rec.position_count)}</b><span>позиций в топе</span></div>
+      <div class="stat"><b>${num(rec.category_count)}</b><span>категорий с подборкой</span></div>
+      <div class="stat"><b>${num(rec.position_count)}</b><span>позиций в подборках</span></div>
       <div class="stat"><b style="color:${rec.usable_count===rec.position_count?'var(--ok)':'var(--warn)'}">${num(rec.usable_count)}</b><span>пойдёт в письма</span></div>
       <div class="stat"><b>${num(cache.feeds.products.count)}</b><span>товаров в каталоге</span></div>
+      ${catData ? `<div class="stat"><b style="color:${catData.no_photo_count?'var(--warn)':'var(--ok)'}">${num(catData.no_photo_count)}</b><span>товаров без фото</span></div>` : ''}
     </div>
     <div class="toolbar">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -1003,19 +1047,22 @@ async function viewFeeds(){
         ${recView==='catalog'
           ? `<select class="inp" onchange="recTag=this.value;viewFeeds()">
                ${opt('','Все теги',recTag)}${(catData&&catData.tags||[]).map(t=>opt(t.tag,`${t.tag} (${t.count})`,recTag)).join('')}
-             </select>`
+             </select>
+             <input class="inp" style="min-width:210px" placeholder="Поиск: название или артикул" value="${esc(recQ)}"
+                    onchange="recQ=this.value;viewFeeds()">`
           : `<label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
                <span class="track"></span><span class="lbl">только проблемные</span></label>`}
       </div>
-      <div class="seg">${seg('cards','Топ-5')}${seg('catalog','Каталог')}${seg('table','Таблица')}${seg('list','Список')}</div>
+      <div class="seg">${seg('cards','В рассылке')}${seg('catalog','Каталог')}${seg('table','Таблица')}${seg('list','Список')}</div>
     </div>
     <p class="legend" style="margin:0 2px 4px">${recView==='catalog'
-      ? `Каталог${recTag?` · тег «${esc(recTag)}»`:''}: показано <b>${num(catShown)}</b> тов. Теги проставляются автоматически по типу файла (Новинка/Топ/Сопутствующий).`
-      : 'Топ-5 используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции в письмо не попадут.'}</p>
+      ? `Каталог${recTag?` · тег «${esc(recTag)}»`:''}${recQ?` · поиск «${esc(recQ)}»`:''}: показано <b>${num(catShown)}</b> тов. Нажмите «+ в рассылку» на карточке или «Добавить показанные» — фильтром по тегу и поиском набирается сразу нужный список.
+         «Нет фото» на карточке = в выгрузке нет ссылки на картинку либо файла нет на static.groster.me; чинится в выгрузке 1С (имя файла — GUID из CMS, не артикул).`
+      : `Подборка идёт в <b>Best Offer</b> (ротация по категориям) и <b>Постпродажу</b> (cross-sell): до <b>${recMax}</b> товаров в письме, порядок = порядок карточек. Затемнённые позиции в письмо не попадут.`}</p>
   </section>
   ${recView==='catalog'? catalogSection
-    : !rec.category_count?'<section><div class="tablewrap"><div class="empty">Топ-5 не заданы. Импортируйте каталог и нажмите «Пересчитать топ-5», либо синхронизируйте из 1С.</div></div></section>'
-    : empty?'<section><div class="tablewrap"><div class="empty">'+(recProblems?'Проблемных позиций нет — весь топ-5 в наличии. ✓':'Нет позиций.')+'</div></div></section>'
+    : !rec.category_count?'<section><div class="tablewrap"><div class="empty">Подборка пуста. Наберите товары во вкладке «Каталог», нажмите «Пересчитать автоматически» или синхронизируйте из 1С.</div></div></section>'
+    : empty?'<section><div class="tablewrap"><div class="empty">'+(recProblems?'Проблемных позиций нет — вся подборка в наличии. ✓':'Нет позиций.')+'</div></div></section>'
     : recView==='table'?recTable : recView==='list'?recList : catCards}`;
 }
 async function syncCatalog(){
@@ -1025,10 +1072,10 @@ async function syncCatalog(){
 }
 async function computeTop5(){
   const r=await j('/admin/compute-top5',{method:'POST'});
-  if(r.ok){ toast(`Топ-5 пересчитан: ${r.categories} категорий, ${r.positions} позиций`);
-    if(recView==='catalog') recView='cards';  // покажем результат в топ-5
+  if(r.ok){ toast(`Подборка пересчитана: ${r.categories} категорий, ${r.positions} позиций`);
+    if(recView==='catalog') recView='cards';  // покажем результат в подборке
     viewFeeds(); }
-  else toast(`Топ-5: ${r.reason||'ошибка'}`);
+  else toast(`Подборка: ${r.reason||'ошибка'}`);
 }
 async function importFile(input){
   const file=input.files&&input.files[0]; input.value='';
@@ -1456,6 +1503,7 @@ const COND_TXT={
   depart_timeout_sec:['Считать уходом из корзины','секунд без активности'],
   grace_sec:['Ждать перед отправкой','секунд (вдруг вернётся)'],
   delay_days:['Отправить через','дней после заказа'],
+  min_engagement:['Импортированной базе слать с уровня прогрева','— 3 кликали по письмам, 2 открывали, 1 покупали, 0 всем (свои лиды — всегда)'],
 };
 function condRow(svc,key,v,fm){
   const t=COND_TXT[key];
@@ -2458,6 +2506,12 @@ async function testMail(){
 
 /* Лиды */
 let leadFilter={q:'',status:'',page:0};
+let leadImport={consent:false,report:null};
+// Теплота импортированного лида (subscribers.engagement). null — свой лид: колесо,
+// корзина, фид магазина; порог прогрева его не касается.
+const WARMTH={3:{t:'кликал',c:'live'},2:{t:'открывал',c:'sent'},1:{t:'покупал',c:'dev'},0:{t:'холодный',c:'unsubscribed'}};
+const warmth=e=>e==null?'<span class="pill live">свой лид</span>'
+  :`<span class="pill ${WARMTH[e].c}">${WARMTH[e].t}</span>`;
 const LEAD_LIM=50;
 function leadsPage(p){ leadFilter.page=Math.max(0,p); viewLeads(); }
 async function viewLeads(){
@@ -2470,7 +2524,7 @@ async function viewLeads(){
   const rows=list.map(l=>`<tr onclick="location.hash='#/lead/'+encodeURIComponent('${esc(l.user_id)}')" style="cursor:pointer">
     <td><span style="color:var(--accent);font-weight:600">${esc(l.email||l.user_id)}</span></td>
     <td><span class="pill ${l.is_unsubscribed?'unsubscribed':'sent'}">${l.is_unsubscribed?'отписан':'подписан'}</span></td>
-    <td>${l.source==='wheel'?`<span class="pill live">🎡 Колесо</span>${l.wheel_prize?` <span class="mono" style="color:var(--muted)">${esc(l.wheel_prize)}</span>`:''}`:'<span class="mono" style="color:var(--muted)">—</span>'}</td>
+    <td>${l.source==='wheel'?`<span class="pill live">🎡 Колесо</span>${l.wheel_prize?` <span class="mono" style="color:var(--muted)">${esc(l.wheel_prize)}</span>`:''}`:warmth(l.engagement)}</td>
     <td class="mono">${esc(l.category||'—')}</td>
     <td class="mono">${l.last_purchase_at?esc(new Date(l.last_purchase_at).toLocaleDateString('ru-RU')):'—'}</td>
     <td class="mono">${l.consent_at?esc(new Date(l.consent_at).toLocaleDateString('ru-RU')):'—'}</td></tr>`).join('');
@@ -2480,7 +2534,22 @@ async function viewLeads(){
     ${tile('Отписаны',a.unsubscribed,'исключены из рассылок')}
     ${tile('Согласие 152-ФЗ',a.consented,'consent зафиксирован')}
     ${tile('С покупками',a.with_purchase,'есть история заказов')}
+    ${tile('В рассылке',a.mailable,`проходят порог прогрева ${a.min_engagement}`)}
+    ${tile('Ниже порога',a.cold,'ждут снижения порога')}
   </div></section>
+  <section><div class="card srcbar">
+    <div style="display:flex;align-items:center;gap:10px;flex-wrap:wrap;min-width:260px">
+      <b>Импорт лидов</b>
+      <span class="svc-sub">XLSX-выгрузка старой системы (все листы сразу, лист «Отписанные» ставит отписку) или CSV из гугл-таблицы. Нужна колонка <b>email</b> / «Почта».</span>
+    </div>
+    <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
+      <label class="switch" title="152-ФЗ: проставит дату согласия строкам, где своей даты в файле нет">
+        <input type="checkbox" ${leadImport.consent?'checked':''} onchange="leadImport.consent=this.checked">
+        <span class="track"></span><span class="lbl">согласие собрано</span></label>
+      <input type="file" id="leadsFile" accept=".xlsx,.csv,text/csv,text/plain,application/vnd.openxmlformats-officedocument.spreadsheetml.sheet" style="display:none" onchange="importLeads(this)">
+      <button class="btn primary" onclick="document.getElementById('leadsFile').click()">Импорт лидов (XLSX/CSV)</button>
+    </div>
+  </div>${importReport()}</section>
   <section><div class="eyebrow"><h2>Список лидов</h2><span class="rule"></span></div>
     <div class="filters">
       <input class="inp wide" type="search" placeholder="поиск по email или id" value="${esc(leadFilter.q)}"
@@ -2492,6 +2561,44 @@ async function viewLeads(){
       <th>Лид</th><th>Статус</th><th>Источник</th><th>Категория покупки</th><th>Последняя покупка</th><th>Согласие</th>
     </tr></thead><tbody>${rows}</tbody></table></div>`+pager(leadFilter.page,list.length>=LEAD_LIM,'leadsPage'):'<div class="tablewrap"><div class="empty">'+(leadFilter.q||leadFilter.status||leadFilter.page?'Лиды не найдены.':'База лидов пуста.')+'</div></div>'+(leadFilter.page?pager(leadFilter.page,false,'leadsPage'):'')}
   </section>`;
+}
+
+function importReport(){
+  const r=leadImport.report; if(!r) return '';
+  const dup=Math.max(0,r.total-r.skipped_count-r.imported);
+  const sheets=(r.sheets||[]).length?`<div class="tablewrap" style="margin-top:10px"><table><thead><tr>
+      <th>Лист книги</th><th>Строк</th><th>С email</th><th>Что даёт лиду</th></tr></thead><tbody>
+      ${r.sheets.map(x=>`<tr><td>${esc(x.name)}</td><td class="mono">${num(x.rows)}</td><td class="mono">${num(x.emails)}</td>
+        <td>${x.unsubscribed?'<span class="pill unsubscribed">отписка</span>':warmth(x.engagement)}</td></tr>`).join('')}
+    </tbody></table></div>`:'';
+  const bad=r.skipped.length?`<div class="tablewrap" style="margin-top:10px"><table><thead><tr><th>Строка</th><th>Причина пропуска</th></tr></thead><tbody>
+      ${r.skipped.map(x=>`<tr><td class="mono">${esc(x.line)}</td><td class="mono">${esc(x.reason)}</td></tr>`).join('')}
+    </tbody></table></div>`:'';
+  return `<div class="card" style="margin-top:12px">
+    <div style="display:flex;justify-content:space-between;align-items:center;gap:10px;flex-wrap:wrap">
+      <b>Результат импорта</b>
+      <button class="btn" onclick="leadImport.report=null;viewLeads()">Скрыть</button>
+    </div>
+    <p class="legend" style="margin:8px 2px 0">Строк в файле <b>${num(r.total)}</b> · новых лидов <b style="color:var(--ok)">${num(r.new)}</b> ·
+      обновлено <b>${num(r.updated)}</b>${dup?` · дублей адресов <b>${num(dup)}</b>`:''}${r.blank_count?` · строк без email <b>${num(r.blank_count)}</b>`:''}${r.skipped_count-r.blank_count>0?` · мусорных адресов <b style="color:var(--warn)">${num(r.skipped_count-r.blank_count)}</b>`:''}.
+      Распознаны колонки: <span class="mono">${esc((r.columns||[]).join(', ')||'email')}</span>.
+      Отписавшихся импорт не возвращает в рассылку, уже зафиксированное согласие не перетирает.</p>
+    <p class="legend" style="margin:6px 2px 0">Прогрев домена: при текущем пороге <b>${r.min_engagement}</b>
+      (${esc((WARMTH[r.min_engagement]||{}).t||'все')}) в рассылку пойдут <b style="color:var(--ok)">${num(r.warm)}</b> из ${num(r.imported)}.
+      Порог снижается в <a href="#/service/best_offer">Best Offer → Условия и пороги</a> — по мере того как домен набирает репутацию.</p>
+    ${sheets}${bad}</div>`;
+}
+async function importLeads(input){
+  const file=input.files&&input.files[0]; input.value='';
+  if(!file)return;
+  toast('Импорт лидов…');
+  const resp=await fetch('/admin/import-leads?consent='+(leadImport.consent?'true':'false'),{method:'POST',body:file});
+  const r=await resp.json();
+  if(!r.ok){ leadImport.report=null; toast(`Импорт лидов: ${r.reason||'ошибка'}`); return; }
+  leadImport.report=r; leadFilter.page=0;
+  toast(`Лиды: новых ${r.new}, обновлено ${r.updated}${r.skipped_count?`, пропущено ${r.skipped_count}`:''}`);
+  await loadCore();
+  viewLeads();
 }
 
 async function viewLead(uid){
@@ -2521,6 +2628,7 @@ async function viewLead(uid){
         ${f('Email', p.email||'—')}
         ${f('Статус', p.is_unsubscribed?'отписан':'подписан')}
         ${f('Согласие 152-ФЗ', dt2(p.consent_at))}
+        <div class="field"><span class="k">Прогрев</span><span>${warmth(p.engagement)}</span></div>
         ${p.source==='wheel'?f('Участие в колесе', dt2(p.wheel_spun_at))+f('Приз (промокод)', p.wheel_prize||'—'):''}
         ${f('Категория покупки', p.category||'—')}
         ${f('Указатель ротации', p.rotation||'—')}

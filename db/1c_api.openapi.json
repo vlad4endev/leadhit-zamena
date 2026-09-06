@@ -38,7 +38,7 @@
                     "price": 71.60, "unit": "пач", "currency": "RUB", "min_order_qty": 1,
                     "packaging": [ { "level": "упак", "qty": 21 } ],
                     "in_stock": true, "stock_level": "много", "attributes": [], "tags": ["хит"],
-                    "image_url": "https://groster.me/upload/iblock/0057412.jpg",
+                    "image_url": "https://static.groster.me/images/shop/1f64c996-3d86-11ed-948a-ac1f6b855a52.jpg",
                     "product_url": "https://groster.me/catalog/salfetki-bumajnye/0057412/",
                     "updated_at": "2026-07-23T09:00:00+03:00"
                   },
@@ -49,7 +49,7 @@
                     "price": 11.80, "unit": "шт", "currency": "RUB", "min_order_qty": 100,
                     "packaging": [ { "level": "упак", "qty": 100 }, { "level": "кор", "qty": 600 } ],
                     "in_stock": true, "stock_level": "много", "attributes": [], "tags": [],
-                    "image_url": "https://groster.me/upload/iblock/0038921.jpg",
+                    "image_url": "https://static.groster.me/images/shop/6aecaf12-c045-11ee-8805-ac1f6b855a52.png",
                     "product_url": "https://groster.me/catalog/kasaletki/0038921/",
                     "updated_at": "2026-07-23T09:00:00+03:00"
                   },
@@ -61,7 +61,7 @@
                     "packaging": [ { "level": "кор", "qty": 16 } ],
                     "in_stock": true, "stock_level": "мало",
                     "attributes": [ { "name": "Запах", "value": "Экстракт ромашки" } ], "tags": ["новинка"],
-                    "image_url": "https://groster.me/upload/iblock/0061044.jpg",
+                    "image_url": "https://static.groster.me/images/shop/edd52780-6960-11f1-92e9-74563c4adfb9.png",
                     "product_url": "https://groster.me/catalog/vlajnye-salfetki/0061044/",
                     "updated_at": "2026-07-23T09:00:00+03:00"
                   }
@@ -90,7 +90,7 @@
                 "price": 71.60, "unit": "пач", "currency": "RUB", "min_order_qty": 1,
                 "packaging": [ { "level": "упак", "qty": 21 } ],
                 "in_stock": true, "stock_level": "много", "attributes": [], "tags": ["хит"],
-                "image_url": "https://groster.me/upload/iblock/0057412.jpg",
+                "image_url": "https://static.groster.me/images/shop/1f64c996-3d86-11ed-948a-ac1f6b855a52.jpg",
                 "product_url": "https://groster.me/catalog/salfetki-bumajnye/0057412/",
                 "updated_at": "2026-07-23T09:00:00+03:00"
               } ], "missing": ["0038921"] } } }

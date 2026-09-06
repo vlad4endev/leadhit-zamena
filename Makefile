@@ -30,7 +30,9 @@ test:                      ## Self-check чистой логики всех се
 	$(PY) -m app.cart
 	$(PY) -m app.analytics
 	$(PY) -m app.app_settings
+	$(PY) -m app.svc_config
 	$(PY) -m app.import_xml
+	$(PY) -m app.import_leads
 	$(PY) -m app.import_yml
 	$(PY) -m app.images
 	node scripts/test_trigger.js && node scripts/test_track.js && node scripts/test_wheel.js

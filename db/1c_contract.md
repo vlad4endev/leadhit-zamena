@@ -43,7 +43,7 @@
       "stock_level": "много",
       "attributes": [],
       "tags": ["хит"],
-      "image_url": "https://groster.me/upload/iblock/0057412.jpg",
+      "image_url": "https://static.groster.me/images/shop/1f64c996-3d86-11ed-948a-ac1f6b855a52.jpg",
       "product_url": "https://groster.me/catalog/salfetki-bumajnye/0057412/",
       "updated_at": "2026-07-23T09:00:00+03:00"
     },
@@ -61,7 +61,7 @@
       "stock_level": "много",
       "attributes": [],
       "tags": [],
-      "image_url": "https://groster.me/upload/iblock/0038921.jpg",
+      "image_url": "https://static.groster.me/images/shop/6aecaf12-c045-11ee-8805-ac1f6b855a52.png",
       "product_url": "https://groster.me/catalog/kasaletki/0038921/",
       "updated_at": "2026-07-23T09:00:00+03:00"
     }
@@ -81,6 +81,11 @@
 * `stock_level` много / достаточно / мало / нет
 * `attributes` варианты (Вкус/Цвет/Размер/Запах), пусто если товар без вариантов
 * `tags` например хит, новинка
+* `image_url` **URL картинки, тот же, что показывает сайт**: `https://static.groster.me/images/shop/<GUID>.<png|jpg|jpeg>`
+  с реальным расширением файла. Ссылка, собранная из артикула
+  (`…/<product_id>.jpg`) — это не фото: таких файлов нет, GrosterHit считает такой
+  товар «без фото» и в письмо картинку не ставит. Нет картинки в 1С — присылайте `""`.
+  Подробнее (три частые ошибки выгрузки) — в [import_json_contract.md](import_json_contract.md).
 
 Товары по списку id:
 

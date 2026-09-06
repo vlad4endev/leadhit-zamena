@@ -9,7 +9,7 @@ import json
 
 import asyncpg
 
-from app import app_settings, svc_config
+from app import app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -19,16 +19,20 @@ CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
 def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]]) -> tuple[str | None, list[str]]:
     """Подбор cross-sell (ТЗ 4.4), без ML.
 
-    Категория самого дорогого товара → топ-5 этой категории минус уже купленное.
+    Категория самого дорогого товара → подборка этой категории минус уже купленное.
+    Сколько из неё уйдёт в письмо, решается после загрузки из каталога (см. _process_one).
     Пусто → фолбэк на категорию следующего по цене товара. Возвращает (category_id, product_ids)
     или (None, []) если подобрать нечего (тогда письмо НЕ шлём — критерий 4.8).
     """
     bought = {i["product_id"] for i in items}
     # Категории заказа по убыванию цены товара (для основной категории и фолбэка).
-    cats_by_price = [i["category_id"] for i in sorted(items, key=lambda i: -i["price"])]
+    # Позиции без категории пропускаем: подбирать по ним нечего, но и ронять заказ
+    # целиком из-за одной такой позиции нельзя (см. _fill_categories).
+    cats_by_price = [i.get("category_id")
+                     for i in sorted(items, key=lambda i: -(i.get("price") or 0))]
     seen: set[str] = set()
     for cat in cats_by_price:
-        if cat in seen:
+        if not cat or cat in seen:
             continue
         seen.add(cat)
         picked = [p for p in top5_by_cat.get(cat, []) if p not in bought]
@@ -117,14 +121,21 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
             )
             return False
 
-    items = json.loads(order["items"])
-    top5 = await _top5_map(con, [i["category_id"] for i in items])
+    items = await _fill_categories(con, json.loads(order["items"]))
+    top5 = await _top5_map(con, [i["category_id"] for i in items if i.get("category_id")])
     category, product_ids = pick_cross_sell(items, top5)
     if not product_ids:
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
         return False
 
-    products = await _load_products(con, product_ids)
+    # Лимит — после загрузки: «нет в наличии» отсеивает _load_products, товары без фото
+    # photo_first уводит в хвост и обрезает первыми (см. app/images.py).
+    products = images.photo_first(await _load_products(con, product_ids),
+                                  svc_config.items_limit(cfg))
+    if not products:
+        await _finish(con, job["id"], "cancelled")   # блок пуст → не шлём (ТЗ 4.8)
+        return False
+    product_ids = [p["product_id"] for p in products]
     if blocks:
         html = render_blocks(blocks, products, order["user_id"], "postsale", look)
     else:
@@ -156,6 +167,28 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
 
 async def _finish(con: asyncpg.Connection, job_id: int, state: str) -> None:
     await con.execute("UPDATE send_queue SET state = $2 WHERE id = $1", job_id, state)
+
+
+async def _fill_categories(con: asyncpg.Connection, items: list[dict]) -> list[dict]:
+    """Дополняет позиции заказа категорией из каталога.
+
+    У заказа два входа с разной формой items: PUT /feeds/orders присылает category_id,
+    а POST /order с thank-you page — только product_id/price/qty (витрине неоткуда взять
+    категорию, и требовать её незачем). Cross-sell подбирается именно по категории,
+    поэтому берём её из products — там истина по товару, как в compute_top5.
+
+    Товара нет в каталоге → категория остаётся None, позиция выпадает из подбора.
+    """
+    missing = [i["product_id"] for i in items if not i.get("category_id")]
+    if not missing:
+        return items
+    rows = await con.fetch(
+        "SELECT product_id, category_id FROM products WHERE product_id = ANY($1::text[])",
+        missing,
+    )
+    by_id = {r["product_id"]: r["category_id"] for r in rows}
+    return [i if i.get("category_id") else {**i, "category_id": by_id.get(i["product_id"])}
+            for i in items]
 
 
 async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str, list[str]]:
@@ -200,6 +233,14 @@ def _demo() -> None:
     # Совсем нечего предложить → (None, []).
     assert pick_cross_sell([{"product_id": "b1", "category_id": "bags", "price": 100},
                             {"product_id": "b2", "category_id": "bags", "price": 90}], top5) == (None, [])
+    # Позиция из POST /order (thank-you page): ни category_id, ни гарантии price.
+    # Раньше здесь был KeyError, и он убивал ВЕСЬ тик воркера, а не одну задачу.
+    assert pick_cross_sell([{"product_id": "s1", "price": 100}], top5) == (None, [])
+    assert pick_cross_sell([{"product_id": "s1"}], top5) == (None, [])
+    # Смешанный заказ: позиция без категории не мешает подобрать по остальным.
+    assert pick_cross_sell([{"product_id": "x9", "price": 9000},
+                            {"product_id": "s1", "category_id": "shoes", "price": 100}],
+                           top5) == ("shoes", ["s2", "s3"])
     print("postsale._demo OK")
 
 
