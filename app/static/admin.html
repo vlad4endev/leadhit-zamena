@@ -2449,44 +2449,68 @@ async function loadMail(){
   const m=await j('/admin/mail/config');
   const box=$('mailbox'); if(!box) return;
   if(!m.configured){
-    box.innerHTML=`<div class="card empty">mailer-service не подключён.<br>
-      <span class="svc-sub">Укажите <code>MAILER_SERVICE_URL</code> в .env основного приложения и запустите микросервис.</span></div>`;
+    box.innerHTML=`<div class="card empty">Почта не настроена.<br>
+      <span class="svc-sub">Задайте <code>MAIL_TRANSPORT=sendmail</code> в .env или подключите <code>MAILER_SERVICE_URL</code>.</span></div>`;
     return;
   }
   if(m.error){ box.innerHTML=`<div class="card empty">Сервис недоступен: ${esc(m.error)}<br>
-    <span class="svc-sub">${esc(m.service_url)}</span></div>`; return; }
+    <span class="svc-sub">${esc(m.service_url||'')}</span></div>`; return; }
+  const live=m.provider==='smtp'||m.provider==='sendmail';
+  const modeLabel=m.provider==='sendmail'?'боевой sendmail':m.provider==='smtp'?'боевой SMTP':'dev-лог';
   const fld=(k,label,val,type='text')=>`<div class="field"><span class="k">${esc(label)}</span>
     <input class="inp wide" id="mail_${k}" type="${type}" value="${esc(val==null?'':val)}"></div>`;
+  const localNote=m.local
+    ? `<div class="svc-sub" style="margin-bottom:12px">Локальный транспорт приложения (без mailer-service).
+         Параметры правятся в <code>.env</code>: <code>MAIL_TRANSPORT</code>, <code>SENDMAIL_PATH</code>, <code>MAIL_FROM</code>.</div>`
+    : '';
+  const transportSel=`<div class="field"><span class="k">Транспорт</span>
+    <select class="inp wide" id="mail_mail_transport" ${m.local?'disabled':''}>
+      <option value="" ${!m.mail_transport?'selected':''}>авто</option>
+      <option value="sendmail" ${m.mail_transport==='sendmail'?'selected':''}>sendmail</option>
+      <option value="smtp" ${m.mail_transport==='smtp'?'selected':''}>SMTP</option>
+    </select></div>`;
   box.innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
     <div class="card">
-      <div class="field"><span class="k">Микросервис</span><span class="pill live">${esc(m.service_url)}</span></div>
-      <div class="field"><span class="k">Режим</span><span class="pill ${m.provider==='smtp'?'live':'dev'}">${m.provider==='smtp'?'боевой SMTP':'dev-лог'}</span></div>
-      ${fld('smtp_host','SMTP-хост',m.smtp_host)}
+      <div class="field"><span class="k">${m.local?'Режим':'Микросервис'}</span>
+        <span class="pill ${live?'live':'dev'}">${m.local?esc(modeLabel):esc(m.service_url)}</span></div>
+      ${m.local?'':`<div class="field"><span class="k">Режим</span><span class="pill ${live?'live':'dev'}">${esc(modeLabel)}</span></div>`}
+      ${localNote}
+      ${transportSel}
+      ${fld('sendmail_path','Путь sendmail',m.sendmail_path||'/usr/sbin/sendmail')}
+      ${fld('smtp_host','SMTP-хост (если SMTP)',m.smtp_host)}
       ${fld('smtp_port','Порт',m.smtp_port,'number')}
-      ${fld('smtp_user','Логин',m.smtp_user)}
-      <div class="field"><span class="k">Пароль</span>
-        <input class="inp wide" id="mail_smtp_password" type="password" placeholder="${m.has_password?'●●●●● (сохранён, оставьте пустым)':'не задан'}"></div>
+      ${fld('smtp_user','Логин SMTP',m.smtp_user)}
+      <div class="field"><span class="k">Пароль SMTP</span>
+        <input class="inp wide" id="mail_smtp_password" type="password" placeholder="${m.has_password?'●●●●● (сохранён, оставьте пустым)':'не задан'}" ${m.local?'disabled':''}></div>
       <div class="field"><span class="k">STARTTLS</span>
-        <label class="switch"><input type="checkbox" id="mail_smtp_starttls" ${m.smtp_starttls?'checked':''}>
+        <label class="switch"><input type="checkbox" id="mail_smtp_starttls" ${m.smtp_starttls?'checked':''} ${m.local?'disabled':''}>
           <span class="track"></span></label></div>
       ${fld('mail_from','Адрес отправителя',m.mail_from)}
       ${fld('mail_from_name','Имя отправителя',m.mail_from_name)}
-      ${fld('rate_per_min','Лимит писем/мин',m.rate_per_min,'number')}
-      <button class="btn primary" style="margin-top:12px" onclick="saveMail()">Сохранить провайдера</button>
+      ${m.rate_per_min!=null?fld('rate_per_min','Лимит писем/мин',m.rate_per_min,'number'):''}
+      ${m.local?'':`<button class="btn primary" style="margin-top:12px" onclick="saveMail()">Сохранить провайдера</button>`}
     </div>
     <div class="card">
       <div class="svc-name" style="margin-bottom:8px">Проверка</div>
-      <div class="svc-sub" style="margin-bottom:12px">Отправить тестовое письмо через текущие настройки провайдера.</div>
+      <div class="svc-sub" style="margin-bottom:12px">Отправить тестовое письмо через текущий транспорт (sendmail / SMTP).</div>
       <div style="display:flex;gap:8px">
         <input id="mail_test_to" class="inp wide" type="email" placeholder="email для теста">
         <button class="btn" onclick="testMail()">Отправить тест</button>
       </div>
       <div id="mail_test_result" class="svc-sub" style="margin-top:10px"></div>
     </div></div>`;
+  if(m.local){
+    ['sendmail_path','smtp_host','smtp_port','smtp_user','mail_from','mail_from_name'].forEach(k=>{
+      const el=$('mail_'+k); if(el) el.disabled=true;
+    });
+  }
 }
 async function saveMail(){
   const g=k=>($('mail_'+k)||{}).value;
-  const patch={smtp_host:g('smtp_host'), smtp_port:+g('smtp_port')||587, smtp_user:g('smtp_user'),
+  const patch={
+    mail_transport:g('mail_transport'),
+    sendmail_path:g('sendmail_path'),
+    smtp_host:g('smtp_host'), smtp_port:+g('smtp_port')||587, smtp_user:g('smtp_user'),
     smtp_starttls:$('mail_smtp_starttls').checked, mail_from:g('mail_from'),
     mail_from_name:g('mail_from_name'), rate_per_min:+g('rate_per_min')||120};
   const pw=g('smtp_password'); if(pw) patch.smtp_password=pw;
@@ -2500,7 +2524,8 @@ async function testMail(){
   $('mail_test_result').textContent='Отправка…';
   const r=await j('/admin/mail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
   $('mail_test_result').innerHTML = r.ok
-    ? '<span style="color:var(--ok)">✓ Отправлено ('+esc(r.message_id||'')+')</span>'
+    ? `<span style="color:var(--ok)">✓ Отправлено (${esc(r.message_id||'')})${r.mailer?' · '+esc(r.mailer):''}</span>`
+      +(r.hint?`<div class="svc-sub" style="margin-top:6px">${esc(r.hint)}</div>`:'')
     : '<span style="color:var(--alert)">✗ '+esc(r.error||'ошибка')+'</span>';
 }
 

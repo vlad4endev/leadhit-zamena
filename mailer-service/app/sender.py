@@ -1,9 +1,11 @@
-"""Отправка через SMTP-relay провайдера + обратный вызов событий в основное приложение."""
+"""Отправка через sendmail / SMTP-relay + обратный вызов событий в основное приложение."""
 from __future__ import annotations
 
 import asyncio
 import json
+import os
 import smtplib
+import subprocess
 import urllib.request
 from email.message import EmailMessage
 from email.utils import make_msgid
@@ -12,19 +14,52 @@ from app.config import settings
 from app import store
 
 
+def _provider(cfg: dict) -> str:
+    """smtp | sendmail | dev — по конфигу."""
+    t = (cfg.get("mail_transport") or "").strip().lower()
+    path = cfg.get("sendmail_path") or settings.sendmail_path or "/usr/sbin/sendmail"
+    if t == "smtp":
+        return "smtp" if cfg.get("smtp_host") else "dev"
+    if t == "sendmail":
+        return "sendmail" if os.access(path, os.X_OK) else "dev"
+    if cfg.get("smtp_host"):
+        return "smtp"
+    if os.access(path, os.X_OK):
+        return "sendmail"
+    return "dev"
+
+
+def provider_name(cfg: dict | None = None) -> str:
+    return _provider(cfg or store.config_sync())
+
+
+def _assert_mta_alive() -> None:
+    """sendmail часто возвращает 0 даже при остановленном postfix — ловим «mail system is down»."""
+    postqueue = "/usr/sbin/postqueue"
+    if not os.access(postqueue, os.X_OK):
+        postqueue = "postqueue"
+    try:
+        q = subprocess.run(
+            [postqueue, "-p"], capture_output=True, timeout=10, check=False)
+    except FileNotFoundError:
+        return
+    except Exception:  # noqa: BLE001
+        return
+    err = (q.stderr or q.stdout or b"").decode(errors="replace").lower()
+    if q.returncode != 0 and ("mail system is down" in err or "unavailable" in err):
+        raise RuntimeError(
+            "sendmail принял письмо, но MTA не запущен (postqueue: mail system is down). "
+            "Запустите postfix/exim на сервере и повторите тест.")
+
+
 def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str) -> str:
-    """Отправляет письмо, возвращает Message-ID. dev-режим (нет smtp_host) — только лог."""
+    """Отправляет письмо, возвращает Message-ID. provider=dev — только лог."""
     cfg = store.config_sync()
     message_id = make_msgid(domain=(cfg["mail_from"].split("@")[-1] or "mail.local"))
-    if not cfg["smtp_host"]:
-        print(f"[DEV-MAIL] to={to} subject={subject!r} mid={message_id} html_len={len(html)}")
-        return message_id
+    mode = _provider(cfg)
 
     msg = EmailMessage()
     msg["Message-ID"] = message_id
-    # From всегда = авторизованный ящик (mail_from): SMTP-релеи (Яндекс, Mail.ru и др.) отклоняют
-    # чужой From — «550 not local sender». Адрес отправителя сценария кладём в Reply-To, чтобы
-    # ответы клиентов уходили на него, а не на технический ящик.
     msg["From"] = f"{from_name or cfg['mail_from_name']} <{cfg['mail_from']}>"
     if from_email and from_email != cfg["mail_from"]:
         msg["Reply-To"] = from_email
@@ -33,6 +68,25 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
     msg.set_content("Для просмотра письма включите HTML.")
     msg.add_alternative(html, subtype="html")
 
+    if mode == "dev":
+        print(f"[DEV-MAIL] to={to} subject={subject!r} mid={message_id} html_len={len(html)}")
+        return message_id
+
+    if mode == "sendmail":
+        path = cfg.get("sendmail_path") or settings.sendmail_path or "/usr/sbin/sendmail"
+        if not os.access(path, os.X_OK):
+            raise FileNotFoundError(f"sendmail не найден или не исполняемый: {path}")
+        _assert_mta_alive()
+        cmd = [path, "-t", "-oi", "-f", cfg["mail_from"]]
+        proc = subprocess.run(
+            cmd, input=msg.as_bytes(), capture_output=True, timeout=60, check=False)
+        if proc.returncode != 0:
+            err = (proc.stderr or proc.stdout or b"").decode(errors="replace").strip()
+            raise RuntimeError(err or f"sendmail exit {proc.returncode}")
+        _assert_mta_alive()
+        return message_id
+
+    # smtp
     with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
         if cfg["smtp_starttls"]:
             s.starttls()

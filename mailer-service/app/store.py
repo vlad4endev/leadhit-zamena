@@ -39,7 +39,8 @@ CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
 """
 
 # Ключи конфигурации провайдера (переопределяют .env).
-_CFG_KEYS = ("smtp_host", "smtp_port", "smtp_user", "smtp_password",
+_CFG_KEYS = ("mail_transport", "sendmail_path",
+             "smtp_host", "smtp_port", "smtp_user", "smtp_password",
              "smtp_starttls", "mail_from", "mail_from_name", "rate_per_min")
 
 
@@ -55,6 +56,8 @@ def config_sync() -> dict:
 
     starttls = db.get("smtp_starttls")
     return {
+        "mail_transport": s("mail_transport", settings.mail_transport),
+        "sendmail_path": s("sendmail_path", settings.sendmail_path),
         "smtp_host": s("smtp_host", settings.smtp_host),
         "smtp_port": int(s("smtp_port", settings.smtp_port)),
         "smtp_user": s("smtp_user", settings.smtp_user),
