@@ -34,6 +34,8 @@ class EspEvent(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    mail_transport: Optional[str] = None   # sendmail | smtp | ''
+    sendmail_path: Optional[str] = None
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
     smtp_user: Optional[str] = None
@@ -68,7 +70,7 @@ app = FastAPI(title="mailer-service", lifespan=lifespan)
 async def health() -> dict:
     cfg = await store.get_config()
     return {"status": "ok", "outbox": await store.stats(),
-            "provider": "smtp" if cfg["smtp_host"] else "dev"}
+            "provider": sender.provider_name(cfg)}
 
 
 @app.get("/v1/config")
@@ -77,7 +79,7 @@ async def get_config(authorization: Optional[str] = Header(default=None)) -> dic
     _auth(authorization)
     cfg = await store.get_config()
     has_password = bool(cfg.pop("smtp_password", ""))
-    return {**cfg, "has_password": has_password, "provider": "smtp" if cfg["smtp_host"] else "dev"}
+    return {**cfg, "has_password": has_password, "provider": sender.provider_name(cfg)}
 
 
 @app.put("/v1/config")

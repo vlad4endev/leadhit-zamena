@@ -48,6 +48,7 @@ sudo nginx -t && sudo systemctl reload nginx
 ```
 Публичный домен API — `groster.skypath.fun` (embed сниппета + ссылки в письмах). Отправка
 писем идёт с `mail.groster.me` (DKIM/SPF/DMARC) — это разные домены.
+Чеклист sendmail + DNS (SPF/DKIM/DMARC): [MAIL_DNS.md](MAIL_DNS.md).
 
 Доступ по эндпоинтам:
 - `/cart-ping`, `/trigger.js` — публичные (браузер с витрины: пинг + загрузка сниппета).
