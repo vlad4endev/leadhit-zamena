@@ -88,18 +88,27 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
 
     # smtp
     use_ssl = bool(cfg.get("smtp_ssl")) or int(cfg.get("smtp_port") or 0) == 465
-    if use_ssl:
-        with smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
-            if cfg["smtp_user"]:
-                s.login(cfg["smtp_user"], cfg["smtp_password"])
-            s.send_message(msg)
-    else:
-        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
-            if cfg["smtp_starttls"]:
-                s.starttls()
-            if cfg["smtp_user"]:
-                s.login(cfg["smtp_user"], cfg["smtp_password"])
-            s.send_message(msg)
+    host, port = cfg["smtp_host"], int(cfg["smtp_port"])
+    try:
+        if use_ssl:
+            with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+                if cfg["smtp_user"]:
+                    s.login(cfg["smtp_user"], cfg["smtp_password"])
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(host, port, timeout=30) as s:
+                if cfg["smtp_starttls"]:
+                    s.starttls()
+                if cfg["smtp_user"]:
+                    s.login(cfg["smtp_user"], cfg["smtp_password"])
+                s.send_message(msg)
+    except TimeoutError as e:
+        raise TimeoutError(
+            f"нет ответа от {host}:{port} за 30с "
+            f"(SSL={use_ssl}). Часто VPS режет исходящий SMTP — "
+            f"проверьте: docker compose exec mailer "
+            f"python -c \"import socket; socket.create_connection(('{host}',{port}),5)\""
+        ) from e
     return message_id
 
 

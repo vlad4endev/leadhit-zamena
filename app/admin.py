@@ -894,8 +894,13 @@ async def get_vendor(path: str):
     return FileResponse(full, headers={"Cache-Control": "public, max-age=604800"})
 
 
-def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
-    """Синхронный вызов mailer-service (в потоке)."""
+def _mailer_svc(method: str, path: str, body: Optional[dict] = None,
+                timeout: float = 15) -> dict:
+    """Синхронный вызов mailer-service (в потоке).
+
+    Для /v1/test и /v1/send/sync нужен timeout > SMTP (30с), иначе API обрывает
+    раньше и маскирует реальную ошибку провайдера.
+    """
     import urllib.request
     from app.config import settings
     url = settings.mailer_service_url.rstrip("/") + path
@@ -904,7 +909,7 @@ def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
         headers["Authorization"] = f"Bearer {settings.mailer_service_token}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
@@ -994,9 +999,16 @@ async def mail_test(body: dict) -> dict:
 
     if settings.mailer_service_url:
         try:
-            return await asyncio.to_thread(_mailer_svc, "POST", "/v1/test", {"to": to})
+            # 45с > SMTP timeout 30с в mailer, иначе API сам даёт TimeoutError
+            return await asyncio.to_thread(
+                _mailer_svc, "POST", "/v1/test", {"to": to}, 45)
         except Exception as e:  # noqa: BLE001
-            return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+            err = f"{type(e).__name__}: {e}"
+            if "timed out" in err.lower() or "timeout" in err.lower():
+                err += (" — не дождались ответа mailer/SMTP. Проверьте исходящие "
+                        "порты 465/587 с хоста и из контейнера mailer "
+                        "(nc/curl), часто VPS режет SMTP.")
+            return {"ok": False, "error": err}
 
     mailer = get_mailer()
     try:
