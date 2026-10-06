@@ -600,7 +600,7 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         try:
             res = await asyncio.to_thread(_mailer_svc, "POST", "/v1/send/sync", {
                 "to": body.email, "subject": subject, "html": html,
-                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]})
+                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]}, 45)
         except Exception as e:  # noqa: BLE001 — сервис недоступен
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "live": True}
         return {"ok": bool(res.get("ok")), "error": res.get("error"),
