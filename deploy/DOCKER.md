@@ -124,3 +124,6 @@ NPM закэшировал ошибку: у прокси-хоста включё
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
   на уровне маршрутизации (не отдаются наружу), а вебхук ESP аутентифицируется в приложении.
+- **SMTP из mailer: Network is unreachable**: с хоста 465/587 OK, из контейнера FAIL — обычно
+  Docker берёт AAAA (IPv6) без маршрута. В образе mailer уже IPv4-first (`gai.conf` + код).
+  После обновления: `docker compose up -d --build mailer` и повтор теста в админке.
