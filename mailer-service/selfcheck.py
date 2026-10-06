@@ -52,6 +52,9 @@ async def main() -> None:
     assert cfg["smtp_starttls"] is False
     assert sender.provider_name(cfg) == "smtp"
 
+    # IPv4-first helper exists (unit, без сети).
+    assert callable(sender._connect_ipv4_first)
+
     print("mailer-service selfcheck OK")
 
 

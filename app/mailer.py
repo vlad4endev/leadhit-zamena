@@ -10,6 +10,8 @@ import asyncio
 import json
 import os
 import smtplib
+import socket
+import ssl
 import subprocess
 import urllib.request
 from email.message import EmailMessage
@@ -45,6 +47,41 @@ def _build_message(to: str, subject: str, html: str,
     msg.set_content("Для просмотра письма включите HTML.")
     msg.add_alternative(html, subtype="html")
     return msg
+
+
+def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
+    """TCP с приоритетом IPv4 (Docker без IPv6 → ENETUNREACH на AAAA)."""
+    errors: list[OSError] = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+        except socket.gaierror as e:
+            errors.append(OSError(str(e)))
+            continue
+        for af, typ, proto, _, sockaddr in infos:
+            sock = socket.socket(af, typ, proto)
+            sock.settimeout(timeout)
+            try:
+                sock.connect(sockaddr)
+                return sock
+            except OSError as e:
+                errors.append(e)
+                sock.close()
+    if errors:
+        raise errors[-1]
+    raise OSError(f"cannot connect to {host}:{port}")
+
+
+class _SMTP(smtplib.SMTP):
+    def _get_socket(self, host, port, timeout):
+        return _connect_ipv4_first(host, port, timeout)
+
+
+class _SMTP_SSL(smtplib.SMTP_SSL):
+    def _get_socket(self, host, port, timeout):
+        sock = _connect_ipv4_first(host, port, timeout)
+        context = self.context if self.context is not None else ssl.create_default_context()
+        return context.wrap_socket(sock, server_hostname=self._host or host)
 
 
 class Mailer(Protocol):
@@ -208,12 +245,12 @@ class SmtpMailer:
         msg = _build_message(to, subject, html, from_email, from_name)
         use_ssl = bool(settings.smtp_ssl) or int(settings.smtp_port) == 465
         if use_ssl:
-            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30) as s:
+            with _SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30) as s:
                 if settings.smtp_user:
                     s.login(settings.smtp_user, settings.smtp_password)
                 s.send_message(msg)
         else:
-            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as s:
+            with _SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as s:
                 if settings.smtp_starttls:
                     s.starttls()
                 if settings.smtp_user:

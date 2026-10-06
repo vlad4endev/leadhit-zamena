@@ -5,6 +5,8 @@ import asyncio
 import json
 import os
 import smtplib
+import socket
+import ssl
 import subprocess
 import urllib.request
 from email.message import EmailMessage
@@ -52,6 +54,49 @@ def _assert_mta_alive() -> None:
             "Запустите postfix/exim на сервере и повторите тест.")
 
 
+def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
+    """TCP с приоритетом IPv4.
+
+    В Docker bridge часто нет IPv6-маршрута: getaddrinfo отдаёт AAAA первым →
+    OSError 101 Network is unreachable, хотя с хоста тот же SMTP доступен по IPv4.
+    """
+    errors: list[OSError] = []
+    for family in (socket.AF_INET, socket.AF_INET6):
+        try:
+            infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
+        except socket.gaierror as e:
+            errors.append(OSError(str(e)))
+            continue
+        for af, typ, proto, _, sockaddr in infos:
+            sock = socket.socket(af, typ, proto)
+            sock.settimeout(timeout)
+            try:
+                sock.connect(sockaddr)
+                return sock
+            except OSError as e:
+                errors.append(e)
+                sock.close()
+    if errors:
+        raise errors[-1]
+    raise OSError(f"cannot connect to {host}:{port}")
+
+
+class _SMTP(smtplib.SMTP):
+    """SMTP, который сначала пробует IPv4 (см. _connect_ipv4_first)."""
+
+    def _get_socket(self, host, port, timeout):
+        return _connect_ipv4_first(host, port, timeout)
+
+
+class _SMTP_SSL(smtplib.SMTP_SSL):
+    """SMTP_SSL с IPv4-first + wrap_socket как в CPython."""
+
+    def _get_socket(self, host, port, timeout):
+        sock = _connect_ipv4_first(host, port, timeout)
+        context = self.context if self.context is not None else ssl.create_default_context()
+        return context.wrap_socket(sock, server_hostname=self._host or host)
+
+
 def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str) -> str:
     """Отправляет письмо, возвращает Message-ID. provider=dev — только лог."""
     cfg = store.config_sync()
@@ -91,12 +136,12 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
     host, port = cfg["smtp_host"], int(cfg["smtp_port"])
     try:
         if use_ssl:
-            with smtplib.SMTP_SSL(host, port, timeout=30) as s:
+            with _SMTP_SSL(host, port, timeout=30) as s:
                 if cfg["smtp_user"]:
                     s.login(cfg["smtp_user"], cfg["smtp_password"])
                 s.send_message(msg)
         else:
-            with smtplib.SMTP(host, port, timeout=30) as s:
+            with _SMTP(host, port, timeout=30) as s:
                 if cfg["smtp_starttls"]:
                     s.starttls()
                 if cfg["smtp_user"]:
@@ -109,6 +154,16 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
             f"проверьте: docker compose exec mailer "
             f"python -c \"import socket; socket.create_connection(('{host}',{port}),5)\""
         ) from e
+    except OSError as e:
+        if getattr(e, "errno", None) == 101 or "unreachable" in str(e).lower():
+            raise OSError(
+                f"[Errno 101] Network is unreachable → {host}:{port}. "
+                f"С хоста SMTP доступен, из контейнера нет (часто IPv6 без маршрута). "
+                f"Обновите mailer (IPv4-first) или проверьте: "
+                f"docker compose exec mailer python -c "
+                f"\"import socket; print(socket.getaddrinfo('{host}',{port}))\""
+            ) from e
+        raise
     return message_id
 
 
