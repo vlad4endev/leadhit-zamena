@@ -42,13 +42,21 @@ which sendmail             # обычно /usr/sbin/sendmail
 1. **Systemd / хост** — API и workers на хосте с postfix, `MAIL_TRANSPORT=sendmail`, без `MAILER_SERVICE_URL`.
 2. **mailer-service в Docker** — пробросить/установить MTA в образ или смонтировать sendmail + очередь (сложнее); проще SMTP или хостовый sendmail.
 
-## SMTP (если всё же ESP)
+## SMTP (если всё же ESP или свой ящик)
+
+Через **mailer-service** (Docker так и работает): админка → Настройки → Почта,
+транспорт `smtp`, либо `SMTP_*` в `.env`.
 
 | Параметр | Пример |
 |----------|--------|
 | `MAIL_TRANSPORT` | `smtp` |
-| `SMTP_HOST` / `PORT` / `USER` / `PASSWORD` | от ESP |
-| `MAIL_FROM` | ящик, разрешённый релеем |
+| `SMTP_HOST` / `PORT` / `USER` / `PASSWORD` | от ESP или ящика |
+| Порт **465** | implicit SSL (`SMTP_SSL=true` или авто по порту) |
+| Порт **587** | STARTTLS (`SMTP_STARTTLS=true`) |
+| `MAIL_FROM` | тот же ящик, под которым логинитесь |
+
+Пресеты в админке: Яндекс (`smtp.yandex.ru:465`), Mail.ru, Gmail. Нужен **пароль приложения**,
+не обычный пароль от почты.
 
 ## Данные для привязки почты к домену
 

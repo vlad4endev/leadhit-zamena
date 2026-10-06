@@ -50,6 +50,7 @@ async def get_config() -> list[dict]:
 async def get_settings() -> dict:
     """Глобальные настройки: редактируемые значения + метаданные + read-only статус интеграций."""
     from app.config import settings as env
+    from app.mailer import get_mailer
     async with db.pool().acquire() as con:
         values = await app_settings.get(con)
         await onec.load_overrides(con)
@@ -58,10 +59,35 @@ async def get_settings() -> dict:
             or bool(env.onec_token)
     meta = {k: {"type": m[0], "group": m[1], "label": m[2], "restart": m[3]}
             for k, m in app_settings.EDITABLE.items()}
+
+    # Статус почты: при mailer-service — его provider; иначе локальный транспорт.
+    mail_label = "на вкладке «Почта»"
+    mail_ok = False
+    if env.mailer_service_url:
+        try:
+            cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
+            provider = cfg.get("provider") or "dev"
+            mail_ok = provider in ("smtp", "sendmail")
+            host = cfg.get("smtp_host") or ""
+            if provider == "sendmail":
+                mail_label = "sendmail"
+            elif provider == "smtp" and host:
+                mail_label = host
+            else:
+                mail_label = f"mailer · {provider}"
+        except Exception:  # noqa: BLE001
+            mail_label = "mailer недоступен"
+    else:
+        name = type(get_mailer()).__name__
+        mail_ok = name in ("SendmailMailer", "SmtpMailer")
+        mail_label = {"SendmailMailer": "sendmail", "SmtpMailer": env.smtp_host or "smtp",
+                      "LogMailer": "dev-лог"}.get(name, name)
+
     return {
         "values": values, "meta": meta,
         "readonly": {
-            "smtp_host": env.smtp_host or None, "smtp_configured": bool(env.smtp_host),
+            "smtp_host": env.smtp_host or None, "smtp_configured": mail_ok,
+            "mail_status": mail_label,
             # base_url/token правятся в админке (app_config) поверх .env; токен наружу не отдаём.
             "onec_base_url": onec.base_url() or None, "onec_configured": onec.configured(),
             "onec_token_set": onec_token_set,
@@ -936,6 +962,7 @@ async def mail_config() -> dict:
         "smtp_port": settings.smtp_port,
         "smtp_user": settings.smtp_user or "",
         "smtp_starttls": settings.smtp_starttls,
+        "smtp_ssl": settings.smtp_ssl,
         "mail_from": settings.mail_from,
         "mail_from_name": settings.mail_from_name,
         "has_password": bool(settings.smtp_password),

@@ -1,4 +1,4 @@
-"""Self-check: очередь (enqueue→due→mark_sent) и dev-отправитель. Без сети и SMTP.
+"""Self-check: очередь (enqueue→due→mark_sent), dev-отправитель и SSL-флаг конфига.
 
 Запуск: python selfcheck.py
 """
@@ -9,8 +9,11 @@ import os
 import tempfile
 
 os.environ["DB_PATH"] = os.path.join(tempfile.mkdtemp(), "test_outbox.db")
+os.environ.pop("SMTP_HOST", None)
+os.environ["MAIL_TRANSPORT"] = ""
 
 from app import sender, store  # noqa: E402
+from app.config import settings  # noqa: E402
 
 
 async def main() -> None:
@@ -20,6 +23,7 @@ async def main() -> None:
     assert len(due) == 1 and due[0]["id"] == mid, due
     assert await store.stats() == {"queued": 1}
 
+    assert sender.provider_name() == "dev"
     message_id = sender.send_sync("u@example.com", "Тема", "<b>hi</b>", "", "")  # dev-режим
     assert message_id.startswith("<") and "@" in message_id, message_id
 
@@ -30,6 +34,24 @@ async def main() -> None:
 
     row = await store.by_message_id(message_id)
     assert row and row["id"] == mid
+
+    # Конфиг SMTP/SSL сохраняется и читается (без реальной сети).
+    await store.set_config({
+        "mail_transport": "smtp",
+        "smtp_host": "smtp.yandex.ru",
+        "smtp_port": "465",
+        "smtp_ssl": "true",
+        "smtp_starttls": "false",
+        "smtp_user": "box@yandex.ru",
+        "mail_from": "box@yandex.ru",
+    })
+    cfg = await store.get_config()
+    assert cfg["smtp_host"] == "smtp.yandex.ru"
+    assert cfg["smtp_port"] == 465
+    assert cfg["smtp_ssl"] is True
+    assert cfg["smtp_starttls"] is False
+    assert sender.provider_name(cfg) == "smtp"
+
     print("mailer-service selfcheck OK")
 
 

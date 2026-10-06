@@ -16,12 +16,13 @@ class Settings(BaseSettings):
     mail_transport: str = ""
     sendmail_path: str = "/usr/sbin/sendmail"
 
-    # SMTP-relay ESP. Нужен только при mail_transport=smtp (или авто без sendmail).
+    # SMTP: ESP или свой ящик. Нужен при mail_transport=smtp (или авто без sendmail).
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_starttls: bool = True
+    smtp_ssl: bool = False  # порт 465 / implicit SSL; иначе STARTTLS на 587
     mail_from: str = "noreply@mail.groster.me"
     mail_from_name: str = "groster.me"
 

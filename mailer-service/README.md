@@ -21,7 +21,8 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env        # заполнить SMTP_* и CALLBACK_URL
 .venv/bin/uvicorn app.main:app --port 8080
 ```
-Пустой `SMTP_HOST` → dev-режим: письма только логируются (для локали/тестов).
+Пустой `SMTP_HOST` и без sendmail → dev-режим: письма только логируются.
+Порт 465 (или `SMTP_SSL=true`) — implicit SSL для ящиков Яндекс/Mail.ru.
 
 ## API
 | Метод | Путь | Назначение |

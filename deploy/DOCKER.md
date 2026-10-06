@@ -12,7 +12,10 @@ cp .env.example .env                   # заполнить секреты (см
 - `POSTGRES_PASSWORD` — пароль контейнерной БД (обязателен).
 - `CORS_ORIGINS=https://groster.me,https://www.groster.me` — домены витрины.
 - `PUBLIC_BASE_URL=https://groster.skypath.fun` — домен API (ссылки в письмах, embed).
-- `SMTP_HOST/SMTP_USER/SMTP_PASSWORD` (или оставить пустыми → dev-лог вместо отправки).
+- Почта: в Docker всё идёт через сервис `mailer`. Либо `SMTP_*` в `.env` (хост/логин/пароль
+  ящика или ESP; порт **465** = SSL), либо пусто → настройте в админке
+  **Настройки → Почта** (пресеты Яндекс/Mail.ru/Gmail). Без SMTP — dev-лог.
+  Sendmail в slim-контейнере нет; без ESP см. [MAIL_DNS.md](MAIL_DNS.md).
 - `MAILER_SERVICE_TOKEN` — общий секрет app↔mailer (compose прокинет его как `API_TOKEN`).
 
 `DATABASE_URL` и `MAILER_SERVICE_URL` в Docker задаёт сам compose (сервисы `db`/`mailer`).

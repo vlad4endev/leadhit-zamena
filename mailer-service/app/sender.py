@@ -87,12 +87,19 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
         return message_id
 
     # smtp
-    with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
-        if cfg["smtp_starttls"]:
-            s.starttls()
-        if cfg["smtp_user"]:
-            s.login(cfg["smtp_user"], cfg["smtp_password"])
-        s.send_message(msg)
+    use_ssl = bool(cfg.get("smtp_ssl")) or int(cfg.get("smtp_port") or 0) == 465
+    if use_ssl:
+        with smtplib.SMTP_SSL(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
+            if cfg["smtp_user"]:
+                s.login(cfg["smtp_user"], cfg["smtp_password"])
+            s.send_message(msg)
+    else:
+        with smtplib.SMTP(cfg["smtp_host"], cfg["smtp_port"], timeout=30) as s:
+            if cfg["smtp_starttls"]:
+                s.starttls()
+            if cfg["smtp_user"]:
+                s.login(cfg["smtp_user"], cfg["smtp_password"])
+            s.send_message(msg)
     return message_id
 
 

@@ -206,12 +206,19 @@ class SmtpMailer:
 
     def _send_sync(self, to: str, subject: str, html: str, from_email: str, from_name: str) -> None:
         msg = _build_message(to, subject, html, from_email, from_name)
-        with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as s:
-            if settings.smtp_starttls:
-                s.starttls()
-            if settings.smtp_user:
-                s.login(settings.smtp_user, settings.smtp_password)
-            s.send_message(msg)
+        use_ssl = bool(settings.smtp_ssl) or int(settings.smtp_port) == 465
+        if use_ssl:
+            with smtplib.SMTP_SSL(settings.smtp_host, settings.smtp_port, timeout=30) as s:
+                if settings.smtp_user:
+                    s.login(settings.smtp_user, settings.smtp_password)
+                s.send_message(msg)
+        else:
+            with smtplib.SMTP(settings.smtp_host, settings.smtp_port, timeout=30) as s:
+                if settings.smtp_starttls:
+                    s.starttls()
+                if settings.smtp_user:
+                    s.login(settings.smtp_user, settings.smtp_password)
+                s.send_message(msg)
 
 
 def _wants_sendmail() -> bool:
