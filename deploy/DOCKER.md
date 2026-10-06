@@ -128,11 +128,24 @@ NPM закэшировал ошибку: у прокси-хоста включё
   у bridge нет исходящего маршрута (не только IPv6). Рабочий обход — mailer на сети хоста:
 
   ```bash
+  # IP моста (не docker0 — он часто DOWN):
+  ip -br a | grep '^br-'
+  # в .env: MAILER_HOST_IP=172.18.0.1
+  echo 'MAILER_HOST_IP=172.18.0.1' >> .env   # подставьте свой из br-
+
   docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml up -d --build api workers mailer
+
   # проверка SMTP «как с хоста»:
   docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml exec mailer \
     python -c "import socket; socket.create_connection(('smtp.yandex.ru',465),5); print('OK')"
+
+  # api → mailer:
+  docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml exec api \
+    python -c "import urllib.request; print(urllib.request.urlopen('http://host.docker.internal:8080/health', timeout=5).read())"
   ```
+
+  Файрвол: `iptables -I INPUT -i eth0 -p tcp --dport 8080 -j DROP` (только внешний if).
+  Не используйте `DROP … ! -i lo` — отрежет docker-мост.
 
   Диагностика bridge (если хотите чинить сеть Docker, а не обход):
   `docker compose exec mailer ip route` — должен быть `default via 172.…`.
