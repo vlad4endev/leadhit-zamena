@@ -1,0 +1,35 @@
+# Mailer на сети хоста: исходящий SMTP как с хоста (фикс ENETUNREACH из bridge).
+#
+# Запуск ВМЕСТО обычного up для mailer-стека:
+#   docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml up -d --build api workers mailer
+#
+# api/workers стучатся в mailer через host-gateway; mailer слушает 127.0.0.1:8080
+# (с хоста), callback — на api через опубликованный 127.0.0.1:8000.
+
+services:
+  api:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
+
+  workers:
+    extra_hosts:
+      - "host.docker.internal:host-gateway"
+    environment:
+      DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
+
+  mailer:
+    network_mode: host
+    # В host-режиме DNS-имя api недоступно — callback на loopback хоста
+    # (api публикует 127.0.0.1:${API_HOST_PORT:-8000}).
+    environment:
+      DB_PATH: /data/outbox.db
+      API_TOKEN: ${MAILER_SERVICE_TOKEN:-}
+      CALLBACK_URL: http://127.0.0.1:${API_HOST_PORT:-8000}/esp/webhook
+    # 0.0.0.0: чтобы api/workers достали mailer через host-gateway.
+    # Снаружи закройте 8080 (ufw/iptables): нужен только docker-мост → хост.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
+    # ports/networks в host-режиме игнорируются; depends_on оставляем.

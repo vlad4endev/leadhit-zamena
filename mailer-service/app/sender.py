@@ -60,12 +60,13 @@ def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
     В Docker bridge часто нет IPv6-маршрута: getaddrinfo отдаёт AAAA первым →
     OSError 101 Network is unreachable, хотя с хоста тот же SMTP доступен по IPv4.
     """
-    errors: list[OSError] = []
+    errors: list[tuple[str, OSError]] = []
     for family in (socket.AF_INET, socket.AF_INET6):
+        label = "IPv4" if family == socket.AF_INET else "IPv6"
         try:
             infos = socket.getaddrinfo(host, port, family, socket.SOCK_STREAM)
         except socket.gaierror as e:
-            errors.append(OSError(str(e)))
+            errors.append((label, OSError(str(e))))
             continue
         for af, typ, proto, _, sockaddr in infos:
             sock = socket.socket(af, typ, proto)
@@ -74,10 +75,12 @@ def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
                 sock.connect(sockaddr)
                 return sock
             except OSError as e:
-                errors.append(e)
+                errors.append((f"{label} {sockaddr[0]}", e))
                 sock.close()
     if errors:
-        raise errors[-1]
+        detail = "; ".join(f"{where}: {err}" for where, err in errors)
+        last = errors[-1][1]
+        raise OSError(f"cannot connect to {host}:{port} ({detail})") from last
     raise OSError(f"cannot connect to {host}:{port}")
 
 

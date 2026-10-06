@@ -124,6 +124,16 @@ NPM закэшировал ошибку: у прокси-хоста включё
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
   на уровне маршрутизации (не отдаются наружу), а вебхук ESP аутентифицируется в приложении.
-- **SMTP из mailer: Network is unreachable**: с хоста 465/587 OK, из контейнера FAIL — обычно
-  Docker берёт AAAA (IPv6) без маршрута. В образе mailer уже IPv4-first (`gai.conf` + код).
-  После обновления: `docker compose up -d --build mailer` и повтор теста в админке.
+- **SMTP из mailer: Network is unreachable**: с хоста 465/587 OK, из контейнера FAIL —
+  у bridge нет исходящего маршрута (не только IPv6). Рабочий обход — mailer на сети хоста:
+
+  ```bash
+  docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml up -d --build api workers mailer
+  # проверка SMTP «как с хоста»:
+  docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml exec mailer \
+    python -c "import socket; socket.create_connection(('smtp.yandex.ru',465),5); print('OK')"
+  ```
+
+  Диагностика bridge (если хотите чинить сеть Docker, а не обход):
+  `docker compose exec mailer ip route` — должен быть `default via 172.…`.
+  `sysctl net.ipv4.ip_forward` — должно быть `1`.
