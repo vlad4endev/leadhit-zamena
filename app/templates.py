@@ -132,35 +132,71 @@ def _price(v) -> str:
 
 
 CARDS_PER_ROW = 3  # 3×180px ≈ 600px влезает в 640px письма; больше — карточки уезжают за край
+CARD_IMG = 150     # квадрат под фото — иначе разные пропорции рвут ряд
+TITLE_CHARS = 52   # ~2–3 строки в колонке 160px; длинные названия ломали выравнивание кнопок
+TITLE_H = 52       # фиксированная высота блока названия (3 × ~17px)
+
+
+def _short_name(name: str, limit: int = TITLE_CHARS) -> str:
+    """Обрезает название по слову, чтобы карточки в ряду были одной высоты."""
+    n = " ".join((name or "").split())
+    if len(n) <= limit:
+        return n
+    cut = n[: limit - 1].rsplit(" ", 1)[0]
+    return (cut or n[: limit - 1]).rstrip(".,;:") + "…"
 
 
 def _card(p: dict, campaign: str, minimal: bool, lk: dict) -> str:
     url = _esc(_utm(p.get("product_url"), campaign))
-    name = _esc(p.get("name"))
+    full_name = p.get("name") or ""
+    name = _esc(_short_name(full_name))
+    alt = _esc(full_name)  # полный alt — доступность / если фото 404
     price = _price(p.get("price"))
     if minimal:
         return f'<tr><td style="padding:6px 0"><a href="{url}">{name}</a> — {price}</td></tr>'
-    # alt=название: если фото 404 (битый image_url в выгрузке), почтовик покажет название,
-    # а не пустой прямоугольник.
-    img = (f'<img src="{_esc(img_src(p["image_url"]))}" width="150" alt="{name}" '
-           f'style="max-width:150px;border-radius:8px">'
-           if p.get("image_url") else '<div style="height:150px;background:#eef2f8;border-radius:8px"></div>')
+    # Квадрат CARD_IMG×CARD_IMG: разные пропорции фото больше не сдвигают цену/кнопку.
+    # object-fit:contain — современные клиенты; Outlook оставит max-height в ячейке фиксированной высоты.
+    if p.get("image_url"):
+        img = (f'<img src="{_esc(img_src(p["image_url"]))}" width="{CARD_IMG}" alt="{alt}" '
+               f'style="display:block;margin:0 auto;max-width:{CARD_IMG}px;max-height:{CARD_IMG}px;'
+               f'width:auto;height:auto;object-fit:contain;border:0;border-radius:8px">')
+    else:
+        img = (f'<div style="width:{CARD_IMG}px;height:{CARD_IMG}px;margin:0 auto;'
+               f'background:#eef2f8;border-radius:8px"></div>')
+    btn = (f'<a href="{url}" style="display:inline-block;background:{lk["brand_color"]};color:#fff;'
+           f'text-decoration:none;padding:8px 16px;border-radius:8px;font-size:14px;'
+           f'font-weight:600;line-height:1.2">{lk["button"]}</a>')
+    # Вложенная таблица: фото → название (фикс. высота) → цена → кнопка — кнопки в ряду на одной линии.
     return (
-        f'<td width="180" style="padding:10px;text-align:center;vertical-align:top">'
-        f'{img}<div style="font-weight:600;margin:8px 0 4px">{name}</div>'
-        f'<div style="color:#555;margin-bottom:8px">{price}</div>'
-        f'<a href="{url}" style="display:inline-block;background:{lk["brand_color"]};color:#fff;'
-        f'text-decoration:none;padding:8px 16px;border-radius:8px;font-size:14px">{lk["button"]}</a></td>'
+        f'<td width="180" valign="top" style="padding:8px 6px;text-align:center">'
+        f'<table role="presentation" width="168" cellpadding="0" cellspacing="0" '
+        f'style="margin:0 auto;border-collapse:collapse">'
+        f'<tr><td align="center" valign="middle" height="{CARD_IMG}" '
+        f'style="height:{CARD_IMG}px;width:{CARD_IMG}px;background:#fafafa;border-radius:8px;'
+        f'vertical-align:middle">{img}</td></tr>'
+        f'<tr><td align="center" valign="top" height="{TITLE_H}" '
+        f'style="height:{TITLE_H}px;max-height:{TITLE_H}px;padding:10px 4px 4px;font-weight:600;'
+        f'font-size:13px;line-height:1.35;color:#1a1a2e;overflow:hidden;vertical-align:top">'
+        f'{name}</td></tr>'
+        f'<tr><td align="center" style="padding:2px 0 10px;color:#555;font-size:14px;'
+        f'line-height:1.2;white-space:nowrap">{price}</td></tr>'
+        f'<tr><td align="center" style="padding:0 0 4px">{btn}</td></tr>'
+        f'</table></td>'
     )
 
 
 def _cards_table(products: list[dict], campaign: str, lk: dict) -> str:
     """Сетка карточек по CARDS_PER_ROW в строке. Одной строкой 5–8 товаров вылезали
-    за границу письма (в почтовых клиентах нет горизонтального скролла)."""
+    за границу письма (в почтовых клиентах нет горизонтального скролла).
+    Пустые ячейки добивают ряд до CARDS_PER_ROW — иначе последняя строка «плывёт» влево."""
+    cells = [_card(p, campaign, False, lk) for p in products]
+    while cells and len(cells) % CARDS_PER_ROW:
+        cells.append('<td width="180" style="padding:8px 6px">&nbsp;</td>')
     rows = "".join(
-        f'<tr>{"".join(_card(p, campaign, False, lk) for p in products[i:i + CARDS_PER_ROW])}</tr>'
-        for i in range(0, len(products), CARDS_PER_ROW))
-    return f'<table role="presentation" style="margin:8px 0">{rows}</table>'
+        f'<tr>{"".join(cells[i:i + CARDS_PER_ROW])}</tr>'
+        for i in range(0, len(cells), CARDS_PER_ROW))
+    return (f'<table role="presentation" width="100%" cellpadding="0" cellspacing="0" '
+            f'style="margin:8px auto;border-collapse:collapse;max-width:560px">{rows}</table>')
 
 
 def render_email(intro_html: str, products: list[dict], user_id: str,
@@ -635,8 +671,14 @@ def _demo() -> None:
     assert img_src("/img/x.png").endswith("/img/x.png") and img_src("/img/x.png").startswith("http")
     assert img_src("https://cdn.example/a.jpg") == "https://cdn.example/a.jpg"
     assert img_src(None) == "" and img_src("") == ""
-    # 7 товаров → 3 строки карточек (по CARDS_PER_ROW), иначе вёрстка уезжает за 640px.
-    assert _cards_table(P, "cart", LOOK_DEFAULTS).count("<tr>") == 3
+    # 7 товаров → 3 ряда по 3 (добиваем пустыми ячейками), иначе вёрстка уезжает за 640px.
+    grid = _cards_table(P, "cart", LOOK_DEFAULTS)
+    assert grid.count('width="180"') == 9          # 7 карточек + 2 спейсера
+    assert grid.count(LOOK_DEFAULTS["button"]) == 7
+    # Длинное название обрезается в подписи, полный текст остаётся в alt.
+    long_p = {**P[0], "name": "Пакет Майка ПНД 30*50 15мкм черный (100шт.) в пластах 1/10"}
+    long_card = _card(long_p, "cart", False, LOOK_DEFAULTS)
+    assert "…" in long_card and 'height="150"' in long_card and 'height="52"' in long_card
 
     # Импортированное письмо, разрезанное на секции: цикл товаров ЖИВОЙ (был текстом в письме).
     secs = [{"type": "html", "html": '<div>{% for item in get_cart_items() %}<img src="{{ item.picture }}">'},
