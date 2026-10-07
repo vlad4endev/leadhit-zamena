@@ -34,7 +34,13 @@ fi
 dup=$(grep -c '^MAILER_HOST_IP=' .env 2>/dev/null || true)
 dup=${dup:-0}
 if [[ "$dup" -gt 1 ]]; then
-  warn "MAILER_HOST_IP задан $dup раз в .env — оставьте одну строку"
+  warn "MAILER_HOST_IP задан $dup раз — оставляем одну строку"
+  # дедуп: последняя строка побеждает
+  last=$(grep '^MAILER_HOST_IP=' .env | tail -1)
+  grep -v '^MAILER_HOST_IP=' .env > .env.mailcheck.tmp
+  echo "$last" >> .env.mailcheck.tmp
+  mv .env.mailcheck.tmp .env
+  ok "дедуп .env → $last"
 fi
 host_ip=$(grep '^MAILER_HOST_IP=' .env 2>/dev/null | tail -1 | cut -d= -f2- || true)
 br_ip=$(ip -br a 2>/dev/null | awk '/^br-/{print $3}' | head -1 | cut -d/ -f1 || true)
@@ -94,22 +100,36 @@ if [[ -n "$mailer_id" ]]; then
   fi
 fi
 
-# 5) порты на хосте
-if ss -tln 2>/dev/null | grep -q ":${api_port} " || ss -tln 2>/dev/null | grep -q ":${api_port}\$"; then
-  ok "хост слушает :$api_port (api)"
+# 5) порты на хосте (mailer: ждём до ~45с — lifespan/рестарт)
+wait_curl() {
+  local url=$1 max=${2:-45} i=0
+  while (( i < max )); do
+    if curl -sf -m 2 "$url" >/dev/null 2>&1; then
+      return 0
+    fi
+    sleep 1
+    i=$((i + 1))
+  done
+  return 1
+}
+
+if curl -sf -m 3 "http://127.0.0.1:${api_port}/health" >/dev/null 2>&1; then
+  ok "api health на 127.0.0.1:$api_port"
 else
-  # ss формат может отличаться
-  if curl -sf -m 3 "http://127.0.0.1:${api_port}/health" >/dev/null 2>&1; then
-    ok "api health на 127.0.0.1:$api_port"
-  else
-    bad "api не отвечает на 127.0.0.1:$api_port — callback из mailer получит Connection refused"
-  fi
+  bad "api не отвечает на 127.0.0.1:$api_port — callback из mailer получит Connection refused"
 fi
 
-if curl -sf -m 3 "http://127.0.0.1:8080/health" >/dev/null 2>&1; then
+echo "… ждём mailer :8080 (до 45с)"
+if wait_curl "http://127.0.0.1:8080/health" 45; then
   ok "mailer health на 127.0.0.1:8080"
 else
   bad "mailer не отвечает на 127.0.0.1:8080"
+  echo "----- docker compose ps mailer -----"
+  docker compose ps mailer 2>/dev/null || true
+  echo "----- ss :8080 -----"
+  ss -tlnp 2>/dev/null | grep 8080 || echo "(ничего не слушает 8080)"
+  echo "----- mailer logs (tail 40) -----"
+  docker compose logs --tail=40 mailer 2>/dev/null || true
 fi
 
 # 6) api → mailer
@@ -119,7 +139,15 @@ if [[ -n "$api_id" ]]; then
     >/dev/null 2>&1; then
     ok "api → host.docker.internal:8080/health"
   else
-    bad "api не достучался до mailer (ufw: allow from 172.16.0.0/12 to 8080; MAILER_HOST_IP=IP br-*)"
+    # повтор после короткой паузы (гонка со стартом)
+    sleep 2
+    if docker compose exec -T api python -c \
+      "import urllib.request; urllib.request.urlopen('http://host.docker.internal:8080/health', timeout=5).read()" \
+      >/dev/null 2>&1; then
+      ok "api → host.docker.internal:8080/health (после ожидания)"
+    else
+      bad "api не достучался до mailer (ufw: allow from 172.16.0.0/12 to 8080; MAILER_HOST_IP=IP br-*)"
+    fi
   fi
 fi
 

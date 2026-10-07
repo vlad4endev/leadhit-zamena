@@ -59,14 +59,21 @@ def _auth(authorization: Optional[str]) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await store.init()
-    # Стартовые WARN в лог: SMTP/callback/dev — чтобы не копить очередь вслепую.
-    try:
-        from app import diagnostics
-        await asyncio.to_thread(diagnostics.warn_on_startup)
-    except Exception as e:  # noqa: BLE001 — диагностика не должна валить старт
-        print(f"[mailer-diag] startup check failed: {type(e).__name__}: {e}")
     task = asyncio.create_task(worker.run())
+
+    # Диагностика ПОСЛЕ готовности принимать HTTP: иначе /health молчит, пока
+    # идёт TCP к SMTP (check-mail / compose healthcheck ловят ложный FAIL).
+    async def _diag_bg() -> None:
+        await asyncio.sleep(0.3)
+        try:
+            from app import diagnostics
+            await asyncio.to_thread(diagnostics.warn_on_startup)
+        except Exception as e:  # noqa: BLE001 — не валим воркер
+            print(f"[mailer-diag] startup check failed: {type(e).__name__}: {e}")
+
+    diag_task = asyncio.create_task(_diag_bg())
     yield
+    diag_task.cancel()
     task.cancel()
 
 
