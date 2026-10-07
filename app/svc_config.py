@@ -10,7 +10,8 @@ _SENDER = {"sender_email": "zakaz@groster.me", "sender_name": "Магазин Gr
 
 DEFAULTS = {
     "best_offer": {**_SENDER, "subject": "Подборка товаров для вас",
-                   "interval_days": 30, "after_purchase_days": 20, "send_hour": 9, "max_per_day": 0},
+                   "interval_days": 30, "after_purchase_days": 20, "send_hour": 9,
+                   "max_per_day": 0, "items_limit": 30},
     "cart": {**_SENDER, "subject": "Ваша корзина ждёт",
              "cooldown_hours": 72, "depart_timeout_sec": 180, "grace_sec": 90},
     "postsale": {**_SENDER, "subject": "Спасибо за заказ — рекомендации для вас",

@@ -19,32 +19,58 @@ def rotate_and_pick(
     top5: dict[str, list[str]],
     recent: set[str],
     min_items: int = 2,
+    limit: int = 30,
 ) -> tuple[str | None, list[str], str | None]:
     """Ротация категорий с дедупом (ТЗ 2.4).
 
     Идём по категориям от start циклично. Первая, где после исключения recent осталось
-    >= min_items товаров, — берётся. Возвращает (категория, товары, СЛЕДУЮЩИЙ указатель).
-    Если ни одна не набирает min_items — фолбэк: первая категория с любыми товарами
-    (ослабленный дедуп), чтобы не уйти в пустоту у «выжженного» юзера.
+    >= min_items товаров, — основная. Дальше добираем уникальные id из следующих
+    категорий до `limit` (по умолчанию 30). Указатель сдвигается на категорию
+    ПОСЛЕ основной. Если ни одна не набирает min_items — фолбэк без дедупа.
     """
     if not order:
         return None, [], start
+    limit = max(1, int(limit or 30))
     n = len(order)
     idx0 = order.index(start) if start in order else 0
 
+    primary_k: int | None = None
     for k in range(n):
         cat = order[(idx0 + k) % n]
-        picked = [p for p in top5.get(cat, []) if p not in recent][:5]
-        if len(picked) >= min_items:
-            return cat, picked, order[(idx0 + k + 1) % n]
+        avail = [p for p in top5.get(cat, []) if p not in recent]
+        if len(avail) >= min_items:
+            primary_k = k
+            break
 
-    # Фолбэк: весь фид «выжжен» дедупом — берём лучшее доступное.
+    strict_dedup = primary_k is not None
+    if primary_k is None:
+        # Фолбэк: весь фид «выжжен» дедупом — берём первую непустую без фильтра recent.
+        for k in range(n):
+            cat = order[(idx0 + k) % n]
+            if top5.get(cat, []):
+                primary_k = k
+                break
+    if primary_k is None:
+        return None, [], start
+
+    primary = order[(idx0 + primary_k) % n]
+    picked: list[str] = []
+    seen: set[str] = set()
     for k in range(n):
-        cat = order[(idx0 + k) % n]
-        picked = top5.get(cat, [])[:5]
-        if picked:
-            return cat, picked, order[(idx0 + k + 1) % n]
-    return None, [], start
+        cat = order[(idx0 + primary_k + k) % n]
+        for pid in top5.get(cat, []):
+            if pid in seen:
+                continue
+            if strict_dedup and pid in recent:
+                continue
+            picked.append(pid)
+            seen.add(pid)
+            if len(picked) >= limit:
+                break
+        if len(picked) >= limit:
+            break
+    next_ptr = order[(idx0 + primary_k + 1) % n]
+    return primary, picked, next_ptr
 
 
 async def _categories_order(con) -> list[str]:
@@ -52,9 +78,12 @@ async def _categories_order(con) -> list[str]:
     return [r["category_id"] for r in rows]
 
 
-async def _top5_map(con) -> dict[str, list[str]]:
-    # Только in_stock: иначе категория с 4 из 5 «нет в наличии» проходит порог min_items
-    # и в письмо уходит 1 карточка, хотя следующая категория набирает полную подборку.
+async def _top5_map(con, per_cat: int = 30,
+                    categories: list[str] | None = None) -> dict[str, list[str]]:
+    """Пул по категориям: топ-5 фида + добор из каталога (in_stock + фото), до per_cat."""
+    per_cat = max(1, int(per_cat or 30))
+    # Только in_stock: иначе категория с «нет в наличии» проходит порог min_items
+    # и в письмо уходит мало карточек, хотя следующая категория набирает полную подборку.
     rows = await con.fetch(
         """SELECT t.category_id, t.product_id
            FROM top5_by_category t
@@ -64,6 +93,23 @@ async def _top5_map(con) -> dict[str, list[str]]:
     out: dict[str, list[str]] = {}
     for r in rows:
         out.setdefault(r["category_id"], []).append(r["product_id"])
+    # Добор из каталога — топ фида ≤5, а в письме нужно до 30 уникальных.
+    # Берём все категории ротации, не только те, что уже есть в топе.
+    cats = [c for c in (categories or list(out.keys())) if c]
+    need = [c for c in cats if len(out.get(c, [])) < per_cat]
+    if need:
+        extra = await con.fetch(
+            f"""SELECT category_id, product_id FROM products
+               WHERE category_id = ANY($1::text[]) AND in_stock
+                 AND {images.HAS_PHOTO_SQL}
+               ORDER BY category_id, updated_at DESC NULLS LAST, product_id""",
+            need,
+        )
+        for r in extra:
+            bucket = out.setdefault(r["category_id"], [])
+            if r["product_id"] in bucket or len(bucket) >= per_cat:
+                continue
+            bucket.append(r["product_id"])
     return out
 
 
@@ -122,28 +168,38 @@ async def _load_products(con, product_ids: list[str]) -> list[dict]:
     return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
-async def _fallback_catalog_products(con, recent: set[str], limit: int = 5) -> list[dict]:
+async def _fallback_catalog_products(con, recent: set[str], limit: int = 30) -> list[dict]:
     """Запасная подборка: любые in_stock с фото из каталога, минус недавний дедуп.
-    Нужна, когда топ-5 категории выжжен по фото/OOS, а письмо иначе уйдёт пустым."""
+    Нужна, когда топ категории выжжен по фото/OOS, а письмо иначе уйдёт пустым."""
+    limit = max(1, int(limit or 30))
     rows = await con.fetch(
         f"""SELECT product_id, name, price, image_url, product_url FROM products
            WHERE in_stock AND {images.HAS_PHOTO_SQL}
            ORDER BY updated_at DESC NULLS LAST, product_id
            LIMIT $1""",
-        max(limit * 4, 20),
+        max(limit * 4, 40),
     )
     picked = []
+    seen: set[str] = set()
     for r in rows:
-        if r["product_id"] in recent:
+        pid = r["product_id"]
+        if pid in recent or pid in seen:
             continue
         picked.append(dict(r, price=float(r["price"])))
+        seen.add(pid)
         if len(picked) >= limit:
             break
     if len(picked) < limit:
-        # Дедуп выжег всё — берём как есть.
-        picked = [dict(r, price=float(r["price"])) for r in rows[:limit]]
+        # Дедуп выжег всё — берём как есть, без повторов.
+        for r in rows:
+            pid = r["product_id"]
+            if pid in seen:
+                continue
+            picked.append(dict(r, price=float(r["price"])))
+            seen.add(pid)
+            if len(picked) >= limit:
+                break
     return await images.warm_products(picked, require_live=True)
-
 
 async def run_batch(con, mailer=None, force: bool = False) -> int:
     """Батч-джоб Best Offer (раз/сутки). Возвращает число отправленных писем."""
@@ -162,8 +218,9 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get("best_offer")
     template_id = tpl["id"] if tpl else None
     mailer = mailer or get_mailer()
+    items_limit = max(1, min(int(cfg.get("items_limit") or 30), 60))
     order = await _categories_order(con)
-    top5 = await _top5_map(con)
+    top5 = await _top5_map(con, per_cat=items_limit, categories=order)
     default_start = order[0] if order else None
     candidates = await _candidates(con, cfg["interval_days"], cfg["after_purchase_days"])
     sent = 0
@@ -175,7 +232,8 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
                 + (f", лимит {max_per_day}/день" if max_per_day else "")
                 + (" (ручной запуск)" if force else ""),
         details={"candidates": len(candidates), "max_per_day": max_per_day, "force": force,
-                 "template_id": template_id, "categories": len(order)},
+                 "template_id": template_id, "categories": len(order),
+                 "items_limit": items_limit},
     )
 
     for cand in candidates:
@@ -188,7 +246,8 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
             break  # дневной лимит писем (как «Макс. кол-во писем в день» в LeadHit)
         try:
             n = await _send_one(
-                con, cand, mailer, cfg, look, blocks, template_id, order, top5, default_start)
+                con, cand, mailer, cfg, look, blocks, template_id, order, top5, default_start,
+                items_limit)
             if n:
                 sent += n
             else:
@@ -211,18 +270,20 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
     return sent
 
 
-async def _send_one(con, cand, mailer, cfg, look, blocks, template_id, order, top5, default_start) -> int:
+async def _send_one(con, cand, mailer, cfg, look, blocks, template_id, order, top5, default_start,
+                    items_limit: int = 30) -> int:
+    limit = max(1, min(int(items_limit or 30), 60))
     start = cand["rotation_pointer_category_id"] or cand["last_purchase_category_id"] or default_start
     recent = await _recent_products(con, cand["user_id"])
-    category, product_ids, next_ptr = rotate_and_pick(start, order, top5, recent)
+    category, product_ids, next_ptr = rotate_and_pick(start, order, top5, recent, limit=limit)
     products: list[dict] = []
     if product_ids:
         # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
-        products = images.photo_first(await _load_products(con, product_ids), 5)
+        products = images.photo_first(await _load_products(con, product_ids), limit)
         products = await images.warm_products(products, require_live=True)
     if not products:
         # Топ пуст / выжжен по фото — не бросаем письмо: любые in_stock с фото из каталога.
-        products = await _fallback_catalog_products(con, recent, limit=5)
+        products = await _fallback_catalog_products(con, recent, limit=limit)
         category = category or "catalog"
         if not next_ptr and order:
             next_ptr = order[(order.index(start) + 1) % len(order)] if start in order else order[0]
@@ -285,18 +346,27 @@ def _demo() -> None:
     order = ["shoes", "bags", "acc"]
     top5 = {"shoes": ["s1", "s2", "s3"], "bags": ["b1", "b2"], "acc": ["a1"]}
 
-    # Старт shoes, дедупа нет → shoes, next=bags.
-    assert rotate_and_pick("shoes", order, top5, set()) == ("shoes", ["s1", "s2", "s3"], "bags")
-    # shoes выжжена дедупом (осталось <2) → переходим на bags, next=acc.
-    assert rotate_and_pick("shoes", order, top5, {"s2", "s3"}) == ("bags", ["b1", "b2"], "acc")
+    # Старт shoes, дедупа нет → shoes + добор из следующих до limit, next=bags.
+    cat, ids, nxt = rotate_and_pick("shoes", order, top5, set(), limit=30)
+    assert cat == "shoes" and ids == ["s1", "s2", "s3", "b1", "b2", "a1"] and nxt == "bags", (cat, ids, nxt)
+    # limit=3 → только первые 3 из основной категории.
+    assert rotate_and_pick("shoes", order, top5, set(), limit=3) == ("shoes", ["s1", "s2", "s3"], "bags")
+    # shoes выжжена дедупом (осталось <2) → bags + добор (без recent), next=acc.
+    cat, ids, nxt = rotate_and_pick("shoes", order, top5, {"s2", "s3"}, limit=30)
+    assert cat == "bags" and ids == ["b1", "b2", "a1", "s1"] and nxt == "acc", (cat, ids, nxt)
     # acc имеет 1 товар (<2) → пропускаем, цикл к shoes.
-    assert rotate_and_pick("acc", order, top5, set()) == ("shoes", ["s1", "s2", "s3"], "bags")
+    cat, ids, nxt = rotate_and_pick("acc", order, top5, set(), limit=3)
+    assert cat == "shoes" and ids == ["s1", "s2", "s3"] and nxt == "bags", (cat, ids, nxt)
     # Всё выжжено → фолбэк на первую непустую категорию (ослабленный дедуп).
     cat, ids, nxt = rotate_and_pick("shoes", order, {"shoes": ["s1"], "bags": [], "acc": []},
                                     {"s1"})
     assert cat == "shoes" and ids == ["s1"] and nxt == "bags", (cat, ids, nxt)
     # start вне списка → начинаем с первой категории.
-    assert rotate_and_pick(None, order, top5, set())[0] == "shoes"
+    assert rotate_and_pick(None, order, top5, set(), limit=3)[0] == "shoes"
+    # Уникальность при доборе до 30.
+    big = {"c1": [f"a{i}" for i in range(20)], "c2": [f"b{i}" for i in range(20)]}
+    cat, ids, nxt = rotate_and_pick("c1", ["c1", "c2"], big, set(), limit=30)
+    assert cat == "c1" and len(ids) == 30 and len(set(ids)) == 30 and nxt == "c2", (cat, len(ids), nxt)
     print("best_offer._demo OK")
 
 

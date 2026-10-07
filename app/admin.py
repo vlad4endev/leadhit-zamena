@@ -872,7 +872,7 @@ async def _sample_products(con, limit: int = 6) -> list[dict]:
     Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
     без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
     не совпадало с письмом. Внутри топа фото идут вперёд, затем прогрев CDN-URL.
-    По умолчанию 6 = две строки по 3; для постпродажи — до 30 (items_limit).
+    По умолчанию 6 = две строки по 3; для Best Offer / постпродажи — до items_limit (30).
 
     Фолбэки (чтобы превью не было пустым «Подборка без товаров»):
     1) топ-5 / каталог с фото + живой CDN;
@@ -925,7 +925,8 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         cfg = await svc_config.load(con, service)
         look = await app_settings.template_look(con)
         tpl = await app_settings.active_template(con, service)
-        sample_n = int(cfg.get("items_limit") or 30) if service == "postsale" else 6
+        sample_n = (int(cfg.get("items_limit") or 30)
+                    if service in ("postsale", "best_offer") else 6)
         products = await _sample_products(con, limit=sample_n)
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service, [])
     html = render_blocks(blocks, products, "test", service, look)
@@ -1015,7 +1016,8 @@ async def template_preview(id: Optional[int] = None, service: str = "best_offer"
             tpl = await app_settings.active_template(con, service)
             blocks = tpl["blocks"] if tpl else None
         cfg = await svc_config.load(con, service)
-        sample_n = int(cfg.get("items_limit") or 30) if service == "postsale" else 6
+        sample_n = (int(cfg.get("items_limit") or 30)
+                    if service in ("postsale", "best_offer") else 6)
         products = await _sample_products(con, limit=sample_n)
     override = {"brand_color": brand_color, "header": header, "button": button, "footer": footer}
     look = {**look, **{k: v for k, v in override.items() if v}}
@@ -1034,7 +1036,8 @@ async def template_render(body: dict) -> str:
         if look is None:
             look = await app_settings.template_look(con)
         cfg = await svc_config.load(con, service if service in _SERVICES else "best_offer")
-        sample_n = int(cfg.get("items_limit") or 30) if service == "postsale" else 6
+        sample_n = (int(cfg.get("items_limit") or 30)
+                    if service in ("postsale", "best_offer") else 6)
         products = await _sample_products(con, limit=sample_n)
     return render_blocks(blocks, products, "preview", service, look)
 
