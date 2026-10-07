@@ -388,8 +388,8 @@ def cart_gate(
     if not has_items:
         return "empty_cart"
     if not products_found:
-        # Ни один product_id из пинга не найден в каталоге → письмо «вы забыли товары»
-        # ушло бы с пустым блоком. Это поломка интеграции/фида, а не повод спамить.
+        # Нечего показать: id нет в каталоге или все позиции не в наличии.
+        # Письмо «вы забыли товары» ушло бы с пустым блоком.
         return "unknown_products"
     if not has_email:
         return "no_email"
@@ -436,8 +436,11 @@ async def run_due(con, mailer=None, force: bool = False) -> int:
     template_id = tpl["id"] if tpl else None
     sent = 0
     for s in departed:
-        if await _process(con, s, mailer, cfg, look, blocks, template_id):
-            sent += 1
+        try:
+            if await _process(con, s, mailer, cfg, look, blocks, template_id):
+                sent += 1
+        except Exception as e:  # noqa: BLE001 — одна битая сессия не останавливает тик
+            print(f"[cart] session {s['session_id']} ERROR {type(e).__name__}: {e}")
     return sent
 
 
@@ -475,7 +478,8 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
     # Истина по составу корзины — последний ping сниппета (решение п.2): 1С данные
     # отдаёт файлом (каталог/топ-5/подписчики), живого запроса корзины по session_id нет.
     # Пустую/оформленную корзину закрывают gate has_items и проверка заказа ниже.
-    items = json.loads(s["cart_items"])
+    raw_items = s["cart_items"]
+    items = json.loads(raw_items) if isinstance(raw_items, str) else list(raw_items or [])
     email = s["email"] or (sub["email"] if sub else None)
 
     within_cooldown = bool(
@@ -521,7 +525,7 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
     log_id = await con.fetchval(
         """INSERT INTO email_log(user_id, service, product_ids, template_id, status)
            VALUES($1, 'cart', $2, $3, 'queued') RETURNING id""",
-        sub["user_id"], [i["product_id"] for i in items], template_id,
+        sub["user_id"], [p["product_id"] for p in products], template_id,
     )
     ok = await mailer.send(email, cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
@@ -542,13 +546,24 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
 
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
+    # in_stock: «нет в наличии» в письмо корзины не кладём (как в Best Offer / Постпродаже).
+    # Иначе кнопка «Купить» ведёт на товар, который уже нельзя заказать.
+    ids: list[str] = []
+    seen: set[str] = set()
+    for raw in product_ids:
+        pid = str(raw or "").strip()
+        if pid and pid not in seen:
+            seen.add(pid)
+            ids.append(pid)
+    if not ids:
+        return []
     rows = await con.fetch(
         """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[])""",
-        product_ids,
+           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}
-    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in product_ids if pid in by_id]
+    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
 def _demo() -> None:

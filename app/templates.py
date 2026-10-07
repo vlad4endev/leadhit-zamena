@@ -264,16 +264,31 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict, user_i
     return ""
 
 
-def _mjml_items(products: list[dict] | None) -> list[dict]:
+class _Items(list):
+    """Список товаров, который в Jinja работает и как get_recommendations(), и как
+    get_recommendations без скобок: LeadHit-шаблоны пишут оба варианта, а обычный
+    callable в {% for item in get_recommendations %} даёт TypeError → пустой блок."""
+
+    def __call__(self, *args, **kwargs):
+        return self
+
+
+def _mjml_items(products: list[dict] | None, campaign: str) -> _Items:
     """Адаптер: наши товары → объекты, которых ждёт MJML-шаблон LeadHit.
     Шаблон обращается к item.url/picture/name/price и делит цену на 100 (LeadHit хранил
     копейки) — поэтому цену в рублях домножаем обратно. Дополнительно даём item.price_str —
-    готовую цену «71,60 ₽» для своих шаблонов (в копейках/100 теряются копейки)."""
-    out = []
+    готовую цену «71,60 ₽» для своих шаблонов (в копейках/100 теряются копейки).
+    url — с UTM, как у нативных карточек: иначе клики из импортированного шаблона не атрибутируются.
+    image/image_url — те же фото, что picture: часть шаблонов ждёт другое имя поля."""
+    out: _Items = _Items()
     for p in (products or []):
+        picture = p.get("image_url") or ""
         out.append({
-            "url": p.get("product_url") or "#",
-            "picture": p.get("image_url") or "",
+            "id": p.get("product_id") or "",
+            "url": _utm(p.get("product_url") or "", campaign),
+            "picture": picture,
+            "image": picture,
+            "image_url": picture,
             "name": p.get("name") or "",
             "price": int(round(float(p.get("price") or 0) * 100)),
             "price_str": _price(p.get("price")),
@@ -323,14 +338,22 @@ def _jinja_render(source: str, products: list[dict], user_id: str, campaign: str
     import datetime
     import jinja2
     unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
-    items = _mjml_items(products)
-    # Все вызовы get_*() (get_recommendations/get_cart_items/get_order_items/…) означают
-    # «дай товары сценария» — ни одна питон/jinja-функция не начинается с get_.
-    ctx = {"unsubscribe_url": unsub}
-    for name in set(re.findall(r'(?<![\w.])(get_[A-Za-z0-9_]*)\s*\(', source)):
-        ctx[name] = lambda *a, **k: items
-    ctx.setdefault("get_recommendations", lambda *a, **k: items)
-    ctx.setdefault("get_cart_items", lambda *a, **k: items)
+    items = _mjml_items(products, campaign)
+    # get_* — товары сценария. Ищем и get_foo(), и голое get_foo (без скобок).
+    # _Items и итерируемый, и callable → оба синтаксиса {% for x in get_foo %} / get_foo().
+    names = set(re.findall(r'(?<![\w.])(get_[A-Za-z0-9_]*)\s*\(', source))
+    names.update(re.findall(r'(?<![\w.])(get_[A-Za-z0-9_]*)(?!\s*\()', source))
+    ctx: dict = {
+        "unsubscribe_url": unsub,
+        # Алиасы без get_: часть экспортов LeadHit пишет {% for item in products %}.
+        "products": items,
+        "recommendations": items,
+        "items": items,
+        "get_recommendations": items,
+        "get_cart_items": items,
+    }
+    for name in names:
+        ctx[name] = items
     ctx["get_utc_time"] = lambda *a, **k: datetime.datetime.now(datetime.timezone.utc).isoformat()
     ctx["exit"] = ctx["abort"] = ctx["stop"] = lambda *a, **k: ""   # «не слать без данных» → no-op
     # ChainableUndefined: неизвестные переменные/атрибуты рендерятся пустыми, а не роняют шаблон.
@@ -383,6 +406,70 @@ def render_mjml(source: str, products: list[dict], user_id: str, campaign: str) 
                 f'{_esc(type(e).__name__)}: {_esc(e)}</span></div>')
 
 
+_JINJA_CTRL_RE = re.compile(
+    r'\{%-?\s*(for|endfor|if|endif|elif|else|block|endblock|macro|endmacro|'
+    r'set|endset|raw|endraw|call|endcall|filter|endfilter)\b',
+    re.I,
+)
+
+
+def _jinja_ctrl_balance(html: str) -> int:
+    """Грубый баланс управляющих тегов Jinja: >0 значит {% for/if %} без пары.
+    Нужен, чтобы склеить html-блоки, когда цикл товаров разрезан между ними."""
+    bal = 0
+    for m in _JINJA_CTRL_RE.finditer(html or ""):
+        tag = m.group(1).lower()
+        if tag.startswith("end") or tag in ("else", "elif"):
+            if tag.startswith("end"):
+                bal -= 1
+        elif tag not in ("set",):  # {% set x = 1 %} самодостаточен
+            bal += 1
+    return bal
+
+
+def _html_chunks_need_join(blocks: list[dict]) -> bool:
+    """True, если среди html-блоков есть незакрытый Jinja-цикл/условие —
+    рендерить по одному нельзя (TemplateSyntaxError → пустая подборка)."""
+    bal = 0
+    for b in blocks or []:
+        if (b or {}).get("type") != "html":
+            continue
+        bal += _jinja_ctrl_balance(b.get("html") or "")
+        if bal != 0:
+            return True
+    return False
+
+
+def _wrap_branded(body: str, lk: dict, unsub: str) -> str:
+    return (
+        f'<div style="font-family:sans-serif;max-width:640px;margin:0 auto;'
+        f'border:1px solid #e6ebf3;border-radius:14px;overflow:hidden">'
+        f'<div style="background:{lk["brand_color"]};color:#fff;padding:16px 24px;font-weight:700;font-size:18px">'
+        f'{lk["header"]}</div>'
+        f'<div style="padding:24px">{body}</div>'
+        f'<div style="background:#f5f7fb;padding:16px 24px;font-size:12px;color:#888">'
+        f'<a href="{unsub}" style="color:#888">{lk["footer"]}</a></div></div>'
+    )
+
+
+def _wrap_block_box(b: dict, html: str) -> str:
+    if not html:
+        return html
+    box = []
+    if _valid_color(b.get("bg")):
+        box.append(f'background:{b["bg"]}')
+    if _valid_color(b.get("border")):
+        box.append(f'border:1px solid {b["border"]}')
+    if box:
+        box.append("padding:14px 18px;border-radius:10px")
+    sp = _SPACE.get(b.get("space"))
+    if sp:
+        box.append(f"margin:{sp} 0")
+    if box:
+        return f'<div style="{";".join(box)}">{html}</div>'
+    return html
+
+
 def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
                   campaign: str, look: dict | None = None) -> str:
     """Рендер письма из блоков конструктора. Шапка/футер берутся из look (единый бренд)."""
@@ -405,33 +492,25 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
     if blocks and all((b or {}).get("type") == "html" for b in blocks):
         return render_html_template("".join((b.get("html") or "") for b in blocks),
                                     products, user_id, campaign)
+    # Смешанный шаблон: цикл {% for %}…{% endfor %} разрезан по html-блокам (между ними
+    # heading/button). Рендер по одному падает → склеиваем всё в один Jinja-проход:
+    # html оставляем сырым, нативные блоки уже готовым HTML.
+    if _html_chunks_need_join(blocks):
+        parts = []
+        for b in blocks:
+            b = b or {}
+            if b.get("type") == "html":
+                parts.append(b.get("html") or "")
+            else:
+                parts.append(_wrap_block_box(b, _render_block(b, products, campaign, lk, user_id)))
+        body = render_html_template("".join(parts), products, user_id, campaign)
+        return _wrap_branded(body.replace("{{unsubscribe_url}}", unsub), lk, unsub)
     parts = []
     for b in blocks:
-        html = _render_block(b, products, campaign, lk, user_id)
-        if html:
-            box = []
-            if _valid_color(b.get("bg")):
-                box.append(f'background:{b["bg"]}')
-            if _valid_color(b.get("border")):
-                box.append(f'border:1px solid {b["border"]}')
-            if box:  # фон/рамка → добавляем внутренние отступы и скругление
-                box.append("padding:14px 18px;border-radius:10px")
-            sp = _SPACE.get(b.get("space"))
-            if sp:
-                box.append(f"margin:{sp} 0")
-            if box:
-                html = f'<div style="{";".join(box)}">{html}</div>'
+        html = _wrap_block_box(b or {}, _render_block(b or {}, products, campaign, lk, user_id))
         parts.append(html)
     body = "".join(parts).replace("{{unsubscribe_url}}", unsub)
-    return (
-        f'<div style="font-family:sans-serif;max-width:640px;margin:0 auto;'
-        f'border:1px solid #e6ebf3;border-radius:14px;overflow:hidden">'
-        f'<div style="background:{lk["brand_color"]};color:#fff;padding:16px 24px;font-weight:700;font-size:18px">'
-        f'{lk["header"]}</div>'
-        f'<div style="padding:24px">{body}</div>'
-        f'<div style="background:#f5f7fb;padding:16px 24px;font-size:12px;color:#888">'
-        f'<a href="{unsub}" style="color:#888">{lk["footer"]}</a></div></div>'
-    )
+    return _wrap_branded(body, lk, unsub)
 
 
 # Стартовый шаблон сценария (если в БД ничего не сохранено) — повторяет текущие письма.
@@ -479,6 +558,12 @@ def _demo() -> None:
     out = render_blocks(secs, P[:2], "u1", "cart")
     assert "{% for" not in out and "{{ item" not in out, out
     assert "static.groster.me/1.png" in out and "Товар &amp;" in out
+    # Ссылка товара в импортированном шаблоне несёт UTM (как нативная карточка).
+    linked = render_blocks(
+        [{"type": "html", "html": '{% for item in get_recommendations() %}<a href="{{ item.url }}">x</a>{% endfor %}'}],
+        P[:1], "u1", "best_offer")
+    assert "utm_source=trigger" in linked and "utm_campaign=best_offer" in linked, linked
+    assert "https://groster.me/p/1" in linked
 
     # html-блок рядом с нативными блоками — тоже через Jinja + подстановка отписки.
     mixed = render_blocks([{"type": "heading", "text": "Привет"},
@@ -486,6 +571,29 @@ def _demo() -> None:
                                                     '<a href="{{unsubscribe_url}}">off</a>'}],
                           P[:1], "u9", "best_offer")
     assert "<i>Товар &amp;" in mixed and "unsubscribe?u=u9" in mixed and "{%" not in mixed
+
+    # LeadHit без скобок: {% for item in get_recommendations %} — раньше TypeError → пустой блок.
+    bare = render_html_template(
+        '<h2>Подборка товаров для вас</h2>{% for item in get_recommendations %}'
+        '<div>{{ item.name }}</div>{% endfor %}', P[:2], "u1", "best_offer")
+    assert "Товар &amp;" in bare and "{%" not in bare, bare
+
+    # Алиасы products / recommendations (экспорт без get_*).
+    for var in ("products", "recommendations"):
+        alt = render_html_template(
+            '{% for item in ' + var + '%}<b>{{ item.name }}</b>{% endfor %}',
+            P[:1], "u1", "best_offer")
+        assert "Товар &amp;" in alt and "{%" not in alt, (var, alt)
+
+    # Цикл разрезан по html-блокам с heading между ними — раньше падал Jinja, подборка пустая.
+    split_mixed = render_blocks([
+        {"type": "heading", "text": "Подборка товаров для вас"},
+        {"type": "html", "html": '{% for item in get_recommendations() %}<div class="p">{{ item.name }}</div>'},
+        {"type": "html", "html": '{% endfor %}'},
+    ], P[:2], "u1", "best_offer")
+    assert "Товар &amp;" in split_mixed and "{% for" not in split_mixed, split_mixed
+    assert "Подборка товаров для вас" in split_mixed
+
     print("templates._demo OK")
 
 

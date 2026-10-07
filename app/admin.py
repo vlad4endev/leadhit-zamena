@@ -540,15 +540,29 @@ class TestEmail(BaseModel):
 
 
 async def _sample_products(con, limit: int = 6) -> list[dict]:
-    """Товары для превью и тест-письма. Сначала те, у которых есть фото: иначе LIMIT без
-    сортировки вытаскивал первые строки каталога (часто без image_url), и превью показывало
-    серые плейсхолдеры при живом каталоге. Порядок стабильный — превью не «дёргается»
-    между рендерами. 6 штук = две строки карточек по 3."""
+    """Товары для превью и тест-письма.
+
+    Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
+    без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
+    не совпадало с письмом. Внутри топа фото идут вперёд (иначе серые плейсхолдеры),
+    порядок стабильный. 6 штук = две строки карточек по 3. Нет топ-5 — любые в наличии.
+    """
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE in_stock
-           ORDER BY (image_url IS NULL OR image_url = ''), product_id
-           LIMIT $1""", limit)
+        """SELECT product_id, name, price, image_url, product_url FROM (
+             SELECT DISTINCT ON (p.product_id)
+                    p.product_id, p.name, p.price, p.image_url, p.product_url,
+                    (t.product_id IS NULL) AS not_top,
+                    COALESCE(t.position, 99) AS pos,
+                    (p.image_url IS NULL OR p.image_url = '') AS no_img
+             FROM products p
+             LEFT JOIN top5_by_category t ON t.product_id = p.product_id
+             WHERE p.in_stock
+             ORDER BY p.product_id, t.position NULLS LAST
+           ) s
+           ORDER BY not_top, pos, no_img, product_id
+           LIMIT $1""",
+        limit,
+    )
     return [dict(r, price=float(r["price"])) for r in rows]
 
 
@@ -619,6 +633,29 @@ async def put_template_settings(patch: dict) -> dict:
     return {"ok": True}
 
 
+_EMPTY_PRODUCTS_BANNER = (
+    '<div style="margin:12px 0;padding:14px 16px;background:#fff4e5;border:1px solid #f0c36d;'
+    'border-radius:10px;color:#6b4e00;font:14px/1.45 sans-serif">'
+    '<b>В письме нет товаров.</b> В каталоге нет позиций в наличии (или пуст топ-5). '
+    'Загрузите фид товаров/топ-5 — иначе подборка в шаблоне и в рассылке останется пустой.'
+    '</div>'
+)
+
+
+def _with_empty_banner(html: str, products: list) -> str:
+    """В превью явно показываем, почему блок «Подборка» пустой — иначе белая дыра в макете."""
+    if products:
+        return html
+    # Баннер сразу после <body> или в начало документа.
+    low = html.lower()
+    i = low.find("<body")
+    if i != -1:
+        j = low.find(">", i)
+        if j != -1:
+            return html[: j + 1] + _EMPTY_PRODUCTS_BANNER + html[j + 1 :]
+    return _EMPTY_PRODUCTS_BANNER + html
+
+
 @router.get("/template/preview", response_class=HTMLResponse)
 async def template_preview(id: Optional[int] = None, service: str = "best_offer",
                            brand_color: Optional[str] = None, header: Optional[str] = None,
@@ -641,7 +678,7 @@ async def template_preview(id: Optional[int] = None, service: str = "best_offer"
     override = {"brand_color": brand_color, "header": header, "button": button, "footer": footer}
     look = {**look, **{k: v for k, v in override.items() if v}}
     blocks = blocks if blocks else DEFAULT_BLOCKS.get(service, [])
-    return render_blocks(blocks, products, "preview", service, look)
+    return _with_empty_banner(render_blocks(blocks, products, "preview", service, look), products)
 
 
 @router.post("/template/render", response_class=HTMLResponse)
@@ -655,7 +692,7 @@ async def template_render(body: dict) -> str:
         if look is None:
             look = await app_settings.template_look(con)
         products = await _sample_products(con)
-    return render_blocks(blocks, products, "preview", service, look)
+    return _with_empty_banner(render_blocks(blocks, products, "preview", service, look), products)
 
 
 _TPL_NAMES = {"best_offer": "Best Offer", "cart": "Брошенная корзина", "postsale": "Постпродажа"}
