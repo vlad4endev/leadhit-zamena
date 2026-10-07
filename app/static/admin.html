@@ -787,7 +787,8 @@ async function viewService(svc){
         <button class="btn primary" onclick="sendTest('${esc(svc)}')">Отправить тест</button>
         <span class="svc-sub">Охват сейчас: <b id="reachN" class="mono">…</b></span>
       </div>
-      <div class="svc-sub" style="margin-top:8px">Придёт реальное письмо с активным шаблоном. Метрики — в разделе «Эффективность».</div></div>`;
+      <div id="testResult" class="svc-sub" style="margin-top:10px"></div>
+      <div class="svc-sub" style="margin-top:8px">Придёт реальное письмо с активным шаблоном. Ошибки SMTP/ESP показываются здесь полностью (не только в тосте). Метрики — в «Эффективность».</div></div>`;
   const tab=(v,l)=>`<button class="${svcTab===v?'active':''}" onclick="svcSetTab('${svc}','${v}')">${l}</button>`;
   const content = svcTab==='message'?messagePanel : svcTab==='test'?testPanel : scenarioPanel;
   $('view').innerHTML=`<section style="max-width:860px">
@@ -811,9 +812,17 @@ async function loadReach(svc){
 async function sendTest(svc){
   const email=($('testEmail')||{}).value||'';
   if(!email){ toast('Укажите email'); return; }
+  const box=$('testResult'); if(box) box.textContent='Отправка…';
   const r=await j('/admin/scenario/'+encodeURIComponent(svc)+'/test',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-  toast(r.error?('Ошибка ESP: '+r.error):(!r.ok?'Ошибка отправки':(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)')));
+  if(r.error || !r.ok){
+    const msg=r.error||'Ошибка отправки';
+    if(box) box.innerHTML='<span style="color:var(--alert)">✗ '+esc(msg)+'</span>';
+    toast('Почта: '+msg.slice(0,120)+(msg.length>120?'…':''));
+    return;
+  }
+  if(box) box.innerHTML='<span style="color:var(--ok)">✓ '+(r.live?'отправлено на '+esc(email):'записано в dev-лог')+'</span>';
+  toast(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)');
 }
 
 const DOW=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
@@ -2181,7 +2190,12 @@ async function tplTest(){
   const to=($('tpl_test_to')||{}).value||''; if(!to){ toast('Укажите email'); return; }
   const r=await j('/admin/scenario/'+encodeURIComponent(tplSvc)+'/test',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({email:to})});
-  toast(r.error?('Ошибка ESP: '+r.error):(!r.ok?'Ошибка':(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)')));
+  if(r.error || !r.ok){
+    const msg=r.error||'Ошибка отправки';
+    toast('Почта: '+msg.slice(0,120)+(msg.length>120?'…':''));
+    return;
+  }
+  toast(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)');
 }
 
 /* Settings */

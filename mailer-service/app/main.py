@@ -107,7 +107,7 @@ async def test_send(r: TestRequest, authorization: Optional[str] = Header(defaul
                                 "<p>Тестовое письмо. Настройки почтового провайдера работают.</p>", "", "")
         return {"ok": True, "message_id": mid}
     except Exception as e:  # noqa: BLE001 — показываем ошибку провайдера оператору
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": sender.format_send_error(e)}
 
 
 @app.post("/v1/send")
@@ -125,7 +125,7 @@ async def send_one_sync(m: Message, authorization: Optional[str] = Header(defaul
         mid = await sender.send(m.to, m.subject, m.html, m.from_email, m.from_name)
         return {"ok": True, "message_id": mid}
     except Exception as e:  # noqa: BLE001 — показываем ошибку провайдера оператору
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": sender.format_send_error(e)}
 
 
 @app.post("/v1/send/batch")

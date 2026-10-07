@@ -108,6 +108,84 @@ class _SMTP_SSL(smtplib.SMTP_SSL):
         return context.wrap_socket(sock, server_hostname=self._host or host)
 
 
+def _preflight_smtp(cfg: dict) -> None:
+    """Проверка настроек до TCP — иначе ESP отдаёт туманный отказ."""
+    if not (cfg.get("smtp_host") or "").strip():
+        raise RuntimeError(
+            "SMTP-хост не задан. В админке: Настройки → Почта → пресет Яндекс/Mail.ru/Gmail, "
+            "логин, пароль приложения, From → Сохранить.")
+    user = (cfg.get("smtp_user") or "").strip()
+    password = cfg.get("smtp_password") or ""
+    if user and not password:
+        raise RuntimeError(
+            f"Пароль SMTP пуст (логин {user}). Укажите пароль приложения и сохраните — "
+            "обычный пароль от ящика Яндекс/Mail.ru/Gmail SMTP не принимает.")
+    if not user:
+        raise RuntimeError(
+            "Логин SMTP пуст. Укажите полный email ящика (например name@yandex.ru).")
+    mail_from = (cfg.get("mail_from") or "").strip()
+    if mail_from and "@" in user and "@" in mail_from:
+        # Яндекс/Mail.ru режут чужой From (550 not local sender).
+        if user.lower() != mail_from.lower():
+            print(f"[smtp-warn] From={mail_from!r} ≠ логин={user!r} — "
+                  f"провайдер может ответить 550; лучше совпадение 1:1")
+
+
+def format_send_error(exc: BaseException, cfg: dict | None = None) -> str:
+    """Человекочитаемая ошибка ESP для UI (тест/синхронная отправка)."""
+    cfg = cfg or store.config_sync()
+    host = cfg.get("smtp_host") or "?"
+    port = cfg.get("smtp_port") or "?"
+    use_ssl = bool(cfg.get("smtp_ssl")) or int(cfg.get("smtp_port") or 0) == 465
+    msg = str(exc).strip() or type(exc).__name__
+    raw = f"{type(exc).__name__}: {msg}"
+    low = raw.lower()
+
+    # Уже наши preflight/подсказки — без префикса типа исключения.
+    if isinstance(exc, RuntimeError) and any(
+            k in msg for k in ("SMTP", "Пароль", "Логин", "пресет", "админке")):
+        return msg
+
+    if isinstance(exc, smtplib.SMTPAuthenticationError) or "auth" in low and (
+            "535" in raw or "534" in raw or "authentication" in low):
+        return (f"SMTP отклонил логин/пароль ({host}). "
+                f"Нужен пароль приложения, логин = полный email, "
+                f"From = тот же ящик. Детали: {raw}")
+
+    if isinstance(exc, smtplib.SMTPSenderRefused) or "550" in raw or "not local" in low \
+            or "sender" in low and "refus" in low:
+        return (f"Провайдер не принял From={cfg.get('mail_from')!r} "
+                f"(логин SMTP {cfg.get('smtp_user')!r}). "
+                f"From должен совпадать с ящиком. Детали: {raw}")
+
+    if isinstance(exc, smtplib.SMTPRecipientsRefused) or "recipient" in low and "refus" in low:
+        return f"Получатель отклонён провайдером. Детали: {raw}"
+
+    if "wrong_version_number" in low or "unexpected_eof" in low or "ssl" in low and (
+            "record" in low or "protocol" in low or "eof" in low):
+        mode = "SSL/465" if use_ssl else ("STARTTLS/587" if cfg.get("smtp_starttls") else "без TLS")
+        return (f"Не совпал TLS с портом (сейчас {host}:{port}, режим {mode}). "
+                f"Яндекс/Mail.ru → SSL 465; Gmail → STARTTLS 587. Детали: {raw}")
+
+    if isinstance(exc, TimeoutError) or "timed out" in low:
+        if "нет ответа" in msg or "VPS" in msg:
+            return msg
+        return (f"Таймаут SMTP {host}:{port} (SSL={use_ssl}). "
+                f"Часто VPS режет исходящий 465/587. Проверка: "
+                f"docker compose exec mailer python -c "
+                f"\"import socket; socket.create_connection(('{host}',{port}),5)\". "
+                f"Детали: {raw}")
+
+    if isinstance(exc, OSError) or "connection refused" in low or "unreachable" in low:
+        if "Network is unreachable" in msg or "cannot connect" in msg:
+            return (f"Нет TCP до {host}:{port}. Из контейнера mailer хост недоступен "
+                    f"(firewall / IPv6 / неверный хост). Детали: {raw}")
+        return (f"Нет TCP до {host}:{port}. Из контейнера mailer хост недоступен "
+                f"(firewall / IPv6 / неверный хост). Детали: {raw}")
+
+    return raw
+
+
 def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str) -> str:
     """Отправляет письмо, возвращает Message-ID. provider=dev — только лог."""
     cfg = store.config_sync()
@@ -143,20 +221,19 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
         return message_id
 
     # smtp
+    _preflight_smtp(cfg)
     use_ssl = bool(cfg.get("smtp_ssl")) or int(cfg.get("smtp_port") or 0) == 465
     host, port = cfg["smtp_host"], int(cfg["smtp_port"])
     try:
         if use_ssl:
             with _SMTP_SSL(host, port, timeout=30) as s:
-                if cfg["smtp_user"]:
-                    s.login(cfg["smtp_user"], cfg["smtp_password"])
+                s.login(cfg["smtp_user"], cfg["smtp_password"])
                 s.send_message(msg)
         else:
             with _SMTP(host, port, timeout=30) as s:
                 if cfg["smtp_starttls"]:
                     s.starttls()
-                if cfg["smtp_user"]:
-                    s.login(cfg["smtp_user"], cfg["smtp_password"])
+                s.login(cfg["smtp_user"], cfg["smtp_password"])
                 s.send_message(msg)
     except TimeoutError as e:
         raise TimeoutError(

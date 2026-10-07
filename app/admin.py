@@ -602,11 +602,25 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
                 "to": body.email, "subject": subject, "html": html,
                 "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]}, 45)
         except Exception as e:  # noqa: BLE001 — сервис недоступен
-            return {"ok": False, "error": f"{type(e).__name__}: {e}", "live": True}
-        return {"ok": bool(res.get("ok")), "error": res.get("error"),
+            err = f"{type(e).__name__}: {e}"
+            if "timed out" in err.lower() or "timeout" in err.lower():
+                err += (" — mailer/SMTP не ответил за 45с. Проверьте порты 465/587 "
+                        "и вкладку Настройки → Почта (пресет, пароль приложения, From).")
+            return {"ok": False, "error": err, "live": True}
+        ok = bool(res.get("ok"))
+        return {"ok": ok, "error": res.get("error") if not ok else None,
                 "live": await _mailer_is_live(mailer)}
-    ok = await mailer.send(body.email, subject, html, cfg["sender_email"], cfg["sender_name"])
-    return {"ok": ok, "live": await _mailer_is_live(mailer)}
+    try:
+        ok = await mailer.send(body.email, subject, html, cfg["sender_email"], cfg["sender_name"])
+    except Exception as e:  # noqa: BLE001 — локальный SMTP/sendmail
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "live": await _mailer_is_live(mailer)}
+    if not ok:
+        return {"ok": False,
+                "error": "отправка не удалась (логи api). Проверьте Настройки → Почта: "
+                         "хост, SSL/STARTTLS, пароль приложения, From = логин.",
+                "live": await _mailer_is_live(mailer)}
+    return {"ok": True, "live": await _mailer_is_live(mailer)}
 
 
 @router.get("/scenario/{service}/reach")
