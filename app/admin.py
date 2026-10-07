@@ -301,38 +301,12 @@ async def services_summary() -> list[dict]:
              "sent": r["sent"]} for r in rows]
 
 
-async def _null_broken_top5_photos(con) -> int:
-    """Проверить image_url позиций топ-5 на CDN; битые обнулить в products.
-
-    Иначе в топ-5 остаётся карточка «нет фото» при непустом image_url (резолвер раньше
-    отдавал 302 на заведомый 404). Только строки топ-5 — не весь каталог (~2к HEAD).
-    """
-    from app import images
-    rows = await con.fetch(
-        """SELECT DISTINCT p.product_id, p.image_url
-             FROM top5_by_category t
-             JOIN products p ON p.product_id = t.product_id
-            WHERE p.image_url IS NOT NULL AND btrim(p.image_url) <> ''""")
-    broken = []
-    for r in rows:
-        ok = await asyncio.to_thread(images.url_alive_sync, r["image_url"])
-        if not ok:
-            broken.append(r["product_id"])
-    if not broken:
-        return 0
-    await con.execute(
-        """UPDATE products SET image_url = NULL, updated_at = now()
-           WHERE product_id = ANY($1::text[])""", broken)
-    return len(broken)
-
-
 async def _purge_top5_no_photo(con) -> int:
-    """Убрать из топ-5 позиции без GUID-фото (и без товара в каталоге) → вкладка «Без фото».
+    """Убрать из топ-5 позиции с пустым image_url (и без товара) → вкладка «Без фото».
 
-    Сначала обнуляет битые URL (файл на CDN 404), потом удаляет пустые из топ-5 и
-    перенумеровывает position. Возвращает число удалённых строк топ-5.
+    Не трогает CDN: обнуление по HEAD раньше сжигало рабочие фото при таймаутах.
+    Живость картинок — через images.warm_products при отдаче/письме.
     """
-    await _null_broken_top5_photos(con)
     deleted = await con.fetchval(
         """WITH doomed AS (
              DELETE FROM top5_by_category t
@@ -343,7 +317,6 @@ async def _purge_top5_no_photo(con) -> int:
              RETURNING 1
            )
            SELECT count(*)::int FROM doomed""")
-    # Сжать дыры в позициях — иначе после чистки останутся 1,2,5.
     await con.execute(
         """WITH ordered AS (
              SELECT category_id, product_id,
@@ -360,11 +333,8 @@ async def _purge_top5_no_photo(con) -> int:
 
 @router.get("/recommendations")
 async def recommendations() -> dict:
-    """Топ-5 товаров по категориям с деталями — то, что реально идёт в письма (Best Offer, Постпродажа).
-
-    Перед ответом вычищает из топ-5 позиции без GUID-фото: они живут во вкладке «Без фото»,
-    в письма и в этот список не попадают.
-    """
+    """Топ-5 с деталями. Прогревает фото (CDN URL) при каждом входе в раздел."""
+    from app import images
     async with db.pool().acquire() as con:
         purged = await _purge_top5_no_photo(con)
         rows = await con.fetch(
@@ -375,32 +345,58 @@ async def recommendations() -> dict:
                JOIN categories c ON c.category_id = t.category_id
                LEFT JOIN products p ON p.product_id = t.product_id
                ORDER BY c.sort_order, t.position""")
-    cats: dict = {}
+    # Плоский список для прогрева, потом разложим обратно по категориям.
+    flat = []
     for r in rows:
-        cat = cats.setdefault(r["category_id"], {
-            "category_id": r["category_id"], "category_name": r["category_name"],
-            "updated_at": _iso(r["updated_at"]), "products": []})
         exists = r["product_name"] is not None
-        # Без фото сюда уже не доходят (purge) — usable = наличиелог + наличие.
-        cat["products"].append({
+        flat.append({
             "position": r["position"], "product_id": r["product_id"],
-            "name": r["product_name"], "price": float(r["price"]) if r["price"] is not None else None,
+            "name": r["product_name"],
+            "price": float(r["price"]) if r["price"] is not None else None,
             "image_url": r["image_url"], "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]) if exists else False, "exists": exists,
-            "usable": exists and bool(r["in_stock"]) and bool(r["image_url"]),
-            "has_photo": bool(r["image_url"]) if exists else False,
+            "category_id": r["category_id"],
+            "category_name": r["category_name"],
+            "updated_at": _iso(r["updated_at"]),
+        })
+    warmed = await images.warm_products(
+        [p for p in flat if p["exists"] and p["image_url"]], require_live=False)
+    by_id = {p["product_id"]: p for p in warmed}
+    cats: dict = {}
+    for item in flat:
+        cat = cats.setdefault(item["category_id"], {
+            "category_id": item["category_id"], "category_name": item["category_name"],
+            "updated_at": item["updated_at"], "products": []})
+        w = by_id.get(item["product_id"])
+        image_url = w["image_url"] if w else item["image_url"]
+        cat["products"].append({
+            "position": item["position"], "product_id": item["product_id"],
+            "name": item["name"], "price": item["price"],
+            "image_url": image_url, "product_url": item["product_url"],
+            "in_stock": item["in_stock"], "exists": item["exists"],
+            "usable": item["exists"] and item["in_stock"] and bool(image_url),
+            "has_photo": bool(image_url),
         })
     out = list(cats.values())
     total_usable = sum(1 for c in out for p in c["products"] if p["usable"])
     total = sum(len(c["products"]) for c in out)
     return {"categories": out, "category_count": len(out),
             "position_count": total, "usable_count": total_usable,
-            "purged_no_photo": purged}
+            "purged_no_photo": purged, "photos_warmed": len(warmed)}
+
+
+def _abs_img(url: str | None) -> str | None:
+    """/img/… → абсолютный URL нашего хоста (браузер сам дернёт резолвер). Без HEAD по всему каталогу."""
+    if not url:
+        return url
+    if url.startswith("/"):
+        return app_settings.public_base_url().rstrip("/") + url
+    return url
 
 
 @router.get("/catalog")
 async def catalog() -> dict:
-    """Весь каталог, сгруппированный по категориям — для просмотра карточками."""
+    """Каталог карточками. /img/ отдаём абсолютным — фото тянет браузер через резолвер."""
     rows = await db.pool().fetch(
         """SELECT p.category_id, c.name AS category_name, c.sort_order,
                   p.product_id, p.name, p.price, p.image_url, p.product_url, p.in_stock, p.tags
@@ -417,13 +413,10 @@ async def catalog() -> dict:
         cat["products"].append({
             "product_id": r["product_id"], "name": r["name"],
             "price": float(r["price"]) if r["price"] is not None else None,
-            "image_url": r["image_url"], "product_url": r["product_url"],
+            "image_url": _abs_img(r["image_url"]), "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]), "tags": tags,
         })
     out = list(cats.values())
-    # «Без фото» — товары, у которых ссылки нет вовсе (пустой image_url в выгрузке или
-    # ссылка, собранная из артикула, — см. app/images.proxied). Битые ссылки этим числом
-    # не считаются: их видно в карточке плейсхолдером «нет фото».
     no_photo = sum(1 for c in out for p in c["products"] if not p["image_url"])
     return {"categories": out, "category_count": len(out),
             "product_count": sum(len(c["products"]) for c in out),
@@ -616,14 +609,15 @@ class TestEmail(BaseModel):
 
 
 async def _sample_products(con, limit: int = 6) -> list[dict]:
-    """Товары для превью и тест-письма — только с GUID-фото (как в авторассылке).
-    Порядок стабильный по product_id. 6 штук = две строки карточек по 3."""
+    """Товары для превью и тест-письма — только с фото, прогретые до CDN-URL."""
+    from app import images
     rows = await con.fetch(
         """SELECT product_id, name, price, image_url, product_url FROM products
            WHERE in_stock AND image_url IS NOT NULL AND btrim(image_url) <> ''
            ORDER BY product_id
            LIMIT $1""", limit)
-    return [dict(r, price=float(r["price"])) for r in rows]
+    products = [dict(r, price=float(r["price"])) for r in rows]
+    return await images.warm_products(products, require_live=True)
 
 
 @router.post("/scenario/{service}/test")

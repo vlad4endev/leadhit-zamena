@@ -483,7 +483,9 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         )
     )
     order_placed = await _order_placed(con, s["user_id"], s["email"], s["created_at"])
+    from app import images
     products = await _load_products(con, [i["product_id"] for i in items])
+    products = await images.warm_products(products, require_live=True)
 
     reason = cart_gate(
         has_items=len(items) > 0,

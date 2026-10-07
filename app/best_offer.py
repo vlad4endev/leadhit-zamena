@@ -135,8 +135,9 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         if not product_ids:
             continue  # нечего предложить
 
-        # Только с GUID-фото (_load_products уже отсёк без фото); limit слотов письма.
+        # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
         products = images.photo_first(await _load_products(con, product_ids), 5)
+        products = await images.warm_products(products, require_live=True)
         if not products:
             continue
         product_ids = [p["product_id"] for p in products]

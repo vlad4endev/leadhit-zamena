@@ -124,8 +124,8 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
         return False
 
-    # photo_first уводит в хвост товары без фото и обрезает первыми (см. app/images.py).
     products = images.photo_first(await _load_products(con, product_ids), 5)
+    products = await images.warm_products(products, require_live=True)
     if not products:
         await _finish(con, job["id"], "cancelled")   # блок пуст → не шлём (ТЗ 4.8)
         return False
