@@ -210,9 +210,10 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
             )
         sent += 1
         await activity_log.write(
-            con, level="info", source="best_offer", event="send_ok", service="best_offer",
+            con, level="info", source="best_offer", event="queued", service="best_offer",
             user_id=cand["user_id"], ref_id=log_id,
-            message=f"отправлено: категория {category}, товаров {len(sent_ids)}",
+            message=f"принято в очередь отправки: категория {category}, товаров {len(sent_ids)} "
+                    f"→ {cand['email']}",
             details={"category": category, "product_ids": sent_ids, "next_pointer": next_ptr,
                      "to": cand["email"]},
         )

@@ -581,9 +581,9 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
             "UPDATE cart_sessions SET state = 'sent' WHERE session_id = $1", s["session_id"]
         )
     await activity_log.write(
-        con, level="info", source="cart", event="send_ok", service="cart",
+        con, level="info", source="cart", event="queued", service="cart",
         user_id=sub["user_id"], session_id=s["session_id"], ref_id=log_id,
-        message=f"отправлено: брошенная корзина, товаров {len(product_ids)}",
+        message=f"принято в очередь: брошенная корзина, товаров {len(product_ids)} → {email}",
         details={"product_ids": product_ids, "to": email},
     )
     return True

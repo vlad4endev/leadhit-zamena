@@ -1045,12 +1045,36 @@ async def mail_config_save(patch: dict) -> dict:
 @router.post("/mail/test")
 async def mail_test(body: dict) -> dict:
     from app.config import settings
+    to = (body.get("to") or "").strip()
     if not settings.mailer_service_url:
+        await activity_log.write(
+            level="error", source="mailer", event="test_failed",
+            message="тест почты: mailer-service не подключён",
+            details={"to": to},
+        )
         return {"ok": False, "error": "mailer-service не подключён"}
     try:
-        return await asyncio.to_thread(_mailer_svc, "POST", "/v1/test", {"to": body.get("to", "")})
+        res = await asyncio.to_thread(_mailer_svc, "POST", "/v1/test", {"to": to})
     except Exception as e:  # noqa: BLE001
+        await activity_log.write(
+            level="error", source="mailer", event="test_failed",
+            message=f"тест почты: {type(e).__name__}: {e}",
+            details={"to": to, "error": str(e)[:500]},
+        )
         return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+    if res.get("ok"):
+        await activity_log.write(
+            level="info", source="mailer", event="test_ok",
+            message=f"тест почты успешен → {to}",
+            details={"to": to, "message_id": res.get("message_id")},
+        )
+    else:
+        await activity_log.write(
+            level="error", source="mailer", event="test_failed",
+            message=f"тест почты провален → {to}: {res.get('error') or res}",
+            details={"to": to, "result": res},
+        )
+    return res
 
 
 # ── Колесо фортуны ──

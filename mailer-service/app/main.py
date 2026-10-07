@@ -137,7 +137,9 @@ async def message(id: str) -> dict:
     if not row:
         raise HTTPException(404, "not found")
     return {"id": row["id"], "state": row["state"], "attempts": row["attempts"],
-            "message_id": row["message_id"], "last_event": row["last_event"]}
+            "message_id": row["message_id"], "last_event": row["last_event"],
+            "last_error": row.get("last_error"), "to": row.get("to_addr"),
+            "subject": row.get("subject")}
 
 
 @app.post("/v1/esp/webhook")

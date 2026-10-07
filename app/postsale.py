@@ -239,9 +239,10 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
         )
         await _finish(con, job["id"], "sent")
     await activity_log.write(
-        con, level="info", source="postsale", event="send_ok", service="postsale",
+        con, level="info", source="postsale", event="queued", service="postsale",
         user_id=order["user_id"], order_id=order["order_id"], ref_id=log_id,
-        message=f"отправлено: постпродажа, категория {category}, товаров {len(sent_ids)}",
+        message=f"принято в очередь: постпродажа, категория {category}, "
+                f"товаров {len(sent_ids)} → {sub['email']}",
         details={"category": category, "product_ids": sent_ids, "to": sub["email"]},
     )
     return True

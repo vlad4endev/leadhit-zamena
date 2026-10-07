@@ -6,13 +6,14 @@
 from __future__ import annotations
 
 import html as _htmllib
+from typing import Optional
 from urllib.parse import urlencode
 
 from fastapi import APIRouter
 from fastapi.responses import HTMLResponse
 from pydantic import BaseModel
 
-from app import db
+from app import activity_log, db
 from app.config import settings
 
 router = APIRouter(tags=["analytics"])
@@ -33,8 +34,17 @@ _EVENT_COL = {
 
 
 class Webhook(BaseModel):
-    log_id: int
-    event: str  # sent|delivered|opened|clicked|bounced|unsubscribed|failed
+    log_id: Optional[int] = None  # нет у wheel_prize и части служебных писем
+    event: str  # sent|delivered|opened|clicked|bounced|unsubscribed|failed|retry
+    # Детали SMTP-ошибки от mailer-service (раньше терялись в stdout контейнера).
+    error: Optional[str] = None
+    error_type: Optional[str] = None
+    attempts: Optional[int] = None
+    retry_in_sec: Optional[float] = None
+    to: Optional[str] = None
+    subject: Optional[str] = None
+    outbox_id: Optional[str] = None
+    kind: Optional[str] = None  # meta от mailer, напр. wheel_prize
 
 
 _LAST_SENT_COL = {
@@ -108,16 +118,79 @@ async def rollback_failed_send(con, log_id: int) -> None:
         await con.execute("DELETE FROM email_log WHERE id = $1", log_id)
 
 
+async def _log_delivery_event(con, wh: Webhook, *, service=None, user_id=None) -> None:
+    """Пишет событие доставки/ошибки SMTP в диагностический журнал."""
+    details = {
+        "error": wh.error, "error_type": wh.error_type, "attempts": wh.attempts,
+        "retry_in_sec": wh.retry_in_sec, "to": wh.to, "subject": wh.subject,
+        "outbox_id": wh.outbox_id, "kind": wh.kind, "log_id": wh.log_id,
+    }
+    details = {k: v for k, v in details.items() if v is not None}
+    if wh.event == "retry":
+        await activity_log.write(
+            con, level="warn", source="mailer", event="smtp_retry", service=service,
+            user_id=user_id, ref_id=wh.log_id,
+            message=(f"SMTP ретрай #{wh.attempts or '?'}: "
+                     f"{wh.error_type or 'Error'}: {wh.error or 'без текста'}"),
+            details=details,
+        )
+    elif wh.event == "failed":
+        await activity_log.write(
+            con, level="error", source="mailer", event="smtp_failed", service=service,
+            user_id=user_id, ref_id=wh.log_id,
+            message=(f"SMTP отправка провалена"
+                     + (f" после {wh.attempts} попыток" if wh.attempts else "")
+                     + f": {wh.error_type or 'Error'}: {wh.error or 'без текста ошибки'}"),
+            details=details,
+        )
+    elif wh.event == "bounced":
+        await activity_log.write(
+            con, level="error", source="mailer", event="smtp_bounced", service=service,
+            user_id=user_id, ref_id=wh.log_id,
+            message=f"bounce: письмо отклонено ({wh.to or 'получатель неизвестен'})",
+            details=details,
+        )
+    elif wh.event == "sent":
+        await activity_log.write(
+            con, level="info", source="mailer", event="smtp_sent", service=service,
+            user_id=user_id, ref_id=wh.log_id,
+            message=f"SMTP отправлено: {wh.to or 'ok'}"
+                    + (f" · {wh.subject}" if wh.subject else ""),
+            details=details,
+        )
+
+
 @router.post("/esp/webhook")
 async def esp_webhook(wh: Webhook) -> dict:
-    """Обновление статуса письма по событию ESP."""
+    """Обновление статуса письма по событию ESP / колбэку mailer-service."""
     async with db.pool().acquire() as con:
+        row = None
+        if wh.log_id is not None:
+            row = await con.fetchrow(
+                "SELECT user_id, service FROM email_log WHERE id = $1", wh.log_id)
+        service = str(row["service"]) if row else None
+        user_id = row["user_id"] if row else None
+
+        # Ретрай: только в activity_log, статус email_log не трогаем (ещё в очереди).
+        if wh.event == "retry":
+            await _log_delivery_event(con, wh, service=service, user_id=user_id)
+            return {"ok": True}
+
+        if wh.log_id is None:
+            # Служебные письма без email_log (колесо и т.п.) — всё равно пишем причину.
+            if wh.event in ("failed", "sent", "bounced"):
+                await _log_delivery_event(con, wh)
+                return {"ok": True}
+            return {"ok": False, "reason": "no log_id"}
+
         if wh.event in _EVENT_COL:
             col = _EVENT_COL[wh.event]
             await con.execute(
                 f"UPDATE email_log SET {col} = now(), status = $2 WHERE id = $1",
                 wh.log_id, wh.event,
             )
+            if wh.event == "sent":
+                await _log_delivery_event(con, wh, service=service, user_id=user_id)
         elif wh.event in ("bounced", "unsubscribed", "failed"):
             await con.execute(
                 "UPDATE email_log SET status = $2 WHERE id = $1", wh.log_id, wh.event
@@ -131,6 +204,9 @@ async def esp_webhook(wh: Webhook) -> dict:
                 )
             elif wh.event == "failed":
                 await rollback_failed_send(con, wh.log_id)
+                await _log_delivery_event(con, wh, service=service, user_id=user_id)
+            elif wh.event == "bounced":
+                await _log_delivery_event(con, wh, service=service, user_id=user_id)
         else:
             return {"ok": False, "reason": "unknown event"}
     return {"ok": True}
