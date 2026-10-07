@@ -901,9 +901,12 @@ async function viewFeeds(){
   const cat=p(cache.feeds.top5.last_updated);
   const opt=(v,l,c)=>`<option value="${v}" ${c===v?'selected':''}>${l}</option>`;
   let cats=recCat?rec.categories.filter(c=>c.category_id===recCat):rec.categories;
-  // Фильтр «только проблемные»: оставляем позиции, которые не попадут в письмо.
+  // Без GUID-фото уже вычищены из топ-5 на бэке (→ вкладка «Без фото»). Здесь — страховка.
+  cats=cats.map(c=>({...c, products:c.products.filter(p=>p.image_url)})).filter(c=>c.products.length);
+  // Фильтр «только проблемные»: нет в каталоге / нет в наличии (в письмо не попадут).
   if(recProblems) cats=cats.map(c=>({...c, products:c.products.filter(p=>!p.usable)})).filter(c=>c.products.length);
   const empty = !cats.length;
+  if(rec.purged_no_photo) toast(`Из топ-5 убрано без фото: ${num(rec.purged_no_photo)} → вкладка «Без фото»`);
 
   const catCards = cats.map(c=>{
     const items=c.products.map(pr=>{
@@ -913,7 +916,6 @@ async function viewFeeds(){
         : `<div class="recimg ph">нет фото</div>`;
       const flag = !pr.exists ? '<div class="recflag" style="color:var(--alert)">нет в каталоге</div>'
         : !pr.in_stock ? '<div class="recflag" style="color:var(--warn)">нет в наличии</div>'
-        : !pr.image_url ? '<div class="recflag" style="color:var(--warn)">без фото · не в письмах</div>'
         : '<div class="recflag" style="color:var(--ok)">в наличии</div>';
       return `<div class="recitem${dim}">
         <div class="recpos">${pr.position}</div>${img}

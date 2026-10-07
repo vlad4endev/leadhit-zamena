@@ -301,29 +301,65 @@ async def services_summary() -> list[dict]:
              "sent": r["sent"]} for r in rows]
 
 
+async def _purge_top5_no_photo(con) -> int:
+    """Убрать из топ-5 позиции без GUID-фото (и без товара в каталоге) → они только во вкладке «Без фото».
+
+    Перенумеровывает position 1..N в каждой категории. Возвращает число удалённых строк.
+    """
+    deleted = await con.fetchval(
+        """WITH doomed AS (
+             DELETE FROM top5_by_category t
+              WHERE NOT EXISTS (
+                      SELECT 1 FROM products p
+                       WHERE p.product_id = t.product_id
+                         AND p.image_url IS NOT NULL AND btrim(p.image_url) <> '')
+             RETURNING 1
+           )
+           SELECT count(*)::int FROM doomed""")
+    # Сжать дыры в позициях — иначе после чистки останутся 1,2,5.
+    await con.execute(
+        """WITH ordered AS (
+             SELECT category_id, product_id,
+                    row_number() OVER (PARTITION BY category_id ORDER BY position, product_id) AS rn
+               FROM top5_by_category
+           )
+           UPDATE top5_by_category t
+              SET position = o.rn, updated_at = now()
+             FROM ordered o
+            WHERE t.category_id = o.category_id AND t.product_id = o.product_id
+              AND t.position IS DISTINCT FROM o.rn""")
+    return int(deleted or 0)
+
+
 @router.get("/recommendations")
 async def recommendations() -> dict:
-    """Топ-5 товаров по категориям с деталями — то, что реально идёт в письма (Best Offer, Постпродажа)."""
-    rows = await db.pool().fetch(
-        """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
-                  t.product_id, t.updated_at,
-                  p.name AS product_name, p.price, p.image_url, p.product_url, p.in_stock
-           FROM top5_by_category t
-           JOIN categories c ON c.category_id = t.category_id
-           LEFT JOIN products p ON p.product_id = t.product_id
-           ORDER BY c.sort_order, t.position""")
+    """Топ-5 товаров по категориям с деталями — то, что реально идёт в письма (Best Offer, Постпродажа).
+
+    Перед ответом вычищает из топ-5 позиции без GUID-фото: они живут во вкладке «Без фото»,
+    в письма и в этот список не попадают.
+    """
+    async with db.pool().acquire() as con:
+        purged = await _purge_top5_no_photo(con)
+        rows = await con.fetch(
+            """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
+                      t.product_id, t.updated_at,
+                      p.name AS product_name, p.price, p.image_url, p.product_url, p.in_stock
+               FROM top5_by_category t
+               JOIN categories c ON c.category_id = t.category_id
+               LEFT JOIN products p ON p.product_id = t.product_id
+               ORDER BY c.sort_order, t.position""")
     cats: dict = {}
     for r in rows:
         cat = cats.setdefault(r["category_id"], {
             "category_id": r["category_id"], "category_name": r["category_name"],
             "updated_at": _iso(r["updated_at"]), "products": []})
         exists = r["product_name"] is not None
+        # Без фото сюда уже не доходят (purge) — usable = наличиелог + наличие.
         cat["products"].append({
             "position": r["position"], "product_id": r["product_id"],
             "name": r["product_name"], "price": float(r["price"]) if r["price"] is not None else None,
             "image_url": r["image_url"], "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]) if exists else False, "exists": exists,
-            # В письмо — только в наличии и с GUID-фото (без фото → вкладка «Без фото»).
             "usable": exists and bool(r["in_stock"]) and bool(r["image_url"]),
             "has_photo": bool(r["image_url"]) if exists else False,
         })
@@ -331,7 +367,8 @@ async def recommendations() -> dict:
     total_usable = sum(1 for c in out for p in c["products"] if p["usable"])
     total = sum(len(c["products"]) for c in out)
     return {"categories": out, "category_count": len(out),
-            "position_count": total, "usable_count": total_usable}
+            "position_count": total, "usable_count": total_usable,
+            "purged_no_photo": purged}
 
 
 @router.get("/catalog")
@@ -397,7 +434,10 @@ SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_i
 
 @router.post("/compute-top5")
 async def compute_top5() -> dict:
-    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена."""
+    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена.
+
+    В топ попадают только товары в наличии с GUID-фото; без фото — во вкладке «Без фото».
+    """
     from app.feeds import Top5Row, upsert_top5_rows
     async with db.pool().acquire() as con:
         rows = await con.fetch(_TOP5_SQL)
@@ -405,6 +445,8 @@ async def compute_top5() -> dict:
                 for r in rows]
         if top5:
             await upsert_top5_rows(con, top5)  # TRUNCATE + insert (актуальный срез целиком)
+        else:
+            await con.execute("TRUNCATE top5_by_category")
     return {"ok": True, "categories": len({r["category_id"] for r in rows}), "positions": len(rows)}
 
 
