@@ -872,7 +872,7 @@ async def _sample_products(con, limit: int = 6) -> list[dict]:
     Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
     без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
     не совпадало с письмом. Внутри топа фото идут вперёд, затем прогрев CDN-URL.
-    6 штук = две строки карточек по 3.
+    По умолчанию 6 = две строки по 3; для Best Offer / постпродажи — до items_limit (30).
 
     Фолбэки (чтобы превью не было пустым «Подборка без товаров»):
     1) топ-5 / каталог с фото + живой CDN;
@@ -880,6 +880,8 @@ async def _sample_products(con, limit: int = 6) -> list[dict]:
     3) любые in_stock без фото — карточки с плейсхолдером.
     """
     from app import images
+
+    lim = max(1, min(int(limit or 6), 60))
 
     async def _fetch(*, with_photo: bool) -> list[dict]:
         photo_sql = ("AND " + images.HAS_PHOTO_SQL.replace("image_url", "p.image_url")
@@ -897,7 +899,7 @@ async def _sample_products(con, limit: int = 6) -> list[dict]:
                ) s
                ORDER BY not_top, pos, product_id
                LIMIT $1""",
-            limit,
+            lim,
         )
         return [dict(r, price=float(r["price"])) for r in rows]
 
@@ -923,7 +925,9 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         cfg = await svc_config.load(con, service)
         look = await app_settings.template_look(con)
         tpl = await app_settings.active_template(con, service)
-        products = await _sample_products(con)
+        sample_n = (int(cfg.get("items_limit") or 30)
+                    if service in ("postsale", "best_offer") else 6)
+        products = await _sample_products(con, limit=sample_n)
     blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service, [])
     html = render_blocks(blocks, products, "test", service, look)
     mailer = get_mailer()
@@ -1011,7 +1015,10 @@ async def template_preview(id: Optional[int] = None, service: str = "best_offer"
         else:
             tpl = await app_settings.active_template(con, service)
             blocks = tpl["blocks"] if tpl else None
-        products = await _sample_products(con)
+        cfg = await svc_config.load(con, service)
+        sample_n = (int(cfg.get("items_limit") or 30)
+                    if service in ("postsale", "best_offer") else 6)
+        products = await _sample_products(con, limit=sample_n)
     override = {"brand_color": brand_color, "header": header, "button": button, "footer": footer}
     look = {**look, **{k: v for k, v in override.items() if v}}
     blocks = blocks if blocks else DEFAULT_BLOCKS.get(service, [])
@@ -1028,7 +1035,10 @@ async def template_render(body: dict) -> str:
     async with db.pool().acquire() as con:
         if look is None:
             look = await app_settings.template_look(con)
-        products = await _sample_products(con)
+        cfg = await svc_config.load(con, service if service in _SERVICES else "best_offer")
+        sample_n = (int(cfg.get("items_limit") or 30)
+                    if service in ("postsale", "best_offer") else 6)
+        products = await _sample_products(con, limit=sample_n)
     return render_blocks(blocks, products, "preview", service, look)
 
 

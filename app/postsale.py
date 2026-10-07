@@ -44,25 +44,36 @@ def normalize_order_items(items: list[dict], catalog: dict[str, dict]) -> list[d
     return out
 
 
-def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]]) -> tuple[str | None, list[str]]:
+def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]],
+                    limit: int = 30) -> tuple[str | None, list[str]]:
     """Подбор cross-sell (ТЗ 4.4), без ML.
 
-    Категория самого дорогого товара → топ-5 этой категории минус уже купленное.
-    Пусто → фолбэк на категорию следующего по цене товара. Возвращает (category_id, product_ids)
-    или (None, []) если подобрать нечего (тогда письмо НЕ шлём — критерий 4.8).
+    Категории заказа по убыванию цены → топ/каталог каждой минус уже купленное.
+    Собираем до `limit` уникальных product_id (по умолчанию 30). Первая непустая
+    категория — «основная» для лога. Пусто → (None, []) — письмо НЕ шлём (критерий 4.8).
     """
+    limit = max(1, int(limit or 30))
     bought = {i["product_id"] for i in items}
-    # Категории заказа по убыванию цены товара (для основной категории и фолбэка).
+    # Категории заказа по убыванию цены товара (основная + фолбэк/добор).
     cats_by_price = [i["category_id"] for i in sorted(items, key=lambda i: -i["price"])]
-    seen: set[str] = set()
+    seen_cats: set[str] = set()
+    picked: list[str] = []
+    seen_ids: set[str] = set()
+    primary: str | None = None
     for cat in cats_by_price:
-        if cat in seen:
+        if cat in seen_cats:
             continue
-        seen.add(cat)
-        picked = [p for p in top5_by_cat.get(cat, []) if p not in bought]
-        if picked:
-            return cat, picked
-    return None, []
+        seen_cats.add(cat)
+        for pid in top5_by_cat.get(cat, []):
+            if pid in bought or pid in seen_ids:
+                continue
+            if primary is None:
+                primary = cat
+            picked.append(pid)
+            seen_ids.add(pid)
+            if len(picked) >= limit:
+                return primary, picked
+    return (primary, picked) if picked else (None, [])
 
 
 async def enqueue_for_orders(con: asyncpg.Connection, orders: list) -> None:
@@ -210,8 +221,9 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
             return False
 
     items = await _order_items(con, order["items"])
-    top5 = await _top5_map(con, [i["category_id"] for i in items])
-    category, product_ids = pick_cross_sell(items, top5)
+    limit = max(1, min(int(cfg.get("items_limit") or 30), 60))
+    top5 = await _top5_map(con, [i["category_id"] for i in items], per_cat=limit)
+    category, product_ids = pick_cross_sell(items, top5, limit=limit)
     if not product_ids:
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
         await activity_log.write(
@@ -222,7 +234,7 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
         )
         return False
 
-    products = images.photo_first(await _load_products(con, product_ids), 5)
+    products = images.photo_first(await _load_products(con, product_ids), limit)
     products = await images.warm_products(products, require_live=True)
     if not products:
         # Cross-sell выжжен out-of-stock / без фото → пустое письмо не шлём (ТЗ 4.8).
@@ -311,12 +323,16 @@ async def _order_items(con: asyncpg.Connection, raw) -> list[dict]:
     return normalize_order_items(items, catalog)
 
 
-async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str, list[str]]:
+async def _top5_map(con: asyncpg.Connection, categories: list[str],
+                    per_cat: int = 30) -> dict[str, list[str]]:
+    """Пул кандидатов по категориям заказа: сначала топ-5 фида, затем добор из каталога
+    (in_stock + фото), до `per_cat` на категорию — чтобы набрать до 30 разных в письме."""
     cats = [c for c in set(categories) if c]
     if not cats:
         return {}
+    per_cat = max(1, int(per_cat or 30))
     # in_stock здесь, а не после подбора: выжженная категория должна отдать ход следующей,
-    # а не отменять письмо, пока в заказе есть другая категория с живым топ-5.
+    # а не отменять письмо, пока в заказе есть другая категория с живым топом.
     rows = await con.fetch(
         """SELECT t.category_id, t.product_id
            FROM top5_by_category t
@@ -328,6 +344,23 @@ async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str,
     out: dict[str, list[str]] = {}
     for r in rows:
         out.setdefault(r["category_id"], []).append(r["product_id"])
+    # Добор из каталога: топ фида часто ≤5, а в письме нужно до 30 уникальных.
+    need = [c for c in cats if len(out.get(c, [])) < per_cat]
+    if need:
+        extra = await con.fetch(
+            f"""SELECT category_id, product_id FROM products
+               WHERE category_id = ANY($1::text[]) AND in_stock
+                 AND {images.HAS_PHOTO_SQL}
+               ORDER BY category_id, updated_at DESC NULLS LAST, product_id""",
+            need,
+        )
+        for r in extra:
+            bucket = out.setdefault(r["category_id"], [])
+            if r["product_id"] in bucket:
+                continue
+            if len(bucket) >= per_cat:
+                continue
+            bucket.append(r["product_id"])
     return out
 
 
@@ -357,12 +390,17 @@ def _demo() -> None:
     top5 = {"shoes": ["s1", "s2", "s3"], "bags": ["b1", "b2"]}
     # Один товар shoes s1 → shoes минус купленное s1 → [s2, s3].
     assert pick_cross_sell([{"product_id": "s1", "category_id": "shoes", "price": 5990}], top5) == ("shoes", ["s2", "s3"])
-    # Несколько категорий → берём категорию самого дорогого (bags, 7000 > 5990).
+    # Несколько категорий → сначала самый дорогой (bags), затем добор из shoes (до limit).
     cat, ids = pick_cross_sell(
         [{"product_id": "s1", "category_id": "shoes", "price": 5990},
          {"product_id": "b1", "category_id": "bags", "price": 7000}], top5)
+    assert cat == "bags" and ids == ["b2", "s2", "s3"], (cat, ids)
+    # limit=1 → только первый кандидат из основной категории.
+    cat, ids = pick_cross_sell(
+        [{"product_id": "s1", "category_id": "shoes", "price": 5990},
+         {"product_id": "b1", "category_id": "bags", "price": 7000}], top5, limit=1)
     assert cat == "bags" and ids == ["b2"], (cat, ids)
-    # Основная категория выжжена (купили весь топ-5 bags) → фолбэк на shoes.
+    # Основная категория выжжена (купили весь топ bags) → фолбэк на shoes.
     cat, ids = pick_cross_sell(
         [{"product_id": "b1", "category_id": "bags", "price": 9000},
          {"product_id": "b2", "category_id": "bags", "price": 8000},
@@ -371,6 +409,10 @@ def _demo() -> None:
     # Совсем нечего предложить → (None, []).
     assert pick_cross_sell([{"product_id": "b1", "category_id": "bags", "price": 100},
                             {"product_id": "b2", "category_id": "bags", "price": 90}], top5) == (None, [])
+    # До 30 уникальных: без повторов, обрезка по limit.
+    big = {"c": [f"p{i}" for i in range(40)]}
+    cat, ids = pick_cross_sell([{"product_id": "x", "category_id": "c", "price": 1}], big, limit=30)
+    assert cat == "c" and len(ids) == 30 and len(set(ids)) == 30 and ids[0] == "p0", (cat, len(ids))
     # Заказ с витрины без category_id: категорию берём из каталога, цену заказа не затираем.
     catalog = {"s1": {"category_id": "shoes", "price": 5990}}
     norm = normalize_order_items([{"product_id": " s1 ", "price": 100}], catalog)
