@@ -49,8 +49,12 @@ def _build_message(to: str, subject: str, html: str,
     return msg
 
 
+_CONNECT_TRY_SEC = 5.0
+
+
 def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
     """TCP с приоритетом IPv4 (Docker без IPv6 → ENETUNREACH на AAAA)."""
+    per_try = min(_CONNECT_TRY_SEC, float(timeout) if timeout else _CONNECT_TRY_SEC)
     errors: list[OSError] = []
     for family in (socket.AF_INET, socket.AF_INET6):
         try:
@@ -60,9 +64,10 @@ def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
             continue
         for af, typ, proto, _, sockaddr in infos:
             sock = socket.socket(af, typ, proto)
-            sock.settimeout(timeout)
+            sock.settimeout(per_try)
             try:
                 sock.connect(sockaddr)
+                sock.settimeout(timeout)
                 return sock
             except OSError as e:
                 errors.append(e)

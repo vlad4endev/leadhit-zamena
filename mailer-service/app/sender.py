@@ -54,12 +54,18 @@ def _assert_mta_alive() -> None:
             "Запустите postfix/exim на сервере и повторите тест.")
 
 
+# Таймаут на ОДНУ попытку connect к IP. Полный timeout SMTP (30с) на каждый A/AAAA
+# давал 1–2 минуты, если первые адреса Яндекса недоступны с VPS.
+_CONNECT_TRY_SEC = 5.0
+
+
 def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
     """TCP с приоритетом IPv4.
 
     В Docker bridge часто нет IPv6-маршрута: getaddrinfo отдаёт AAAA первым →
     OSError 101 Network is unreachable, хотя с хоста тот же SMTP доступен по IPv4.
     """
+    per_try = min(_CONNECT_TRY_SEC, float(timeout) if timeout else _CONNECT_TRY_SEC)
     errors: list[tuple[str, OSError]] = []
     for family in (socket.AF_INET, socket.AF_INET6):
         label = "IPv4" if family == socket.AF_INET else "IPv6"
@@ -70,9 +76,11 @@ def _connect_ipv4_first(host: str, port: int, timeout: float) -> socket.socket:
             continue
         for af, typ, proto, _, sockaddr in infos:
             sock = socket.socket(af, typ, proto)
-            sock.settimeout(timeout)
+            sock.settimeout(per_try)
             try:
                 sock.connect(sockaddr)
+                # Дальше SMTP-команды живут под общим timeout сессии.
+                sock.settimeout(timeout)
                 return sock
             except OSError as e:
                 errors.append((f"{label} {sockaddr[0]}", e))
@@ -179,7 +187,8 @@ def _callback_sync(payload: dict) -> None:
     req = urllib.request.Request(
         settings.callback_url, data=json.dumps(payload).encode(), method="POST", headers=headers)
     try:
-        urllib.request.urlopen(req, timeout=15).read()
+        # Короткий timeout: callback не должен тормозить очередь (раньше до 15с на письмо).
+        urllib.request.urlopen(req, timeout=3).read()
     except Exception as e:  # noqa: BLE001 — доставка события best-effort
         print(f"[callback-fail] {type(e).__name__}: {e}")
 
