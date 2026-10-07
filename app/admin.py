@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from app import analytics, app_settings, best_offer, cart, db, onec, postsale, svc_config
+from app import activity_log, analytics, app_settings, best_offer, cart, db, onec, postsale, svc_config
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -446,6 +446,101 @@ async def logs(service: Optional[str] = None, status: Optional[str] = None,
                  sent_at=r["sent_at"].isoformat() if r["sent_at"] else None) for r in rows]
 
 
+@router.get("/activity-log")
+async def activity_log_list(
+    level: Optional[str] = None,
+    source: Optional[str] = None,
+    service: Optional[str] = None,
+    event: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """Диагностический журнал: этапы авторассылок, skip, ошибки, действия админки."""
+    lim = min(max(limit, 1), 500)
+    off = max(offset, 0)
+    needle = (q or "").strip() or None
+    rows = await db.pool().fetch(
+        """SELECT id, created_at, level, source, event, service, user_id, session_id,
+                  order_id, ref_id, message, details
+           FROM activity_log
+           WHERE ($1::text IS NULL OR level = $1)
+             AND ($2::text IS NULL OR source = $2)
+             AND ($3::text IS NULL OR service = $3::service_kind)
+             AND ($4::text IS NULL OR event = $4)
+             AND ($5::text IS NULL OR message ILIKE '%' || $5 || '%'
+                  OR COALESCE(user_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(order_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(session_id,'') ILIKE '%' || $5 || '%')
+           ORDER BY id DESC
+           LIMIT $6 OFFSET $7""",
+        level or None, source or None, service or None, event or None, needle, lim, off,
+    )
+    total = await db.pool().fetchval(
+        """SELECT count(*) FROM activity_log
+           WHERE ($1::text IS NULL OR level = $1)
+             AND ($2::text IS NULL OR source = $2)
+             AND ($3::text IS NULL OR service = $3::service_kind)
+             AND ($4::text IS NULL OR event = $4)
+             AND ($5::text IS NULL OR message ILIKE '%' || $5 || '%'
+                  OR COALESCE(user_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(order_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(session_id,'') ILIKE '%' || $5 || '%')""",
+        level or None, source or None, service or None, event or None, needle,
+    )
+    counts = await db.pool().fetch(
+        """SELECT level, count(*) AS n FROM activity_log
+           WHERE created_at > now() - interval '24 hours'
+           GROUP BY level"""
+    )
+    by_level = {r["level"]: int(r["n"]) for r in counts}
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["created_at"] = r["created_at"].isoformat() if r["created_at"] else None
+        if isinstance(d.get("details"), str):
+            try:
+                d["details"] = json.loads(d["details"])
+            except Exception:  # noqa: BLE001
+                d["details"] = {}
+        out.append(d)
+    return {
+        "items": out,
+        "total": int(total or 0),
+        "limit": lim,
+        "offset": off,
+        "last_24h": {
+            "error": by_level.get("error", 0),
+            "warn": by_level.get("warn", 0),
+            "info": by_level.get("info", 0),
+            "debug": by_level.get("debug", 0),
+        },
+        "retention_days": activity_log.RETENTION_DAYS,
+    }
+
+
+@router.delete("/activity-log")
+async def activity_log_clear(older_than_days: Optional[int] = None) -> dict:
+    """Очистить журнал: целиком или записи старше N дней."""
+    if older_than_days is not None:
+        days = max(0, int(older_than_days))
+        n = await activity_log.prune(days=days)
+        await activity_log.write(
+            level="info", source="admin", event="log_cleared",
+            message=f"очищены записи старше {days} дн. ({n})",
+            details={"older_than_days": days, "deleted": n},
+        )
+        return {"ok": True, "deleted": n, "older_than_days": days}
+    result = await db.pool().execute("DELETE FROM activity_log")
+    n = int(str(result).split()[-1]) if result else 0
+    await activity_log.write(
+        level="warn", source="admin", event="log_cleared",
+        message=f"журнал очищен полностью ({n} записей)",
+        details={"deleted": n, "all": True},
+    )
+    return {"ok": True, "deleted": n}
+
+
 @router.get("/feeds-status")
 async def feeds_status() -> dict:
     """Мониторинг актуальности фидов (ТЗ 8.1): свежесть каталога и топ-5, объём данных."""
@@ -473,8 +568,29 @@ async def run_now(service: str) -> dict:
     runner = _RUNNERS.get(service)
     if runner is None:
         return {"ok": False, "reason": f"unknown service: {service}"}
-    async with db.pool().acquire() as con:
-        n = await runner(con)
+    await activity_log.write(
+        level="info", source="admin", event="manual_run",
+        service=service if service in ("best_offer", "cart", "postsale") else None,
+        message=f"ручной запуск: {service}",
+        details={"service": service},
+    )
+    try:
+        async with db.pool().acquire() as con:
+            n = await runner(con)
+    except Exception as e:  # noqa: BLE001
+        await activity_log.write(
+            level="error", source="admin", event="manual_run_failed",
+            service=service if service in ("best_offer", "cart", "postsale") else None,
+            message=f"ручной запуск {service} упал: {type(e).__name__}: {e}",
+            details={"service": service, "error": str(e)[:500]},
+        )
+        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+    await activity_log.write(
+        level="info", source="admin", event="manual_run_done",
+        service=service if service in ("best_offer", "cart", "postsale") else None,
+        message=f"ручной запуск {service}: обработано {n}",
+        details={"service": service, "processed": n},
+    )
     return {"ok": True, "processed": n}
 
 
@@ -999,9 +1115,26 @@ async def put_wheel(body: dict) -> dict:
 async def sync_catalog_now() -> dict:
     """Ручная синхронизация каталога из 1С (pull)."""
     if not onec.configured():
+        await activity_log.write(
+            level="warn", source="admin", event="sync_skipped",
+            message="синхронизация 1С пропущена: не настроена",
+        )
         return {"ok": False, "reason": "1С не настроена (ONEC_BASE_URL пуст)"}
-    async with db.pool().acquire() as con:
-        n = await onec.sync_catalog(con)
+    try:
+        async with db.pool().acquire() as con:
+            n = await onec.sync_catalog(con)
+    except Exception as e:  # noqa: BLE001
+        await activity_log.write(
+            level="error", source="onec", event="sync_failed",
+            message=f"синхронизация 1С упала: {type(e).__name__}: {e}",
+            details={"error": str(e)[:500]},
+        )
+        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+    await activity_log.write(
+        level="info", source="onec", event="sync_ok",
+        message=f"синхронизация 1С: {n} товаров",
+        details={"synced": n},
+    )
     return {"ok": True, "synced": n}
 
 
@@ -1013,9 +1146,19 @@ async def import_xml_upload(request: Request) -> dict:
     try:
         parsed = import_xml.parse(data)
     except ValueError as e:
+        await activity_log.write(
+            level="error", source="import", event="import_failed",
+            message=f"импорт XML: ошибка разбора — {e}",
+            details={"format": "xml", "error": str(e)},
+        )
         return {"ok": False, "reason": str(e)}
     async with db.pool().acquire() as con:
         counts = await import_xml.import_all(con, parsed)
+    await activity_log.write(
+        level="info", source="import", event="import_ok",
+        message=f"импорт XML: {counts}",
+        details={"format": "xml", "imported": counts},
+    )
     return {"ok": True, "imported": counts}
 
 
@@ -1027,9 +1170,19 @@ async def import_json_upload(request: Request) -> dict:
     try:
         parsed = import_json.parse(data)
     except ValueError as e:
+        await activity_log.write(
+            level="error", source="import", event="import_failed",
+            message=f"импорт JSON: ошибка разбора — {e}",
+            details={"format": "json", "error": str(e)},
+        )
         return {"ok": False, "reason": str(e)}
     async with db.pool().acquire() as con:
         counts = await import_xml.import_all(con, parsed)  # та же схема БД, тот же upsert
+    await activity_log.write(
+        level="info", source="import", event="import_ok",
+        message=f"импорт JSON: {counts}",
+        details={"format": "json", "imported": counts},
+    )
     return {"ok": True, "imported": counts}
 
 

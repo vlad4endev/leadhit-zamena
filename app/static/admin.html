@@ -230,6 +230,17 @@ td.mono{font-family:var(--mono)}
 .pill.sent,.pill.delivered,.pill.live{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 .pill.bounced,.pill.unsubscribed,.pill.dev{background:color-mix(in srgb,var(--alert) 14%,transparent);color:var(--alert)}
 .pill.queued{background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--warn)}
+.pill.error,.pill.lvl-error{background:color-mix(in srgb,var(--alert) 16%,transparent);color:var(--alert)}
+.pill.warn,.pill.lvl-warn{background:color-mix(in srgb,var(--orange) 18%,transparent);color:var(--warn)}
+.pill.info,.pill.lvl-info{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.pill.debug,.pill.lvl-debug{background:var(--surface-2);color:var(--muted)}
+.log-msg{white-space:normal;max-width:420px;line-height:1.4}
+.log-details{display:none;background:var(--bg);border-top:1px solid var(--border)}
+.log-details.open{display:table-row}
+.log-details pre{margin:0;padding:10px 15px;font:12px/1.45 var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--muted);max-height:240px;overflow:auto}
+.log-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.log-stat{padding:8px 12px;border-radius:10px;background:var(--surface-2);font-size:12.5px}
+.log-stat b{font-family:var(--mono);margin-right:4px}
 .empty{padding:34px;text-align:center;color:var(--muted)}
 .chart{display:flex;align-items:flex-end;gap:10px;height:210px;padding:6px 2px;border-bottom:1px solid var(--border)}
 .chart.dense{gap:3px}
@@ -2200,6 +2211,106 @@ async function saveSetting(k,v,type){
 }
 let settingsTab='mail';
 function setSettingsTab(t){ settingsTab=t; viewSettings(); }
+let actFilter={level:'',source:'',service:'',q:'',limit:100,page:0};
+const ACT_SRC={best_offer:'Best Offer',cart:'Корзина',postsale:'Постпродажа',mailer:'Mailer',
+  worker:'Воркеры',admin:'Админка',onec:'1С',import:'Импорт',system:'Система'};
+const ACT_LVL={error:'ошибка',warn:'предупреждение',info:'инфо',debug:'отладка'};
+function actPage(p){ actFilter.page=Math.max(0,p); renderActivityLogs(); }
+function toggleLogDetails(id){
+  const row=document.getElementById('logd-'+id); if(!row) return;
+  row.classList.toggle('open');
+}
+async function clearActivityLogs(mode){
+  const q = mode==='old' ? '?older_than_days=7' : '';
+  const conf = mode==='old'
+    ? 'Удалить записи старше 7 дней?'
+    : 'Очистить весь диагностический журнал? Это нельзя отменить.';
+  if(!confirm(conf)) return;
+  const r=await j('/admin/activity-log'+q,{method:'DELETE'});
+  toast(r.ok?`Удалено: ${r.deleted||0}`:`Ошибка: ${r.reason||''}`);
+  actFilter.page=0; renderActivityLogs();
+}
+async function renderActivityLogs(){
+  const box=$('settingsBody'); if(!box) return;
+  box.innerHTML='<div class="card svc-sub">Загрузка журнала…</div>';
+  const lim=+actFilter.limit||100;
+  const qs=new URLSearchParams();
+  if(actFilter.level) qs.set('level',actFilter.level);
+  if(actFilter.source) qs.set('source',actFilter.source);
+  if(actFilter.service) qs.set('service',actFilter.service);
+  if(actFilter.q) qs.set('q',actFilter.q);
+  qs.set('limit',lim); qs.set('offset',actFilter.page*lim);
+  let data;
+  try{ data=await j('/admin/activity-log?'+qs); }
+  catch(e){
+    box.innerHTML=`<div class="card empty">Не удалось загрузить журнал.<br>
+      <span class="mono">${esc((e&&e.message)||e)}</span><br>
+      <span class="svc-sub">Если таблица ещё не создана — примените миграцию
+      <code>db/migrations/004_activity_log.sql</code>.</span></div>`;
+    return;
+  }
+  const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
+  const reset='actFilter.page=0;';
+  const h24=data.last_24h||{};
+  const stats=`<div class="log-stats">
+    <div class="log-stat"><b>${num(h24.error||0)}</b> ошибок / 24ч</div>
+    <div class="log-stat"><b>${num(h24.warn||0)}</b> предупр. / 24ч</div>
+    <div class="log-stat"><b>${num(h24.info||0)}</b> инфо / 24ч</div>
+    <div class="log-stat"><b>${num(data.total||0)}</b> всего · хранение ${data.retention_days||30} дн.</div>
+  </div>`;
+  const filters=`<div class="filters">
+    <select class="inp" onchange="${reset}actFilter.level=this.value;renderActivityLogs()">
+      ${opt('','Все уровни',actFilter.level)}
+      ${['error','warn','info','debug'].map(l=>opt(l,ACT_LVL[l]||l,actFilter.level)).join('')}</select>
+    <select class="inp" onchange="${reset}actFilter.source=this.value;renderActivityLogs()">
+      ${opt('','Все источники',actFilter.source)}
+      ${Object.entries(ACT_SRC).map(([k,v])=>opt(k,v,actFilter.source)).join('')}</select>
+    <select class="inp" onchange="${reset}actFilter.service=this.value;renderActivityLogs()">
+      ${opt('','Все сценарии',actFilter.service)}
+      ${opt('best_offer','Best Offer',actFilter.service)}
+      ${opt('cart','Корзина',actFilter.service)}
+      ${opt('postsale','Постпродажа',actFilter.service)}</select>
+    <input class="inp wide" placeholder="поиск: user / order / текст…" value="${esc(actFilter.q||'')}"
+      onkeydown="if(event.key==='Enter'){${reset}actFilter.q=this.value;renderActivityLogs()}">
+    <button class="btn" onclick="${reset}actFilter.q=(this.previousElementSibling.value||'');renderActivityLogs()">Найти</button>
+    <button class="btn" onclick="renderActivityLogs()">Обновить</button>
+    <button class="btn" onclick="clearActivityLogs('old')">Старше 7 дн.</button>
+    <button class="btn" onclick="clearActivityLogs('all')">Очистить всё</button>
+  </div>`;
+  const items=data.items||[];
+  const dt=iso=>iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
+  const rows=items.map(r=>{
+    const det=r.details&&Object.keys(r.details).length
+      ? `<tr class="log-details" id="logd-${r.id}"><td colspan="6"><pre>${esc(JSON.stringify(r.details,null,2))}</pre></td></tr>` : '';
+    const hasDet=!!(r.details&&Object.keys(r.details).length);
+    const ids=[r.user_id&&`user:${r.user_id}`,r.order_id&&`order:${r.order_id}`,r.session_id&&`sess:${r.session_id}`,r.ref_id!=null&&`#${r.ref_id}`]
+      .filter(Boolean).map(esc).join('<br>')||'—';
+    return `<tr style="cursor:${hasDet?'pointer':'default'}" ${hasDet?`onclick="toggleLogDetails(${r.id})"`:''}>
+      <td class="mono">${dt(r.created_at)}</td>
+      <td><span class="pill lvl-${esc(r.level)}">${esc(ACT_LVL[r.level]||r.level)}</span></td>
+      <td>${esc(ACT_SRC[r.source]||r.source)}${r.service?` · <span class="mono">${esc(SVC[r.service]?.ru||r.service)}</span>`:''}</td>
+      <td class="mono">${esc(r.event)}</td>
+      <td class="log-msg">${esc(r.message)}${hasDet?' <span class="svc-sub">▾</span>':''}</td>
+      <td class="mono" style="font-size:11.5px;white-space:normal">${ids}</td>
+    </tr>${det}`;
+  }).join('');
+  const table=items.length
+    ? `<div class="tablewrap"><table><thead><tr>
+        <th>Время</th><th>Уровень</th><th>Источник</th><th>Событие</th><th>Сообщение</th><th>Связи</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>`
+      + pager(actFilter.page, items.length>=lim, 'actPage')
+    : (actFilter.page>0
+      ? `<div class="tablewrap"><div class="empty">Больше записей нет.</div></div>`+pager(actFilter.page,false,'actPage')
+      : `<div class="tablewrap"><div class="empty">Журнал пока пуст.<br>
+          Записи появятся при работе воркеров, ручном запуске сценариев, skip-проверках и ошибках отправки.
+          <br><span class="svc-sub">Журнал писем (email_log) — отдельно: <a href="#/emails" style="color:var(--accent)">Отчёты → Журнал писем</a>.</span>
+        </div></div>`);
+  box.innerHTML=`${stats}${filters}
+    <p class="legend">Детальный процесс авторассылок: старты батчей, gate-skip с причинами, сбои mailer,
+      отмены очереди Постпродажи, импорт/синхронизация, ошибки воркеров. Клик по строке — JSON-детали.
+      Хранение ${data.retention_days||30} дней (автоочистка при старте воркеров).</p>
+    ${table}`;
+}
 /* Колесо фортуны */
 let wheelCfg=null, wheelPrevT;
 function ensureWheelLib(){ return new Promise(res=>{
@@ -2338,7 +2449,7 @@ async function saveWheel(){
 
 async function viewSettings(){
   setTitle('Настройки','параметры сервиса');
-  const tabs=[['mail','Почта'],['params','Параметры'],['integrations','Интеграции']];
+  const tabs=[['mail','Почта'],['params','Параметры'],['integrations','Интеграции'],['logs','Логи']];
   const bar=`<div class="tabbar">${tabs.map(([id,l])=>
     `<button class="tab ${settingsTab===id?'active':''}" onclick="setSettingsTab('${id}')">${l}</button>`).join('')}</div>`;
   $('view').innerHTML=`<section>${bar}<div id="settingsBody"><div class="card svc-sub">Загрузка…</div></div></section>`;
@@ -2346,6 +2457,11 @@ async function viewSettings(){
   if(settingsTab==='mail'){
     $('settingsBody').innerHTML='<div id="mailbox"><div class="card svc-sub">Загрузка…</div></div>';
     loadMail(); return;
+  }
+  if(settingsTab==='logs'){
+    setTitle('Настройки','диагностический журнал');
+    await renderActivityLogs();
+    return;
   }
   const s=await j('/admin/settings');
   if(settingsTab==='params'){
