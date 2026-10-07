@@ -2519,14 +2519,16 @@ async function viewEmail(id){
       ${f('Отправлено', dt2(d.sent_at))}
       ${f('Товары', (d.product_ids||[]).join(', ')||'—')}
     </div>
-    ${d.has_html
+    ${!d.has_html && d.can_preview ? `<div class="card" style="margin-bottom:12px;padding:12px 16px;color:var(--muted);font-size:13px">
+      Снимок HTML не сохранялся для этой отправки — ниже письмо собрано заново по товарам и шаблону.
+      Цены/наличие/макет могли измениться. Точный снимок будет у новых писем после обновления воркеров.
+    </div>` : ''}
+    ${d.can_preview || d.has_html
       ? `<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff">
            <iframe title="Письмо как у клиента" sandbox="" src="/admin/logs/${+d.id}/preview"
              style="width:100%;min-height:720px;border:0;background:#fff;display:block"></iframe>
          </div>`
-      : `<div class="tablewrap"><div class="empty">Снимок HTML не сохранён для этой записи.<br>
-           Тело пишется с новых отправок (миграция <span class="mono">004_email_log_body</span>).
-         </div></div>`}
+      : `<div class="tablewrap"><div class="empty">Нечего показать: нет HTML и списка товаров.</div></div>`}
   </section>`;
 }
 

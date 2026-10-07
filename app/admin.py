@@ -451,6 +451,46 @@ async def logs(service: Optional[str] = None, status: Optional[str] = None,
                  has_html=bool(r["has_html"])) for r in rows]
 
 
+async def _log_products(con, product_ids: list[str]) -> list[dict]:
+    """Товары для превью журнала — без фильтра in_stock (на момент отправки могли быть в наличии)."""
+    if not product_ids:
+        return []
+    rows = await con.fetch(
+        """SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[])""",
+        product_ids,
+    )
+    by_id = {r["product_id"]: dict(r) for r in rows}
+    return [dict(by_id[pid], price=float(by_id[pid]["price"]))
+            for pid in product_ids if pid in by_id]
+
+
+async def _rebuild_log_html(con, row) -> str | None:
+    """Собрать HTML по product_ids + шаблону, если снимок не сохранён."""
+    from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
+
+    product_ids = list(row["product_ids"] or [])
+    products = await _log_products(con, product_ids)
+    if not products:
+        return None
+    service = row["service"]
+    await app_settings.load_site(con)
+    look = await app_settings.template_look(con)
+    blocks = None
+    if row["template_id"]:
+        tpl = await con.fetchrow(
+            "SELECT blocks FROM email_templates WHERE id = $1", row["template_id"])
+        if tpl is not None:
+            raw = tpl["blocks"]
+            blocks = json.loads(raw) if isinstance(raw, str) else raw
+    if blocks is None:
+        tpl = await app_settings.active_template(con, service)
+        blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service)
+    if blocks:
+        return render_blocks(blocks, products, row["user_id"], service, look)
+    return render_email("", products, row["user_id"], service, "default", look)
+
+
 @router.get("/logs/{log_id}")
 async def log_detail(log_id: int) -> dict:
     """Метаданные письма + признак сохранённого HTML (тело — через /preview)."""
@@ -467,6 +507,14 @@ async def log_detail(log_id: int) -> dict:
     )
     if row is None:
         return {"found": False}
+    has_html = bool(row["has_html"])
+    can_preview = has_html or bool(row["product_ids"])
+    subject = row["subject"]
+    if not subject:
+        # старые записи без снимка — тема из текущих настроек сценария
+        async with db.pool().acquire() as con:
+            cfg = await svc_config.load(con, row["service"])
+            subject = cfg.get("subject")
     return {
         "found": True,
         "id": row["id"],
@@ -481,28 +529,37 @@ async def log_detail(log_id: int) -> dict:
         "revenue": float(row["revenue"]) if row["revenue"] is not None else None,
         "sent_at": _iso(row["sent_at"]),
         "created_at": _iso(row["created_at"]),
-        "subject": row["subject"],
+        "subject": subject,
         "template_id": row["template_id"],
-        "has_html": bool(row["has_html"]),
+        "has_html": has_html,
+        "can_preview": can_preview,
+        "preview_exact": has_html,
     }
 
 
 @router.get("/logs/{log_id}/preview", response_class=HTMLResponse)
 async def log_preview(log_id: int) -> HTMLResponse:
-    """HTML письма как ушло клиенту — для iframe в журнале."""
-    html = await db.pool().fetchval(
-        "SELECT html FROM email_log WHERE id = $1", log_id,
-    )
-    if not html:
-        return HTMLResponse(
-            "<!doctype html><meta charset=utf-8><body style='font:14px/1.5 system-ui;padding:24px;color:#453c52'>"
-            "<p>Снимок письма не сохранён.</p>"
-            "<p style='color:#8f85a0'>Тело пишется с новых отправок после миграции "
-            "<code>004_email_log_body</code>. Старые записи содержат только метаданные.</p>"
-            "</body>",
-            status_code=200,
+    """HTML письма: снимок как ушло клиенту, иначе сборка по товарам и шаблону."""
+    async with db.pool().acquire() as con:
+        row = await con.fetchrow(
+            """SELECT id, user_id, service, product_ids, template_id, html
+               FROM email_log WHERE id = $1""",
+            log_id,
         )
-    return HTMLResponse(html)
+        if row is None:
+            return HTMLResponse("<!doctype html><meta charset=utf-8><p>Письмо не найдено.</p>",
+                                status_code=404)
+        if row["html"]:
+            return HTMLResponse(row["html"])
+        rebuilt = await _rebuild_log_html(con, row)
+    if rebuilt:
+        return HTMLResponse(rebuilt)
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><body style='font:14px/1.5 system-ui;padding:24px;color:#453c52'>"
+        "<p>Не удалось показать письмо: нет сохранённого HTML и товаров в каталоге.</p>"
+        "</body>",
+        status_code=200,
+    )
 
 
 @router.get("/feeds-status")
