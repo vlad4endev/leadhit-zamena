@@ -519,9 +519,9 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         intro = "<h2>Вы забыли товары в корзине</h2><p>Оформите заказ, пока товары в наличии:</p>"
         html = render_email(intro, products, sub["user_id"], "cart", cfg.get("template", "default"), look)
     log_id = await con.fetchval(
-        """INSERT INTO email_log(user_id, service, product_ids, template_id, status)
-           VALUES($1, 'cart', $2, $3, 'queued') RETURNING id""",
-        sub["user_id"], [i["product_id"] for i in items], template_id,
+        """INSERT INTO email_log(user_id, service, product_ids, template_id, subject, html, status)
+           VALUES($1, 'cart', $2, $3, $4, $5, 'queued') RETURNING id""",
+        sub["user_id"], [i["product_id"] for i in items], template_id, cfg["subject"], html,
     )
     ok = await mailer.send(email, cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})

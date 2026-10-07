@@ -91,6 +91,8 @@ CREATE TABLE email_log (
     attributed_order_id TEXT REFERENCES orders(order_id),   -- атрибуция дохода (постфактум)
     revenue             NUMERIC(12,2),
     template_id         BIGINT,   -- какой шаблон использован (FK добавляется после email_templates)
+    subject             TEXT,     -- тема письма как ушла клиенту
+    html                TEXT,     -- HTML-тело как ушло клиенту (просмотр в журнале)
     created_at          TIMESTAMPTZ NOT NULL DEFAULT now()
 );
 CREATE INDEX email_log_user_service_idx ON email_log(user_id, service, created_at DESC);

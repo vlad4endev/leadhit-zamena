@@ -151,9 +151,11 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
     sent_ids = [p["product_id"] for p in products]
     # Строку лога создаём ДО отправки (уник-индекс по order_id держит «1 письмо на заказ»).
     log_id = await con.fetchval(
-        """INSERT INTO email_log(user_id, service, category_id, product_ids, order_id, template_id, status)
-           VALUES($1, 'postsale', $2, $3, $4, $5, 'queued') RETURNING id""",
+        """INSERT INTO email_log(user_id, service, category_id, product_ids, order_id, template_id,
+                                subject, html, status)
+           VALUES($1, 'postsale', $2, $3, $4, $5, $6, $7, 'queued') RETURNING id""",
         order["user_id"], category, sent_ids, order["order_id"], template_id,
+        cfg["subject"], html,
     )
     ok = await mailer.send(sub["email"], cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
