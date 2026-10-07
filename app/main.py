@@ -11,6 +11,7 @@ from app.admin import router as admin_router
 from app.analytics import router as analytics_router
 from app.cart import router as cart_router
 from app.feeds import router as feeds_router
+from app.images import router as images_router
 
 
 @asynccontextmanager
@@ -65,6 +66,7 @@ app.include_router(auth.router)
 app.include_router(feeds_router)
 app.include_router(cart_router)
 app.include_router(analytics_router)
+app.include_router(images_router)
 app.include_router(admin_router)
 
 

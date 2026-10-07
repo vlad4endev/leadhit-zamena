@@ -996,6 +996,9 @@ async function viewFeeds(){
       <div class="stat"><b>${num(rec.position_count)}</b><span>позиций в топе</span></div>
       <div class="stat"><b style="color:${rec.usable_count===rec.position_count?'var(--ok)':'var(--warn)'}">${num(rec.usable_count)}</b><span>пойдёт в письма</span></div>
       <div class="stat"><b>${num(cache.feeds.products.count)}</b><span>товаров в каталоге</span></div>
+      ${catData && catData.no_photo_count!=null
+        ? `<div class="stat"><b style="color:${catData.no_photo_count?'var(--warn)':'var(--ok)'}">${num(catData.no_photo_count)}</b><span>без фото</span></div>`
+        : ''}
     </div>
     <div class="toolbar">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">

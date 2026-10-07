@@ -356,8 +356,13 @@ async def catalog() -> dict:
             "in_stock": bool(r["in_stock"]), "tags": tags,
         })
     out = list(cats.values())
+    # «Без фото» — товары, у которых ссылки нет вовсе (пустой image_url в выгрузке или
+    # ссылка, собранная из артикула, — см. app/images.proxied). Битые ссылки этим числом
+    # не считаются: их видно в карточке плейсхолдером «нет фото».
+    no_photo = sum(1 for c in out for p in c["products"] if not p["image_url"])
     return {"categories": out, "category_count": len(out),
             "product_count": sum(len(c["products"]) for c in out),
+            "no_photo_count": no_photo,
             "tags": [{"tag": t, "count": n} for t, n in sorted(all_tags.items())]}
 
 

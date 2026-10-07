@@ -9,7 +9,7 @@ import json
 
 import asyncpg
 
-from app import app_settings, svc_config
+from app import app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -124,7 +124,12 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
         return False
 
-    products = await _load_products(con, product_ids)
+    # photo_first уводит в хвост товары без фото и обрезает первыми (см. app/images.py).
+    products = images.photo_first(await _load_products(con, product_ids), 5)
+    if not products:
+        await _finish(con, job["id"], "cancelled")   # блок пуст → не шлём (ТЗ 4.8)
+        return False
+    product_ids = [p["product_id"] for p in products]
     if blocks:
         html = render_blocks(blocks, products, order["user_id"], "postsale", look)
     else:

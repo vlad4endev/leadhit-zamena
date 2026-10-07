@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from app import app_settings, svc_config
+from app import app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -134,7 +134,11 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         if not product_ids:
             continue  # нечего предложить
 
-        products = await _load_products(con, product_ids)
+        # photo_first — товары без фото в хвост, чтобы слоты письма не съели плейсхолдеры.
+        products = images.photo_first(await _load_products(con, product_ids), 5)
+        if not products:
+            continue
+        product_ids = [p["product_id"] for p in products]
         if blocks:
             html = render_blocks(blocks, products, cand["user_id"], "best_offer", look)
         else:
