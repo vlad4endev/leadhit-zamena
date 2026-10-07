@@ -16,7 +16,7 @@ from fastapi import APIRouter, Request, Response
 from fastapi.responses import FileResponse, HTMLResponse
 from pydantic import BaseModel
 
-from app import analytics, app_settings, best_offer, cart, db, onec, postsale, svc_config
+from app import activity_log, analytics, app_settings, best_offer, cart, db, onec, postsale, svc_config
 
 router = APIRouter(prefix="/admin", tags=["admin"])
 
@@ -50,6 +50,7 @@ async def get_config() -> list[dict]:
 async def get_settings() -> dict:
     """Глобальные настройки: редактируемые значения + метаданные + read-only статус интеграций."""
     from app.config import settings as env
+    from app.mailer import get_mailer
     async with db.pool().acquire() as con:
         values = await app_settings.get(con)
         await onec.load_overrides(con)
@@ -58,10 +59,35 @@ async def get_settings() -> dict:
             or bool(env.onec_token)
     meta = {k: {"type": m[0], "group": m[1], "label": m[2], "restart": m[3]}
             for k, m in app_settings.EDITABLE.items()}
+
+    # Статус почты: при mailer-service — его provider; иначе локальный транспорт.
+    mail_label = "на вкладке «Почта»"
+    mail_ok = False
+    if env.mailer_service_url:
+        try:
+            cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
+            provider = cfg.get("provider") or "dev"
+            mail_ok = provider in ("smtp", "sendmail")
+            host = cfg.get("smtp_host") or ""
+            if provider == "sendmail":
+                mail_label = "sendmail"
+            elif provider == "smtp" and host:
+                mail_label = host
+            else:
+                mail_label = f"mailer · {provider}"
+        except Exception:  # noqa: BLE001
+            mail_label = "mailer недоступен"
+    else:
+        name = type(get_mailer()).__name__
+        mail_ok = name in ("SendmailMailer", "SmtpMailer")
+        mail_label = {"SendmailMailer": "sendmail", "SmtpMailer": env.smtp_host or "smtp",
+                      "LogMailer": "dev-лог"}.get(name, name)
+
     return {
         "values": values, "meta": meta,
         "readonly": {
-            "smtp_host": env.smtp_host or None, "smtp_configured": bool(env.smtp_host),
+            "smtp_host": env.smtp_host or None, "smtp_configured": mail_ok,
+            "mail_status": mail_label,
             # base_url/token правятся в админке (app_config) поверх .env; токен наружу не отдаём.
             "onec_base_url": onec.base_url() or None, "onec_configured": onec.configured(),
             "onec_token_set": onec_token_set,
@@ -181,8 +207,9 @@ async def lead(user_id: str) -> dict:
         if s is None:
             return {"found": False}
         emails = await con.fetch(
-            """SELECT id, service, status, category_id, product_ids,
-                      sent_at, opened_at, clicked_at, attributed_order_id, revenue
+            """SELECT id, service, status, category_id, product_ids, subject,
+                      sent_at, opened_at, clicked_at, attributed_order_id, revenue,
+                      (html IS NOT NULL AND html <> '') AS has_html
                FROM email_log WHERE user_id = $1 ORDER BY id DESC LIMIT 50""", user_id)
         orders = await con.fetch(
             """SELECT order_id, order_date, status,
@@ -204,10 +231,12 @@ async def lead(user_id: str) -> dict:
         },
         "emails": [{"id": e["id"], "service": e["service"], "status": e["status"],
                     "product_ids": list(e["product_ids"] or []),
+                    "subject": e["subject"],
                     "sent_at": _iso(e["sent_at"]), "opened": e["opened_at"] is not None,
                     "clicked": e["clicked_at"] is not None,
                     "order_id": e["attributed_order_id"],
-                    "revenue": float(e["revenue"]) if e["revenue"] is not None else None} for e in emails],
+                    "revenue": float(e["revenue"]) if e["revenue"] is not None else None,
+                    "has_html": bool(e["has_html"])} for e in emails],
         "orders": [{"order_id": o["order_id"], "order_date": _iso(o["order_date"]),
                     "status": o["status"], "total": float(o["total"] or 0)} for o in orders],
     }
@@ -301,41 +330,102 @@ async def services_summary() -> list[dict]:
              "sent": r["sent"]} for r in rows]
 
 
+async def _purge_top5_no_photo(con) -> int:
+    """Убрать из топ-5 позиции с пустым image_url (и без товара) → вкладка «Без фото».
+
+    Не трогает CDN: обнуление по HEAD раньше сжигало рабочие фото при таймаутах.
+    Живость картинок — через images.warm_products при отдаче/письме.
+    """
+    deleted = await con.fetchval(
+        """WITH doomed AS (
+             DELETE FROM top5_by_category t
+              WHERE NOT EXISTS (
+                      SELECT 1 FROM products p
+                       WHERE p.product_id = t.product_id
+                         AND p.image_url IS NOT NULL AND btrim(p.image_url) <> '')
+             RETURNING 1
+           )
+           SELECT count(*)::int FROM doomed""")
+    await con.execute(
+        """WITH ordered AS (
+             SELECT category_id, product_id,
+                    row_number() OVER (PARTITION BY category_id ORDER BY position, product_id) AS rn
+               FROM top5_by_category
+           )
+           UPDATE top5_by_category t
+              SET position = o.rn, updated_at = now()
+             FROM ordered o
+            WHERE t.category_id = o.category_id AND t.product_id = o.product_id
+              AND t.position IS DISTINCT FROM o.rn""")
+    return int(deleted or 0)
+
+
 @router.get("/recommendations")
 async def recommendations() -> dict:
-    """Топ-5 товаров по категориям с деталями — то, что реально идёт в письма (Best Offer, Постпродажа)."""
-    rows = await db.pool().fetch(
-        """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
-                  t.product_id, t.updated_at,
-                  p.name AS product_name, p.price, p.image_url, p.product_url, p.in_stock
-           FROM top5_by_category t
-           JOIN categories c ON c.category_id = t.category_id
-           LEFT JOIN products p ON p.product_id = t.product_id
-           ORDER BY c.sort_order, t.position""")
-    cats: dict = {}
+    """Топ-5 с деталями. Прогревает фото (CDN URL) при каждом входе в раздел."""
+    from app import images
+    async with db.pool().acquire() as con:
+        purged = await _purge_top5_no_photo(con)
+        rows = await con.fetch(
+            """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
+                      t.product_id, t.updated_at,
+                      p.name AS product_name, p.price, p.image_url, p.product_url, p.in_stock
+               FROM top5_by_category t
+               JOIN categories c ON c.category_id = t.category_id
+               LEFT JOIN products p ON p.product_id = t.product_id
+               ORDER BY c.sort_order, t.position""")
+    # Плоский список для прогрева, потом разложим обратно по категориям.
+    flat = []
     for r in rows:
-        cat = cats.setdefault(r["category_id"], {
-            "category_id": r["category_id"], "category_name": r["category_name"],
-            "updated_at": _iso(r["updated_at"]), "products": []})
         exists = r["product_name"] is not None
-        cat["products"].append({
+        flat.append({
             "position": r["position"], "product_id": r["product_id"],
-            "name": r["product_name"], "price": float(r["price"]) if r["price"] is not None else None,
+            "name": r["product_name"],
+            "price": float(r["price"]) if r["price"] is not None else None,
             "image_url": r["image_url"], "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]) if exists else False, "exists": exists,
-            # Не попадёт в письмо, если товара нет в каталоге или он не в наличии.
-            "usable": exists and bool(r["in_stock"]),
+            "category_id": r["category_id"],
+            "category_name": r["category_name"],
+            "updated_at": _iso(r["updated_at"]),
+        })
+    warmed = await images.warm_products(
+        [p for p in flat if p["exists"] and p["image_url"]], require_live=False)
+    by_id = {p["product_id"]: p for p in warmed}
+    cats: dict = {}
+    for item in flat:
+        cat = cats.setdefault(item["category_id"], {
+            "category_id": item["category_id"], "category_name": item["category_name"],
+            "updated_at": item["updated_at"], "products": []})
+        w = by_id.get(item["product_id"])
+        image_url = w["image_url"] if w else item["image_url"]
+        cat["products"].append({
+            "position": item["position"], "product_id": item["product_id"],
+            "name": item["name"], "price": item["price"],
+            "image_url": image_url, "product_url": item["product_url"],
+            "in_stock": item["in_stock"], "exists": item["exists"],
+            "usable": item["exists"] and item["in_stock"] and bool(image_url),
+            "has_photo": bool(image_url),
         })
     out = list(cats.values())
     total_usable = sum(1 for c in out for p in c["products"] if p["usable"])
     total = sum(len(c["products"]) for c in out)
     return {"categories": out, "category_count": len(out),
-            "position_count": total, "usable_count": total_usable}
+            "position_count": total, "usable_count": total_usable,
+            "purged_no_photo": purged, "photos_warmed": len(warmed)}
+
+
+def _abs_img(url: str | None) -> str | None:
+    """/img/… → абсолютный URL нашего хоста (браузер сам дернёт резолвер). Без HEAD по всему каталогу."""
+    if not url:
+        return url
+    if url.startswith("/"):
+        return app_settings.public_base_url().rstrip("/") + url
+    return url
 
 
 @router.get("/catalog")
 async def catalog() -> dict:
-    """Весь каталог, сгруппированный по категориям — для просмотра карточками."""
+    """Каталог карточками. /img/ отдаём абсолютным — фото тянет браузер через резолвер."""
     rows = await db.pool().fetch(
         """SELECT p.category_id, c.name AS category_name, c.sort_order,
                   p.product_id, p.name, p.price, p.image_url, p.product_url, p.in_stock, p.tags
@@ -352,12 +442,14 @@ async def catalog() -> dict:
         cat["products"].append({
             "product_id": r["product_id"], "name": r["name"],
             "price": float(r["price"]) if r["price"] is not None else None,
-            "image_url": r["image_url"], "product_url": r["product_url"],
+            "image_url": _abs_img(r["image_url"]), "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]), "tags": tags,
         })
     out = list(cats.values())
+    no_photo = sum(1 for c in out for p in c["products"] if not p["image_url"])
     return {"categories": out, "category_count": len(out),
             "product_count": sum(len(c["products"]) for c in out),
+            "no_photo_count": no_photo,
             "tags": [{"tag": t, "count": n} for t, n in sorted(all_tags.items())]}
 
 
@@ -383,6 +475,7 @@ ranked AS (
          ) AS rn
   FROM products p LEFT JOIN sold s ON s.product_id = p.product_id
   WHERE p.in_stock
+    AND p.image_url IS NOT NULL AND btrim(p.image_url) <> ''   -- без GUID-фото в топ/письма не берём
 )
 SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_id, rn
 """
@@ -390,7 +483,10 @@ SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_i
 
 @router.post("/compute-top5")
 async def compute_top5() -> dict:
-    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена."""
+    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена.
+
+    В топ попадают только товары в наличии с GUID-фото; без фото — во вкладке «Без фото».
+    """
     from app.feeds import Top5Row, upsert_top5_rows
     async with db.pool().acquire() as con:
         rows = await con.fetch(_TOP5_SQL)
@@ -398,6 +494,8 @@ async def compute_top5() -> dict:
                 for r in rows]
         if top5:
             await upsert_top5_rows(con, top5)  # TRUNCATE + insert (актуальный срез целиком)
+        else:
+            await con.execute("TRUNCATE top5_by_category")
     return {"ok": True, "categories": len({r["category_id"] for r in rows}), "positions": len(rows)}
 
 
@@ -435,7 +533,8 @@ async def logs(service: Optional[str] = None, status: Optional[str] = None,
                limit: int = 50, offset: int = 0) -> list[dict]:
     rows = await db.pool().fetch(
         """SELECT id, user_id, service, status, category_id, product_ids, order_id,
-                  attributed_order_id, revenue, sent_at
+                  attributed_order_id, revenue, sent_at, subject,
+                  (html IS NOT NULL AND html <> '') AS has_html
            FROM email_log
            WHERE ($1::text IS NULL OR service = $1::service_kind)
              AND ($2::text IS NULL OR status = $2::email_status)
@@ -443,7 +542,214 @@ async def logs(service: Optional[str] = None, status: Optional[str] = None,
         service, status, min(limit, 500), max(offset, 0),
     )
     return [dict(r, revenue=float(r["revenue"]) if r["revenue"] is not None else None,
-                 sent_at=r["sent_at"].isoformat() if r["sent_at"] else None) for r in rows]
+                 sent_at=r["sent_at"].isoformat() if r["sent_at"] else None,
+                 has_html=bool(r["has_html"])) for r in rows]
+
+
+async def _log_products(con, product_ids: list[str]) -> list[dict]:
+    """Товары для превью журнала — без фильтра in_stock (на момент отправки могли быть в наличии)."""
+    if not product_ids:
+        return []
+    rows = await con.fetch(
+        """SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[])""",
+        product_ids,
+    )
+    by_id = {r["product_id"]: dict(r) for r in rows}
+    return [dict(by_id[pid], price=float(by_id[pid]["price"]))
+            for pid in product_ids if pid in by_id]
+
+
+async def _rebuild_log_html(con, row) -> str | None:
+    """Собрать HTML по product_ids + шаблону, если снимок не сохранён."""
+    from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
+
+    product_ids = list(row["product_ids"] or [])
+    products = await _log_products(con, product_ids)
+    if not products:
+        return None
+    service = row["service"]
+    await app_settings.load_site(con)
+    look = await app_settings.template_look(con)
+    blocks = None
+    if row["template_id"]:
+        tpl = await con.fetchrow(
+            "SELECT blocks FROM email_templates WHERE id = $1", row["template_id"])
+        if tpl is not None:
+            raw = tpl["blocks"]
+            blocks = json.loads(raw) if isinstance(raw, str) else raw
+    if blocks is None:
+        tpl = await app_settings.active_template(con, service)
+        blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service)
+    if blocks:
+        return render_blocks(blocks, products, row["user_id"], service, look)
+    return render_email("", products, row["user_id"], service, "default", look)
+
+
+@router.get("/logs/{log_id}")
+async def log_detail(log_id: int) -> dict:
+    """Метаданные письма + признак сохранённого HTML (тело — через /preview)."""
+    row = await db.pool().fetchrow(
+        """SELECT e.id, e.user_id, e.service, e.status, e.category_id, e.product_ids,
+                  e.order_id, e.attributed_order_id, e.revenue, e.sent_at, e.subject,
+                  e.template_id, e.created_at,
+                  (e.html IS NOT NULL AND e.html <> '') AS has_html,
+                  s.email AS recipient_email
+           FROM email_log e
+           LEFT JOIN subscribers s ON s.user_id = e.user_id
+           WHERE e.id = $1""",
+        log_id,
+    )
+    if row is None:
+        return {"found": False}
+    has_html = bool(row["has_html"])
+    can_preview = has_html or bool(row["product_ids"])
+    subject = row["subject"]
+    if not subject:
+        # старые записи без снимка — тема из текущих настроек сценария
+        async with db.pool().acquire() as con:
+            cfg = await svc_config.load(con, row["service"])
+            subject = cfg.get("subject")
+    return {
+        "found": True,
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "recipient_email": row["recipient_email"],
+        "service": row["service"],
+        "status": row["status"],
+        "category_id": row["category_id"],
+        "product_ids": list(row["product_ids"] or []),
+        "order_id": row["order_id"],
+        "attributed_order_id": row["attributed_order_id"],
+        "revenue": float(row["revenue"]) if row["revenue"] is not None else None,
+        "sent_at": _iso(row["sent_at"]),
+        "created_at": _iso(row["created_at"]),
+        "subject": subject,
+        "template_id": row["template_id"],
+        "has_html": has_html,
+        "can_preview": can_preview,
+        "preview_exact": has_html,
+    }
+
+
+@router.get("/logs/{log_id}/preview", response_class=HTMLResponse)
+async def log_preview(log_id: int) -> HTMLResponse:
+    """HTML письма: снимок как ушло клиенту, иначе сборка по товарам и шаблону."""
+    async with db.pool().acquire() as con:
+        row = await con.fetchrow(
+            """SELECT id, user_id, service, product_ids, template_id, html
+               FROM email_log WHERE id = $1""",
+            log_id,
+        )
+        if row is None:
+            return HTMLResponse("<!doctype html><meta charset=utf-8><p>Письмо не найдено.</p>",
+                                status_code=404)
+        if row["html"]:
+            return HTMLResponse(row["html"])
+        rebuilt = await _rebuild_log_html(con, row)
+    if rebuilt:
+        return HTMLResponse(rebuilt)
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><body style='font:14px/1.5 system-ui;padding:24px;color:#453c52'>"
+        "<p>Не удалось показать письмо: нет сохранённого HTML и товаров в каталоге.</p>"
+        "</body>",
+        status_code=200,
+    )
+
+
+@router.get("/activity-log")
+async def activity_log_list(
+    level: Optional[str] = None,
+    source: Optional[str] = None,
+    service: Optional[str] = None,
+    event: Optional[str] = None,
+    q: Optional[str] = None,
+    limit: int = 100,
+    offset: int = 0,
+) -> dict:
+    """Диагностический журнал: этапы авторассылок, skip, ошибки, действия админки."""
+    lim = min(max(limit, 1), 500)
+    off = max(offset, 0)
+    needle = (q or "").strip() or None
+    rows = await db.pool().fetch(
+        """SELECT id, created_at, level, source, event, service, user_id, session_id,
+                  order_id, ref_id, message, details
+           FROM activity_log
+           WHERE ($1::text IS NULL OR level = $1)
+             AND ($2::text IS NULL OR source = $2)
+             AND ($3::text IS NULL OR service = $3::service_kind)
+             AND ($4::text IS NULL OR event = $4)
+             AND ($5::text IS NULL OR message ILIKE '%' || $5 || '%'
+                  OR COALESCE(user_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(order_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(session_id,'') ILIKE '%' || $5 || '%')
+           ORDER BY id DESC
+           LIMIT $6 OFFSET $7""",
+        level or None, source or None, service or None, event or None, needle, lim, off,
+    )
+    total = await db.pool().fetchval(
+        """SELECT count(*) FROM activity_log
+           WHERE ($1::text IS NULL OR level = $1)
+             AND ($2::text IS NULL OR source = $2)
+             AND ($3::text IS NULL OR service = $3::service_kind)
+             AND ($4::text IS NULL OR event = $4)
+             AND ($5::text IS NULL OR message ILIKE '%' || $5 || '%'
+                  OR COALESCE(user_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(order_id,'') ILIKE '%' || $5 || '%'
+                  OR COALESCE(session_id,'') ILIKE '%' || $5 || '%')""",
+        level or None, source or None, service or None, event or None, needle,
+    )
+    counts = await db.pool().fetch(
+        """SELECT level, count(*) AS n FROM activity_log
+           WHERE created_at > now() - interval '24 hours'
+           GROUP BY level"""
+    )
+    by_level = {r["level"]: int(r["n"]) for r in counts}
+    out = []
+    for r in rows:
+        d = dict(r)
+        d["created_at"] = r["created_at"].isoformat() if r["created_at"] else None
+        if isinstance(d.get("details"), str):
+            try:
+                d["details"] = json.loads(d["details"])
+            except Exception:  # noqa: BLE001
+                d["details"] = {}
+        out.append(d)
+    return {
+        "items": out,
+        "total": int(total or 0),
+        "limit": lim,
+        "offset": off,
+        "last_24h": {
+            "error": by_level.get("error", 0),
+            "warn": by_level.get("warn", 0),
+            "info": by_level.get("info", 0),
+            "debug": by_level.get("debug", 0),
+        },
+        "retention_days": activity_log.RETENTION_DAYS,
+    }
+
+
+@router.delete("/activity-log")
+async def activity_log_clear(older_than_days: Optional[int] = None) -> dict:
+    """Очистить журнал: целиком или записи старше N дней."""
+    if older_than_days is not None:
+        days = max(0, int(older_than_days))
+        n = await activity_log.prune(days=days)
+        await activity_log.write(
+            level="info", source="admin", event="log_cleared",
+            message=f"очищены записи старше {days} дн. ({n})",
+            details={"older_than_days": days, "deleted": n},
+        )
+        return {"ok": True, "deleted": n, "older_than_days": days}
+    result = await db.pool().execute("DELETE FROM activity_log")
+    n = int(str(result).split()[-1]) if result else 0
+    await activity_log.write(
+        level="warn", source="admin", event="log_cleared",
+        message=f"журнал очищен полностью ({n} записей)",
+        details={"deleted": n, "all": True},
+    )
+    return {"ok": True, "deleted": n}
 
 
 @router.get("/feeds-status")
@@ -473,8 +779,29 @@ async def run_now(service: str) -> dict:
     runner = _RUNNERS.get(service)
     if runner is None:
         return {"ok": False, "reason": f"unknown service: {service}"}
-    async with db.pool().acquire() as con:
-        n = await runner(con)
+    await activity_log.write(
+        level="info", source="admin", event="manual_run",
+        service=service if service in ("best_offer", "cart", "postsale") else None,
+        message=f"ручной запуск: {service}",
+        details={"service": service},
+    )
+    try:
+        async with db.pool().acquire() as con:
+            n = await runner(con)
+    except Exception as e:  # noqa: BLE001
+        await activity_log.write(
+            level="error", source="admin", event="manual_run_failed",
+            service=service if service in ("best_offer", "cart", "postsale") else None,
+            message=f"ручной запуск {service} упал: {type(e).__name__}: {e}",
+            details={"service": service, "error": str(e)[:500]},
+        )
+        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+    await activity_log.write(
+        level="info", source="admin", event="manual_run_done",
+        service=service if service in ("best_offer", "cart", "postsale") else None,
+        message=f"ручной запуск {service}: обработано {n}",
+        details={"service": service, "processed": n},
+    )
     return {"ok": True, "processed": n}
 
 
@@ -544,26 +871,27 @@ async def _sample_products(con, limit: int = 6) -> list[dict]:
 
     Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
     без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
-    не совпадало с письмом. Внутри топа фото идут вперёд (иначе серые плейсхолдеры),
-    порядок стабильный. 6 штук = две строки карточек по 3. Нет топ-5 — любые в наличии.
+    не совпадало с письмом. Внутри топа фото идут вперёд, затем прогрев CDN-URL.
+    6 штук = две строки карточек по 3. Нет топ-5 — любые в наличии с фото.
     """
+    from app import images
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM (
+        f"""SELECT product_id, name, price, image_url, product_url FROM (
              SELECT DISTINCT ON (p.product_id)
                     p.product_id, p.name, p.price, p.image_url, p.product_url,
                     (t.product_id IS NULL) AS not_top,
-                    COALESCE(t.position, 99) AS pos,
-                    (p.image_url IS NULL OR p.image_url = '') AS no_img
+                    COALESCE(t.position, 99) AS pos
              FROM products p
              LEFT JOIN top5_by_category t ON t.product_id = p.product_id
-             WHERE p.in_stock
+             WHERE p.in_stock AND {images.HAS_PHOTO_SQL.replace('image_url', 'p.image_url')}
              ORDER BY p.product_id, t.position NULLS LAST
            ) s
-           ORDER BY not_top, pos, no_img, product_id
+           ORDER BY not_top, pos, product_id
            LIMIT $1""",
         limit,
     )
-    return [dict(r, price=float(r["price"])) for r in rows]
+    products = [dict(r, price=float(r["price"])) for r in rows]
+    return await images.warm_products(products, require_live=True)
 
 
 @router.post("/scenario/{service}/test")
@@ -588,13 +916,27 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         try:
             res = await asyncio.to_thread(_mailer_svc, "POST", "/v1/send/sync", {
                 "to": body.email, "subject": subject, "html": html,
-                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]})
+                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]}, 45)
         except Exception as e:  # noqa: BLE001 — сервис недоступен
-            return {"ok": False, "error": f"{type(e).__name__}: {e}", "live": True}
-        return {"ok": bool(res.get("ok")), "error": res.get("error"),
+            err = f"{type(e).__name__}: {e}"
+            if "timed out" in err.lower() or "timeout" in err.lower():
+                err += (" — mailer/SMTP не ответил за 45с. Проверьте порты 465/587 "
+                        "и вкладку Настройки → Почта (пресет, пароль приложения, From).")
+            return {"ok": False, "error": err, "live": True}
+        ok = bool(res.get("ok"))
+        return {"ok": ok, "error": res.get("error") if not ok else None,
                 "live": await _mailer_is_live(mailer)}
-    ok = await mailer.send(body.email, subject, html, cfg["sender_email"], cfg["sender_name"])
-    return {"ok": ok, "live": await _mailer_is_live(mailer)}
+    try:
+        ok = await mailer.send(body.email, subject, html, cfg["sender_email"], cfg["sender_name"])
+    except Exception as e:  # noqa: BLE001 — локальный SMTP/sendmail
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "live": await _mailer_is_live(mailer)}
+    if not ok:
+        return {"ok": False,
+                "error": "отправка не удалась (логи api). Проверьте Настройки → Почта: "
+                         "хост, SSL/STARTTLS, пароль приложения, From = логин.",
+                "live": await _mailer_is_live(mailer)}
+    return {"ok": True, "live": await _mailer_is_live(mailer)}
 
 
 @router.get("/scenario/{service}/reach")
@@ -633,29 +975,6 @@ async def put_template_settings(patch: dict) -> dict:
     return {"ok": True}
 
 
-_EMPTY_PRODUCTS_BANNER = (
-    '<div style="margin:12px 0;padding:14px 16px;background:#fff4e5;border:1px solid #f0c36d;'
-    'border-radius:10px;color:#6b4e00;font:14px/1.45 sans-serif">'
-    '<b>В письме нет товаров.</b> В каталоге нет позиций в наличии (или пуст топ-5). '
-    'Загрузите фид товаров/топ-5 — иначе подборка в шаблоне и в рассылке останется пустой.'
-    '</div>'
-)
-
-
-def _with_empty_banner(html: str, products: list) -> str:
-    """В превью явно показываем, почему блок «Подборка» пустой — иначе белая дыра в макете."""
-    if products:
-        return html
-    # Баннер сразу после <body> или в начало документа.
-    low = html.lower()
-    i = low.find("<body")
-    if i != -1:
-        j = low.find(">", i)
-        if j != -1:
-            return html[: j + 1] + _EMPTY_PRODUCTS_BANNER + html[j + 1 :]
-    return _EMPTY_PRODUCTS_BANNER + html
-
-
 @router.get("/template/preview", response_class=HTMLResponse)
 async def template_preview(id: Optional[int] = None, service: str = "best_offer",
                            brand_color: Optional[str] = None, header: Optional[str] = None,
@@ -678,7 +997,7 @@ async def template_preview(id: Optional[int] = None, service: str = "best_offer"
     override = {"brand_color": brand_color, "header": header, "button": button, "footer": footer}
     look = {**look, **{k: v for k, v in override.items() if v}}
     blocks = blocks if blocks else DEFAULT_BLOCKS.get(service, [])
-    return _with_empty_banner(render_blocks(blocks, products, "preview", service, look), products)
+    return render_blocks(blocks, products, "preview", service, look)
 
 
 @router.post("/template/render", response_class=HTMLResponse)
@@ -692,7 +1011,7 @@ async def template_render(body: dict) -> str:
         if look is None:
             look = await app_settings.template_look(con)
         products = await _sample_products(con)
-    return _with_empty_banner(render_blocks(blocks, products, "preview", service, look), products)
+    return render_blocks(blocks, products, "preview", service, look)
 
 
 _TPL_NAMES = {"best_offer": "Best Offer", "cart": "Брошенная корзина", "postsale": "Постпродажа"}
@@ -905,8 +1224,13 @@ async def get_vendor(path: str):
     return FileResponse(full, headers={"Cache-Control": "public, max-age=604800"})
 
 
-def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
-    """Синхронный вызов mailer-service (в потоке)."""
+def _mailer_svc(method: str, path: str, body: Optional[dict] = None,
+                timeout: float = 15) -> dict:
+    """Синхронный вызов mailer-service (в потоке).
+
+    Для /v1/test и /v1/send/sync нужен timeout > SMTP (30с), иначе API обрывает
+    раньше и маскирует реальную ошибку провайдера.
+    """
     import urllib.request
     from app.config import settings
     url = settings.mailer_service_url.rstrip("/") + path
@@ -915,23 +1239,25 @@ def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
         headers["Authorization"] = f"Bearer {settings.mailer_service_token}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
 async def _mailer_is_live(mailer) -> bool:
-    """live = письмо реально уйдёт в ESP, а не осядет в dev-логе.
+    """live = письмо реально уйдёт (sendmail/SMTP), а не осядет в dev-логе.
 
-    Учитывает dev-режим самого mailer-service: HttpMailer != LogMailer ещё не значит,
-    что сервис отправит — у него может быть пустой smtp_host (provider='dev').
+    Учитывает режим mailer-service: HttpMailer != LogMailer ещё не значит,
+    что сервис отправит — у него может быть provider='dev'.
     """
     name = type(mailer).__name__
     if name == "LogMailer":
         return False
+    if name == "SendmailMailer":
+        return True
     if name == "HttpMailer":
         try:
             cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
-            return cfg.get("provider") == "smtp"
+            return cfg.get("provider") in ("smtp", "sendmail")
         except Exception:  # noqa: BLE001 — сервис недоступен → не рисуем ложный «отправлено»
             return False
     return True   # SmtpMailer — шлёт напрямую в SMTP-relay
@@ -939,23 +1265,52 @@ async def _mailer_is_live(mailer) -> bool:
 
 @router.get("/mail/config")
 async def mail_config() -> dict:
-    """Настройки почтового провайдера (из mailer-service). Пароль не отдаётся."""
+    """Настройки почтового провайдера. mailer-service или локальный sendmail/SMTP."""
     from app.config import settings
-    if not settings.mailer_service_url:
-        return {"configured": False}
-    try:
-        cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
-        return {"configured": True, "service_url": settings.mailer_service_url, **cfg}
-    except Exception as e:  # noqa: BLE001
-        return {"configured": True, "service_url": settings.mailer_service_url,
-                "error": f"{type(e).__name__}: {e}"}
+    from app.mailer import get_mailer
+
+    if settings.mailer_service_url:
+        try:
+            cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
+            return {"configured": True, "service_url": settings.mailer_service_url, **cfg}
+        except Exception as e:  # noqa: BLE001
+            return {"configured": True, "service_url": settings.mailer_service_url,
+                    "error": f"{type(e).__name__}: {e}"}
+
+    # Без микросервиса — локальный транспорт приложения.
+    mailer = get_mailer()
+    name = type(mailer).__name__
+    if name == "SendmailMailer":
+        provider = "sendmail"
+    elif name == "SmtpMailer":
+        provider = "smtp"
+    else:
+        provider = "dev"
+    return {
+        "configured": True,
+        "service_url": None,
+        "local": True,
+        "provider": provider,
+        "mail_transport": settings.mail_transport or provider,
+        "sendmail_path": settings.sendmail_path,
+        "smtp_host": settings.smtp_host or "",
+        "smtp_port": settings.smtp_port,
+        "smtp_user": settings.smtp_user or "",
+        "smtp_starttls": settings.smtp_starttls,
+        "smtp_ssl": settings.smtp_ssl,
+        "mail_from": settings.mail_from,
+        "mail_from_name": settings.mail_from_name,
+        "has_password": bool(settings.smtp_password),
+        "rate_per_min": None,
+    }
 
 
 @router.put("/mail/config")
 async def mail_config_save(patch: dict) -> dict:
     from app.config import settings
     if not settings.mailer_service_url:
-        return {"ok": False, "reason": "mailer-service не подключён (MAILER_SERVICE_URL пуст)"}
+        return {"ok": False, "reason": "локальный sendmail/SMTP задаётся в .env "
+                "(MAIL_TRANSPORT, SENDMAIL_PATH, MAIL_FROM); mailer-service не подключён"}
     try:
         await asyncio.to_thread(_mailer_svc, "PUT", "/v1/config", patch)
         return {"ok": True}
@@ -966,12 +1321,120 @@ async def mail_config_save(patch: dict) -> dict:
 @router.post("/mail/test")
 async def mail_test(body: dict) -> dict:
     from app.config import settings
-    if not settings.mailer_service_url:
-        return {"ok": False, "error": "mailer-service не подключён"}
+    from app.mailer import get_mailer
+
+    to = str(body.get("to") or "").strip()
+    if not to:
+        return {"ok": False, "error": "укажите to"}
+
+    if settings.mailer_service_url:
+        try:
+            # 45с > SMTP timeout 30с в mailer, иначе API сам даёт TimeoutError
+            res = await asyncio.to_thread(
+                _mailer_svc, "POST", "/v1/test", {"to": to}, 45)
+        except Exception as e:  # noqa: BLE001
+            err = f"{type(e).__name__}: {e}"
+            if "timed out" in err.lower() or "timeout" in err.lower():
+                err += (" — не дождались ответа mailer/SMTP. Проверьте исходящие "
+                        "порты 465/587 с хоста и из контейнера mailer "
+                        "(nc/curl), часто VPS режет SMTP.")
+            await activity_log.write(
+                level="error", source="mailer", event="test_failed",
+                message=f"тест почты: {err}",
+                details={"to": to, "error": str(e)[:500]},
+            )
+            return {"ok": False, "error": err}
+        if res.get("ok"):
+            await activity_log.write(
+                level="info", source="mailer", event="test_ok",
+                message=f"тест почты успешен → {to}",
+                details={"to": to, "message_id": res.get("message_id")},
+            )
+        else:
+            await activity_log.write(
+                level="error", source="mailer", event="test_failed",
+                message=f"тест почты провален → {to}: {res.get('error') or res}",
+                details={"to": to, "result": res},
+            )
+        return res
+
+    mailer = get_mailer()
     try:
-        return await asyncio.to_thread(_mailer_svc, "POST", "/v1/test", {"to": body.get("to", "")})
+        ok = await mailer.send(
+            to, "Проверка отправки",
+            "<p>Тестовое письмо. Локальный sendmail/SMTP работает.</p>")
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        await activity_log.write(
+            level="error", source="mailer", event="test_failed",
+            message=f"тест почты (local): {type(e).__name__}: {e}",
+            details={"to": to, "mailer": type(mailer).__name__},
+        )
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "mailer": type(mailer).__name__}
+    if not ok:
+        await activity_log.write(
+            level="error", source="mailer", event="test_failed",
+            message=f"тест почты (local) не удался → {to}",
+            details={"to": to, "mailer": type(mailer).__name__},
+        )
+        return {"ok": False, "error": "отправка не удалась (см. логи приложения)",
+                "mailer": type(mailer).__name__}
+    await activity_log.write(
+        level="info", source="mailer", event="test_ok",
+        message=f"тест почты (local) успешен → {to}",
+        details={"to": to, "mailer": type(mailer).__name__},
+    )
+    return {"ok": True, "mailer": type(mailer).__name__,
+            "message_id": "local",
+            "hint": "Message-ID значит «принято MTA», не «доставлено во входящие». "
+                    "Проверьте spam и mailq/postqueue -p на сервере."}
+
+
+@router.post("/mail/send-batch")
+async def mail_send_batch(body: dict) -> dict:
+    """Массовая постановка писем в очередь (через get_mailer().send_batch).
+
+    Тело: { "messages": [ {to, subject, html, from_email?, from_name?, meta?} , ... ] }
+    Либо общий шаблон: { "emails": [...], "subject", "html", "from_email?", "from_name?" }.
+    """
+    from app.mailer import get_mailer
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        emails = body.get("emails") or []
+        subject = str(body.get("subject") or "").strip()
+        html = str(body.get("html") or "")
+        if not isinstance(emails, list) or not subject or not html:
+            return {"ok": False, "error": "нужны messages[] или emails[] + subject + html"}
+        from_email = str(body.get("from_email") or "")
+        from_name = str(body.get("from_name") or "")
+        messages = [
+            {"to": str(e).strip(), "subject": subject, "html": html,
+             "from_email": from_email, "from_name": from_name}
+            for e in emails if str(e).strip()
+        ]
+
+    if not messages:
+        return {"ok": False, "error": "пустой список писем"}
+    # Кап на один запрос — защита от случайного гигантского payload в админке.
+    if len(messages) > 5000:
+        return {"ok": False, "error": "не больше 5000 писем за один запрос"}
+
+    mailer = get_mailer()
+    live = await _mailer_is_live(mailer)
+    result = await mailer.send_batch(messages)
+    queued = int(result.get("queued") or result.get("sent") or 0)
+    failed = int(result.get("failed") or 0)
+    ok = queued > 0 and not result.get("error")
+    return {
+        "ok": ok,
+        "live": live,
+        "queued": queued,
+        "failed": failed,
+        "ids": result.get("ids") or [],
+        "error": result.get("error"),
+        "mailer": type(mailer).__name__,
+    }
 
 
 # ── Колесо фортуны ──
@@ -1036,9 +1499,26 @@ async def put_wheel(body: dict) -> dict:
 async def sync_catalog_now() -> dict:
     """Ручная синхронизация каталога из 1С (pull)."""
     if not onec.configured():
+        await activity_log.write(
+            level="warn", source="admin", event="sync_skipped",
+            message="синхронизация 1С пропущена: не настроена",
+        )
         return {"ok": False, "reason": "1С не настроена (ONEC_BASE_URL пуст)"}
-    async with db.pool().acquire() as con:
-        n = await onec.sync_catalog(con)
+    try:
+        async with db.pool().acquire() as con:
+            n = await onec.sync_catalog(con)
+    except Exception as e:  # noqa: BLE001
+        await activity_log.write(
+            level="error", source="onec", event="sync_failed",
+            message=f"синхронизация 1С упала: {type(e).__name__}: {e}",
+            details={"error": str(e)[:500]},
+        )
+        return {"ok": False, "reason": f"{type(e).__name__}: {e}"}
+    await activity_log.write(
+        level="info", source="onec", event="sync_ok",
+        message=f"синхронизация 1С: {n} товаров",
+        details={"synced": n},
+    )
     return {"ok": True, "synced": n}
 
 
@@ -1050,9 +1530,19 @@ async def import_xml_upload(request: Request) -> dict:
     try:
         parsed = import_xml.parse(data)
     except ValueError as e:
+        await activity_log.write(
+            level="error", source="import", event="import_failed",
+            message=f"импорт XML: ошибка разбора — {e}",
+            details={"format": "xml", "error": str(e)},
+        )
         return {"ok": False, "reason": str(e)}
     async with db.pool().acquire() as con:
         counts = await import_xml.import_all(con, parsed)
+    await activity_log.write(
+        level="info", source="import", event="import_ok",
+        message=f"импорт XML: {counts}",
+        details={"format": "xml", "imported": counts},
+    )
     return {"ok": True, "imported": counts}
 
 
@@ -1064,9 +1554,19 @@ async def import_json_upload(request: Request) -> dict:
     try:
         parsed = import_json.parse(data)
     except ValueError as e:
+        await activity_log.write(
+            level="error", source="import", event="import_failed",
+            message=f"импорт JSON: ошибка разбора — {e}",
+            details={"format": "json", "error": str(e)},
+        )
         return {"ok": False, "reason": str(e)}
     async with db.pool().acquire() as con:
         counts = await import_xml.import_all(con, parsed)  # та же схема БД, тот же upsert
+    await activity_log.write(
+        level="info", source="import", event="import_ok",
+        message=f"импорт JSON: {counts}",
+        details={"format": "json", "imported": counts},
+    )
     return {"ok": True, "imported": counts}
 
 
@@ -1283,6 +1783,109 @@ async def selftest(product_id: Optional[str] = None) -> dict:
             "hint": "" if found else "Сайт должен слать product_id ровно как в каталоге/1С. "
                                      "Иначе письмо по такой корзине не уйдёт.",
         })
+
+    # Почта: mailer-service (host-network) должен отвечать; hostname «mailer» — типичная поломка.
+    from app.config import settings as env
+    from urllib.parse import urlparse
+    murl = (env.mailer_service_url or "").strip()
+    if murl:
+        host = (urlparse(murl).hostname or "").lower()
+        if host == "mailer":
+            checks.append({
+                "id": "mailer_url", "t": "Адрес mailer-service",
+                "status": "fail",
+                "detail": murl,
+                "hint": "mailer на host-network не резолвится как «mailer». "
+                        "Нужен http://host.docker.internal:8080 (compose + MAILER_HOST_IP) "
+                        "и --force-recreate api workers mailer. См. deploy/check-mail.sh.",
+            })
+        else:
+            try:
+                health = await asyncio.to_thread(_mailer_svc, "GET", "/health")
+                provider = health.get("provider") or "?"
+                outbox = health.get("outbox") or {}
+                queued = int(outbox.get("queued") or 0)
+                failed = int(outbox.get("failed") or 0)
+                live = provider in ("smtp", "sendmail")
+                detail = f"{murl} · provider={provider} · очередь={queued} · failed={failed}"
+                if not live:
+                    checks.append({
+                        "id": "mailer", "t": "Mailer-service отвечает",
+                        "status": "fail",
+                        "detail": detail,
+                        "hint": "Провайдер dev — письма не уходят. Настройки → Почта: SMTP "
+                                "(Яндекс 465+SSL) или sendmail.",
+                    })
+                elif failed > 100 or queued > 2000:
+                    checks.append({
+                        "id": "mailer", "t": "Mailer-service отвечает",
+                        "status": "warn",
+                        "detail": detail,
+                        "hint": "Очередь/ошибки раздуты — смотрите docker compose logs mailer "
+                                "и SMTP-пароль (535). Сеть: bash deploy/check-mail.sh",
+                    })
+                else:
+                    checks.append({
+                        "id": "mailer", "t": "Mailer-service отвечает",
+                        "status": "ok",
+                        "detail": detail,
+                        "hint": "",
+                    })
+                # Глубокая диагностика (SMTP + callback), если эндпоинт есть.
+                try:
+                    diag = await asyncio.to_thread(_mailer_svc, "GET", "/v1/diagnostics")
+                    smtp = diag.get("smtp") or {}
+                    cb = diag.get("callback") or {}
+                    if smtp.get("ok") is False:
+                        checks.append({
+                            "id": "mailer_smtp", "t": "SMTP из mailer",
+                            "status": "fail",
+                            "detail": f"{smtp.get('host')}:{smtp.get('port')} — {smtp.get('detail')}",
+                            "hint": "На VPS mailer должен быть network_mode: host. "
+                                    "Иначе ENETUNREACH. bash deploy/check-mail.sh",
+                        })
+                    elif smtp.get("ok") is True:
+                        checks.append({
+                            "id": "mailer_smtp", "t": "SMTP из mailer",
+                            "status": "ok",
+                            "detail": f"{smtp.get('host')}:{smtp.get('port')}",
+                            "hint": "",
+                        })
+                    if cb.get("ok") is False:
+                        checks.append({
+                            "id": "mailer_callback", "t": "Callback mailer → api",
+                            "status": "warn",
+                            "detail": f"{cb.get('url')} — {cb.get('detail')}",
+                            "hint": "Письма уходят, статусы в админке могут не обновляться. "
+                                    "Проверьте API_HOST_PORT и что api слушает 127.0.0.1.",
+                        })
+                    elif cb.get("ok") is True:
+                        checks.append({
+                            "id": "mailer_callback", "t": "Callback mailer → api",
+                            "status": "ok",
+                            "detail": cb.get("url") or "",
+                            "hint": "",
+                        })
+                except Exception:  # noqa: BLE001 — старый mailer без /v1/diagnostics
+                    pass
+            except Exception as e:  # noqa: BLE001
+                checks.append({
+                    "id": "mailer", "t": "Mailer-service отвечает",
+                    "status": "fail",
+                    "detail": f"{murl} — {type(e).__name__}: {e}",
+                    "hint": "api не достучался до mailer. Нужны MAILER_HOST_IP=IP br-*, "
+                            "ufw allow с моста на 8080, --force-recreate. "
+                            "bash deploy/check-mail.sh",
+                })
+    else:
+        checks.append({
+            "id": "mailer", "t": "Mailer-service",
+            "status": "warn",
+            "detail": "MAILER_SERVICE_URL не задан",
+            "hint": "В Docker compose задаёт URL сам. Если письма идут локально — "
+                    "проверьте MAIL_TRANSPORT/SMTP в .env.",
+        })
+
     return {"base": base, "checks": checks}
 
 

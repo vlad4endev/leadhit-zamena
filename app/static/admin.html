@@ -230,6 +230,17 @@ td.mono{font-family:var(--mono)}
 .pill.sent,.pill.delivered,.pill.live{background:color-mix(in srgb,var(--ok) 15%,transparent);color:var(--ok)}
 .pill.bounced,.pill.unsubscribed,.pill.dev{background:color-mix(in srgb,var(--alert) 14%,transparent);color:var(--alert)}
 .pill.queued{background:color-mix(in srgb,var(--orange) 16%,transparent);color:var(--warn)}
+.pill.error,.pill.lvl-error{background:color-mix(in srgb,var(--alert) 16%,transparent);color:var(--alert)}
+.pill.warn,.pill.lvl-warn{background:color-mix(in srgb,var(--orange) 18%,transparent);color:var(--warn)}
+.pill.info,.pill.lvl-info{background:color-mix(in srgb,var(--ok) 14%,transparent);color:var(--ok)}
+.pill.debug,.pill.lvl-debug{background:var(--surface-2);color:var(--muted)}
+.log-msg{white-space:normal;max-width:420px;line-height:1.4}
+.log-details{display:none;background:var(--bg);border-top:1px solid var(--border)}
+.log-details.open{display:table-row}
+.log-details pre{margin:0;padding:10px 15px;font:12px/1.45 var(--mono);white-space:pre-wrap;word-break:break-word;color:var(--muted);max-height:240px;overflow:auto}
+.log-stats{display:flex;gap:10px;flex-wrap:wrap;margin-bottom:14px}
+.log-stat{padding:8px 12px;border-radius:10px;background:var(--surface-2);font-size:12.5px}
+.log-stat b{font-family:var(--mono);margin-right:4px}
 .empty{padding:34px;text-align:center;color:var(--muted)}
 .chart{display:flex;align-items:flex-end;gap:10px;height:210px;padding:6px 2px;border-bottom:1px solid var(--border)}
 .chart.dense{gap:3px}
@@ -590,15 +601,18 @@ function kpiCard(svc,d){
     ${meter('Конверсия',m.conversion,b.conversion,st.conversion)}</div>`;
 }
 function logDate(iso){ return iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'; }
+function openEmail(id,ev){ if(ev){ ev.preventDefault(); ev.stopPropagation(); } location.hash='#/email/'+id; }
 function logsTable(rows){
   if(!rows.length) return '<div class="tablewrap"><div class="empty">Писем пока нет.</div></div>';
   return `<div class="tablewrap"><table><thead><tr>
-    <th>Отправлено</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Товары</th><th>Заказ</th><th>Доход</th></tr></thead><tbody>`+
+    <th>Отправлено</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Тема</th><th>Товары</th><th>Заказ</th><th>Доход</th><th></th></tr></thead><tbody>`+
     rows.map(e=>`<tr onclick="location.hash='#/lead/'+encodeURIComponent('${esc(e.user_id)}')" style="cursor:pointer">
       <td class="mono">${esc(logDate(e.sent_at))}</td><td class="mono">${esc(e.user_id)}</td>
       <td>${esc(SVC[e.service]?.ru||e.service)}</td><td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
+      <td>${esc(e.subject||'—')}</td>
       <td class="mono">${esc((e.product_ids||[]).join(', '))}</td><td class="mono">${esc(e.attributed_order_id||'—')}</td>
-      <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('')+`</tbody></table></div>`;
+      <td class="mono">${e.revenue?rub(e.revenue):'—'}</td>
+      <td><button type="button" class="btn" onclick="openEmail(${+e.id},event)" ${e.has_html?'':'title="Снимок письма появится у новых отправок"'}>Открыть</button></td></tr>`).join('')+`</tbody></table></div>`;
 }
 /* Связь с сайтом — единый источник правды для индикатора в шапке и плашки в разделе.
    Два независимых сигнала:
@@ -787,7 +801,8 @@ async function viewService(svc){
         <button class="btn primary" onclick="sendTest('${esc(svc)}')">Отправить тест</button>
         <span class="svc-sub">Охват сейчас: <b id="reachN" class="mono">…</b></span>
       </div>
-      <div class="svc-sub" style="margin-top:8px">Придёт реальное письмо с активным шаблоном. Метрики — в разделе «Эффективность».</div></div>`;
+      <div id="testResult" class="svc-sub" style="margin-top:10px"></div>
+      <div class="svc-sub" style="margin-top:8px">Придёт реальное письмо с активным шаблоном. Ошибки SMTP/ESP показываются здесь полностью (не только в тосте). Метрики — в «Эффективность».</div></div>`;
   const tab=(v,l)=>`<button class="${svcTab===v?'active':''}" onclick="svcSetTab('${svc}','${v}')">${l}</button>`;
   const content = svcTab==='message'?messagePanel : svcTab==='test'?testPanel : scenarioPanel;
   $('view').innerHTML=`<section style="max-width:860px">
@@ -811,9 +826,17 @@ async function loadReach(svc){
 async function sendTest(svc){
   const email=($('testEmail')||{}).value||'';
   if(!email){ toast('Укажите email'); return; }
+  const box=$('testResult'); if(box) box.textContent='Отправка…';
   const r=await j('/admin/scenario/'+encodeURIComponent(svc)+'/test',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({email})});
-  toast(r.error?('Ошибка ESP: '+r.error):(!r.ok?'Ошибка отправки':(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)')));
+  if(r.error || !r.ok){
+    const msg=r.error||'Ошибка отправки';
+    if(box) box.innerHTML='<span style="color:var(--alert)">✗ '+esc(msg)+'</span>';
+    toast('Почта: '+msg.slice(0,120)+(msg.length>120?'…':''));
+    return;
+  }
+  if(box) box.innerHTML='<span style="color:var(--ok)">✓ '+(r.live?'отправлено на '+esc(email):'записано в dev-лог')+'</span>';
+  toast(r.live?'Тест отправлен на '+email:'Тест записан в лог (dev, SMTP не настроен)');
 }
 
 const DOW=['Пн','Вт','Ср','Чт','Пт','Сб','Вс'];
@@ -887,21 +910,27 @@ function setRecView(v){ recView=v; viewFeeds(); }
 function recStatusPill(pr){
   if(!pr.exists) return '<span class="pill unsubscribed">нет в каталоге</span>';
   if(!pr.in_stock) return '<span class="pill queued">нет в наличии</span>';
+  if(!pr.image_url) return '<span class="pill queued">без фото</span>';
   return '<span class="pill sent">в наличии</span>';
 }
 async function viewFeeds(){
   setTitle('Товарные рекомендации','топ-5 по категориям из 1С — что идёт в письма');
   await loadCore();
   const [rec] = await Promise.all([j('/admin/recommendations')]);
-  const catData = recView==='catalog' ? await j('/admin/catalog') : null;  // весь каталог — только по запросу
+  // Каталог целиком — для вкладок «Каталог» и «Без фото».
+  const catData = (recView==='catalog' || recView==='nophoto') ? await j('/admin/catalog') : null;
   const oc=cache.integration.onec_configured;
   const p=(iso)=>{const f=freshInfo(iso);return f;};
   const cat=p(cache.feeds.top5.last_updated);
   const opt=(v,l,c)=>`<option value="${v}" ${c===v?'selected':''}>${l}</option>`;
   let cats=recCat?rec.categories.filter(c=>c.category_id===recCat):rec.categories;
-  // Фильтр «только проблемные»: оставляем позиции, которые не попадут в письмо.
+  // Без GUID-фото уже вычищены из топ-5 на бэке (→ вкладка «Без фото»). Здесь — страховка.
+  cats=cats.map(c=>({...c, products:c.products.filter(p=>p.image_url)})).filter(c=>c.products.length);
+  // Фильтр «только проблемные»: нет в каталоге / нет в наличии (в письмо не попадут).
   if(recProblems) cats=cats.map(c=>({...c, products:c.products.filter(p=>!p.usable)})).filter(c=>c.products.length);
   const empty = !cats.length;
+  if(rec.purged_no_photo) toast(`Из топ-5 убрано без фото: ${num(rec.purged_no_photo)} → «Без фото»`);
+  if(rec.photos_warmed) toast(`Фото прогреты: ${num(rec.photos_warmed)} (CDN)`);
 
   const catCards = cats.map(c=>{
     const items=c.products.map(pr=>{
@@ -945,10 +974,11 @@ async function viewFeeds(){
       <span class="lr-price mono">${priceRu(pr.price)}</span>
       ${recStatusPill(pr)}</div>`).join('')}</div></section>`).join('');
 
-  // Каталог: все товары карточками (в отличие от карточек топ-5). Фильтры: категория + тег.
+  // Каталог / «Без фото»: карточки. Фильтры: категория + тег (только в каталоге).
   const tagCls={'Новинка':'tag-new','Топ':'tag-top','Сопутствующий':'tag-rel'};
   let ccats = catData ? (recCat?catData.categories.filter(c=>c.category_id===recCat):catData.categories) : [];
-  if(recTag) ccats = ccats.map(c=>({...c, products:c.products.filter(p=>(p.tags||[]).includes(recTag))})).filter(c=>c.products.length);
+  if(recView==='nophoto') ccats = ccats.map(c=>({...c, products:c.products.filter(p=>!p.image_url)})).filter(c=>c.products.length);
+  if(recView==='catalog' && recTag) ccats = ccats.map(c=>({...c, products:c.products.filter(p=>(p.tags||[]).includes(recTag))})).filter(c=>c.products.length);
   const catalogCards = ccats.map(c=>{
     const items=c.products.map(pr=>{
       const dim = pr.in_stock ? '' : ' dim';
@@ -956,14 +986,17 @@ async function viewFeeds(){
         ? `<img class="recimg" src="${esc(pr.image_url)}" alt="" onerror="imgOnerr(this)">`
         : `<div class="recimg ph">нет фото</div>`;
       const chips=(pr.tags||[]).map(t=>`<span class="tagchip ${tagCls[t]||''}">${esc(t)}</span>`).join('');
-      const flag = pr.in_stock ? '<div class="recflag" style="color:var(--ok)">в наличии</div>'
+      const flag = !pr.image_url
+        ? '<div class="recflag" style="color:var(--warn)">без GUID · не в письмах</div>'
+        : pr.in_stock ? '<div class="recflag" style="color:var(--ok)">в наличии</div>'
         : '<div class="recflag" style="color:var(--warn)">нет в наличии</div>';
       const label = esc(pr.name||('id '+pr.product_id));
       const name = pr.product_url
         ? `<a class="recname" href="${esc(pr.product_url)}" target="_blank" rel="noopener" title="${esc(pr.name||pr.product_id)}">${label}</a>`
         : `<div class="recname" title="${esc(pr.name||pr.product_id)}">${label}</div>`;
       return `<div class="recitem${dim}">${img}${chips?`<div class="tagrow">${chips}</div>`:''}${name}
-        <div class="recprice">${priceRu(pr.price)}</div>${flag}</div>`;
+        <div class="recprice">${priceRu(pr.price)}</div>
+        <div class="recflag mono" style="color:var(--muted)">${esc(pr.product_id)}</div>${flag}</div>`;
     }).join('');
     return `<section><div class="eyebrow">
         <h2>${esc(c.category_name)} <span style="color:var(--muted);font-weight:600">· ${c.products.length} тов.</span></h2>
@@ -971,12 +1004,15 @@ async function viewFeeds(){
       <div class="recgrid">${items}</div></section>`;
   }).join('');
   const catShown = ccats.reduce((s,c)=>s+c.products.length,0);
+  const catalogEmptyMsg = recView==='nophoto'
+    ? 'Все товары с GUID-фото — вкладка пуста. ✓'
+    : (recTag ? 'Нет товаров с этим тегом.' : 'Каталог пуст. Импортируйте товары из файла.');
   const catalogSection = (catData && catData.product_count)
-    ? (ccats.length?catalogCards:'<section><div class="tablewrap"><div class="empty">Нет товаров с этим тегом.</div></div></section>')
+    ? (ccats.length?catalogCards:`<section><div class="tablewrap"><div class="empty">${catalogEmptyMsg}</div></div></section>`)
     : '<section><div class="tablewrap"><div class="empty">Каталог пуст. Импортируйте товары из файла.</div></div></section>';
 
   const seg=(v,l)=>`<button class="${recView===v?'active':''}" onclick="setRecView('${v}')">${l}</button>`;
-  const filterCats = (recView==='catalog' && catData) ? catData.categories : rec.categories;  // в каталоге — все категории
+  const filterCats = ((recView==='catalog'||recView==='nophoto') && catData) ? catData.categories : rec.categories;
   const catOpts=`${opt('','Все категории',recCat)}${filterCats.map(c=>opt(c.category_id,c.category_name,recCat)).join('')}`;
   $('view').innerHTML=`<section>
     <div class="card srcbar">
@@ -996,6 +1032,9 @@ async function viewFeeds(){
       <div class="stat"><b>${num(rec.position_count)}</b><span>позиций в топе</span></div>
       <div class="stat"><b style="color:${rec.usable_count===rec.position_count?'var(--ok)':'var(--warn)'}">${num(rec.usable_count)}</b><span>пойдёт в письма</span></div>
       <div class="stat"><b>${num(cache.feeds.products.count)}</b><span>товаров в каталоге</span></div>
+      ${catData && catData.no_photo_count!=null
+        ? `<div class="stat" style="cursor:pointer" onclick="setRecView('nophoto')" title="Открыть вкладку «Без фото»"><b style="color:${catData.no_photo_count?'var(--warn)':'var(--ok)'}">${num(catData.no_photo_count)}</b><span>без фото</span></div>`
+        : ''}
     </div>
     <div class="toolbar">
       <div style="display:flex;gap:10px;align-items:center;flex-wrap:wrap">
@@ -1004,18 +1043,20 @@ async function viewFeeds(){
           ? `<select class="inp" onchange="recTag=this.value;viewFeeds()">
                ${opt('','Все теги',recTag)}${(catData&&catData.tags||[]).map(t=>opt(t.tag,`${t.tag} (${t.count})`,recTag)).join('')}
              </select>`
-          : `<label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
-               <span class="track"></span><span class="lbl">только проблемные</span></label>`}
+          : (recView==='nophoto' ? '' : `<label class="switch"><input type="checkbox" ${recProblems?'checked':''} onchange="recProblems=this.checked;viewFeeds()">
+               <span class="track"></span><span class="lbl">только проблемные</span></label>`)}
       </div>
-      <div class="seg">${seg('cards','Топ-5')}${seg('catalog','Каталог')}${seg('table','Таблица')}${seg('list','Список')}</div>
+      <div class="seg">${seg('cards','Топ-5')}${seg('catalog','Каталог')}${seg('nophoto','Без фото')}${seg('table','Таблица')}${seg('list','Список')}</div>
     </div>
     <p class="legend" style="margin:0 2px 4px">${recView==='catalog'
       ? `Каталог${recTag?` · тег «${esc(recTag)}»`:''}: показано <b>${num(catShown)}</b> тов. Теги проставляются автоматически по типу файла (Новинка/Топ/Сопутствующий).`
-      : 'Топ-5 используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции в письмо не попадут.'}</p>
+      : recView==='nophoto'
+      ? `Без GUID-фото: <b>${num(catShown)}</b> тов. В авторассылки (Best Offer, корзина, постпродажа) и пересчёт топ-5 <b>не попадают</b>. Нужен импорт с <code>static.groster.me/images/shop/&lt;GUID&gt;</code>.`
+      : 'Топ-5 используются в <b>Best Offer</b> (ротация) и <b>Постпродаже</b> (cross-sell). Затемнённые позиции (нет в наличии / без фото) в письмо не попадут.'}</p>
   </section>
-  ${recView==='catalog'? catalogSection
+  ${(recView==='catalog'||recView==='nophoto')? catalogSection
     : !rec.category_count?'<section><div class="tablewrap"><div class="empty">Топ-5 не заданы. Импортируйте каталог и нажмите «Пересчитать топ-5», либо синхронизируйте из 1С.</div></div></section>'
-    : empty?'<section><div class="tablewrap"><div class="empty">'+(recProblems?'Проблемных позиций нет — весь топ-5 в наличии. ✓':'Нет позиций.')+'</div></div></section>'
+    : empty?'<section><div class="tablewrap"><div class="empty">'+(recProblems?'Проблемных позиций нет — весь топ-5 готов к письмам. ✓':'Нет позиций.')+'</div></div></section>'
     : recView==='table'?recTable : recView==='list'?recList : catCards}`;
 }
 async function syncCatalog(){
@@ -2185,7 +2226,12 @@ async function tplTest(){
   const to=($('tpl_test_to')||{}).value||''; if(!to){ toast('Укажите email'); return; }
   const r=await j('/admin/scenario/'+encodeURIComponent(tplSvc)+'/test',{method:'POST',
     headers:{'Content-Type':'application/json'},body:JSON.stringify({email:to})});
-  toast(r.error?('Ошибка ESP: '+r.error):(!r.ok?'Ошибка':(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)')));
+  if(r.error || !r.ok){
+    const msg=r.error||'Ошибка отправки';
+    toast('Почта: '+msg.slice(0,120)+(msg.length>120?'…':''));
+    return;
+  }
+  toast(r.live?'Тест отправлен на '+to:'Тест записан в лог (dev)');
 }
 
 /* Settings */
@@ -2204,6 +2250,107 @@ async function saveSetting(k,v,type){
 }
 let settingsTab='mail';
 function setSettingsTab(t){ settingsTab=t; viewSettings(); }
+let actFilter={level:'',source:'',service:'',q:'',limit:100,page:0};
+const ACT_SRC={best_offer:'Best Offer',cart:'Корзина',postsale:'Постпродажа',mailer:'Mailer',
+  worker:'Воркеры',admin:'Админка',onec:'1С',import:'Импорт',system:'Система'};
+const ACT_LVL={error:'ошибка',warn:'предупреждение',info:'инфо',debug:'отладка'};
+function actPage(p){ actFilter.page=Math.max(0,p); renderActivityLogs(); }
+function toggleLogDetails(id){
+  const row=document.getElementById('logd-'+id); if(!row) return;
+  row.classList.toggle('open');
+}
+async function clearActivityLogs(mode){
+  const q = mode==='old' ? '?older_than_days=7' : '';
+  const conf = mode==='old'
+    ? 'Удалить записи старше 7 дней?'
+    : 'Очистить весь диагностический журнал? Это нельзя отменить.';
+  if(!confirm(conf)) return;
+  const r=await j('/admin/activity-log'+q,{method:'DELETE'});
+  toast(r.ok?`Удалено: ${r.deleted||0}`:`Ошибка: ${r.reason||''}`);
+  actFilter.page=0; renderActivityLogs();
+}
+async function renderActivityLogs(){
+  const box=$('settingsBody'); if(!box) return;
+  box.innerHTML='<div class="card svc-sub">Загрузка журнала…</div>';
+  const lim=+actFilter.limit||100;
+  const qs=new URLSearchParams();
+  if(actFilter.level) qs.set('level',actFilter.level);
+  if(actFilter.source) qs.set('source',actFilter.source);
+  if(actFilter.service) qs.set('service',actFilter.service);
+  if(actFilter.q) qs.set('q',actFilter.q);
+  qs.set('limit',lim); qs.set('offset',actFilter.page*lim);
+  let data;
+  try{ data=await j('/admin/activity-log?'+qs); }
+  catch(e){
+    box.innerHTML=`<div class="card empty">Не удалось загрузить журнал.<br>
+      <span class="mono">${esc((e&&e.message)||e)}</span><br>
+      <span class="svc-sub">Если таблица ещё не создана — примените миграцию
+      <code>db/migrations/007_activity_log.sql</code>.</span></div>`;
+    return;
+  }
+  const opt=(v,l,cur)=>`<option value="${v}" ${cur===v?'selected':''}>${l}</option>`;
+  const reset='actFilter.page=0;';
+  const h24=data.last_24h||{};
+  const stats=`<div class="log-stats">
+    <div class="log-stat"><b>${num(h24.error||0)}</b> ошибок / 24ч</div>
+    <div class="log-stat"><b>${num(h24.warn||0)}</b> предупр. / 24ч</div>
+    <div class="log-stat"><b>${num(h24.info||0)}</b> инфо / 24ч</div>
+    <div class="log-stat"><b>${num(data.total||0)}</b> всего · хранение ${data.retention_days||30} дн.</div>
+  </div>`;
+  const filters=`<div class="filters">
+    <select class="inp" onchange="${reset}actFilter.level=this.value;renderActivityLogs()">
+      ${opt('','Все уровни',actFilter.level)}
+      ${['error','warn','info','debug'].map(l=>opt(l,ACT_LVL[l]||l,actFilter.level)).join('')}</select>
+    <select class="inp" onchange="${reset}actFilter.source=this.value;renderActivityLogs()">
+      ${opt('','Все источники',actFilter.source)}
+      ${Object.entries(ACT_SRC).map(([k,v])=>opt(k,v,actFilter.source)).join('')}</select>
+    <select class="inp" onchange="${reset}actFilter.service=this.value;renderActivityLogs()">
+      ${opt('','Все сценарии',actFilter.service)}
+      ${opt('best_offer','Best Offer',actFilter.service)}
+      ${opt('cart','Корзина',actFilter.service)}
+      ${opt('postsale','Постпродажа',actFilter.service)}</select>
+    <input class="inp wide" placeholder="поиск: user / order / текст…" value="${esc(actFilter.q||'')}"
+      onkeydown="if(event.key==='Enter'){${reset}actFilter.q=this.value;renderActivityLogs()}">
+    <button class="btn" onclick="${reset}actFilter.q=(this.previousElementSibling.value||'');renderActivityLogs()">Найти</button>
+    <button class="btn" onclick="renderActivityLogs()">Обновить</button>
+    <button class="btn" onclick="clearActivityLogs('old')">Старше 7 дн.</button>
+    <button class="btn" onclick="clearActivityLogs('all')">Очистить всё</button>
+  </div>`;
+  const items=data.items||[];
+  const dt=iso=>iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'2-digit',hour:'2-digit',minute:'2-digit',second:'2-digit'}):'—';
+  const rows=items.map(r=>{
+    const det=r.details&&Object.keys(r.details).length
+      ? `<tr class="log-details" id="logd-${r.id}"><td colspan="6"><pre>${esc(JSON.stringify(r.details,null,2))}</pre></td></tr>` : '';
+    const hasDet=!!(r.details&&Object.keys(r.details).length);
+    const ids=[r.user_id&&`user:${r.user_id}`,r.order_id&&`order:${r.order_id}`,r.session_id&&`sess:${r.session_id}`,r.ref_id!=null&&`#${r.ref_id}`]
+      .filter(Boolean).map(esc).join('<br>')||'—';
+    return `<tr style="cursor:${hasDet?'pointer':'default'}" ${hasDet?`onclick="toggleLogDetails(${r.id})"`:''}>
+      <td class="mono">${dt(r.created_at)}</td>
+      <td><span class="pill lvl-${esc(r.level)}">${esc(ACT_LVL[r.level]||r.level)}</span></td>
+      <td>${esc(ACT_SRC[r.source]||r.source)}${r.service?` · <span class="mono">${esc(SVC[r.service]?.ru||r.service)}</span>`:''}</td>
+      <td class="mono">${esc(r.event)}</td>
+      <td class="log-msg">${esc(r.message)}${hasDet?' <span class="svc-sub">▾</span>':''}</td>
+      <td class="mono" style="font-size:11.5px;white-space:normal">${ids}</td>
+    </tr>${det}`;
+  }).join('');
+  const table=items.length
+    ? `<div class="tablewrap"><table><thead><tr>
+        <th>Время</th><th>Уровень</th><th>Источник</th><th>Событие</th><th>Сообщение</th><th>Связи</th>
+      </tr></thead><tbody>${rows}</tbody></table></div>`
+      + pager(actFilter.page, items.length>=lim, 'actPage')
+    : (actFilter.page>0
+      ? `<div class="tablewrap"><div class="empty">Больше записей нет.</div></div>`+pager(actFilter.page,false,'actPage')
+      : `<div class="tablewrap"><div class="empty">Журнал пока пуст.<br>
+          Записи появятся при работе воркеров, ручном запуске сценариев, skip-проверках и ошибках отправки.
+          <br><span class="svc-sub">Журнал писем (email_log) — отдельно: <a href="#/emails" style="color:var(--accent)">Отчёты → Журнал писем</a>.</span>
+        </div></div>`);
+  box.innerHTML=`${stats}${filters}
+    <p class="legend">Детальный процесс авторассылок: старты батчей, gate-skip с причинами,
+      постановка в очередь, <b>SMTP ретраи/ошибки с текстом ответа сервера</b>, отмены Постпродажи,
+      импорт/1С, ошибки воркеров. Клик по строке — JSON-детали (error, attempts, to…).
+      Фильтр источника «Mailer» — только почтовые сбои. Хранение ${data.retention_days||30} дн.</p>
+    ${table}`;
+}
 /* Колесо фортуны */
 let wheelCfg=null, wheelPrevT;
 function ensureWheelLib(){ return new Promise(res=>{
@@ -2342,7 +2489,7 @@ async function saveWheel(){
 
 async function viewSettings(){
   setTitle('Настройки','параметры сервиса');
-  const tabs=[['mail','Почта'],['params','Параметры'],['integrations','Интеграции']];
+  const tabs=[['mail','Почта'],['params','Параметры'],['integrations','Интеграции'],['logs','Логи']];
   const bar=`<div class="tabbar">${tabs.map(([id,l])=>
     `<button class="tab ${settingsTab===id?'active':''}" onclick="setSettingsTab('${id}')">${l}</button>`).join('')}</div>`;
   $('view').innerHTML=`<section>${bar}<div id="settingsBody"><div class="card svc-sub">Загрузка…</div></div></section>`;
@@ -2350,6 +2497,11 @@ async function viewSettings(){
   if(settingsTab==='mail'){
     $('settingsBody').innerHTML='<div id="mailbox"><div class="card svc-sub">Загрузка…</div></div>';
     loadMail(); return;
+  }
+  if(settingsTab==='logs'){
+    setTitle('Настройки','диагностический журнал');
+    await renderActivityLogs();
+    return;
   }
   const s=await j('/admin/settings');
   if(settingsTab==='params'){
@@ -2368,7 +2520,7 @@ async function viewSettings(){
     $('settingsBody').innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
       <div class="card">
         <div class="svc-name" style="margin-bottom:8px">Почта</div>
-        <div class="field"><span class="k">mailer-service</span>${st(ro.smtp_configured, ro.smtp_host, 'на вкладке «Почта»')}</div>
+        <div class="field"><span class="k">mailer-service</span>${st(ro.smtp_configured, ro.mail_status||ro.smtp_host, 'на вкладке «Почта»')}</div>
         <div class="svc-sub" style="margin-top:10px">Провайдер и SMTP — на вкладке «Почта».</div>
       </div>
       <div class="card">
@@ -2405,45 +2557,97 @@ async function loadMail(){
   const m=await j('/admin/mail/config');
   const box=$('mailbox'); if(!box) return;
   if(!m.configured){
-    box.innerHTML=`<div class="card empty">mailer-service не подключён.<br>
-      <span class="svc-sub">Укажите <code>MAILER_SERVICE_URL</code> в .env основного приложения и запустите микросервис.</span></div>`;
+    box.innerHTML=`<div class="card empty">Почта не настроена.<br>
+      <span class="svc-sub">Задайте <code>MAIL_TRANSPORT=sendmail</code> в .env или подключите <code>MAILER_SERVICE_URL</code>.</span></div>`;
     return;
   }
   if(m.error){ box.innerHTML=`<div class="card empty">Сервис недоступен: ${esc(m.error)}<br>
-    <span class="svc-sub">${esc(m.service_url)}</span></div>`; return; }
+    <span class="svc-sub">${esc(m.service_url||'')}</span></div>`; return; }
+  const live=m.provider==='smtp'||m.provider==='sendmail';
+  const modeLabel=m.provider==='sendmail'?'боевой sendmail':m.provider==='smtp'?'боевой SMTP':'dev-лог';
   const fld=(k,label,val,type='text')=>`<div class="field"><span class="k">${esc(label)}</span>
     <input class="inp wide" id="mail_${k}" type="${type}" value="${esc(val==null?'':val)}"></div>`;
+  const localNote=m.local
+    ? `<div class="svc-sub" style="margin-bottom:12px">Локальный транспорт приложения (без mailer-service).
+         Параметры правятся в <code>.env</code>: <code>MAIL_TRANSPORT</code>, <code>SENDMAIL_PATH</code>, <code>MAIL_FROM</code>.</div>`
+    : '';
+  const transportSel=`<div class="field"><span class="k">Транспорт</span>
+    <select class="inp wide" id="mail_mail_transport" ${m.local?'disabled':''}>
+      <option value="" ${!m.mail_transport?'selected':''}>авто</option>
+      <option value="sendmail" ${m.mail_transport==='sendmail'?'selected':''}>sendmail</option>
+      <option value="smtp" ${m.mail_transport==='smtp'?'selected':''}>SMTP</option>
+    </select></div>`;
+  const presets=`<div class="svc-sub" style="margin-bottom:10px">Свой ящик через микросервис (транспорт SMTP):
+    <button type="button" class="btn" style="margin:0 4px" onclick="mailPreset('yandex')">Яндекс</button>
+    <button type="button" class="btn" style="margin:0 4px" onclick="mailPreset('mailru')">Mail.ru</button>
+    <button type="button" class="btn" style="margin:0 4px" onclick="mailPreset('gmail')">Gmail</button>
+    — подставит хост/порт; логин, пароль приложения и From укажите сами.
+  </div>`;
   box.innerHTML=`<div class="grid" style="grid-template-columns:repeat(auto-fit,minmax(320px,1fr))">
     <div class="card">
-      <div class="field"><span class="k">Микросервис</span><span class="pill live">${esc(m.service_url)}</span></div>
-      <div class="field"><span class="k">Режим</span><span class="pill ${m.provider==='smtp'?'live':'dev'}">${m.provider==='smtp'?'боевой SMTP':'dev-лог'}</span></div>
-      ${fld('smtp_host','SMTP-хост',m.smtp_host)}
+      <div class="field"><span class="k">${m.local?'Режим':'Микросервис'}</span>
+        <span class="pill ${live?'live':'dev'}">${m.local?esc(modeLabel):esc(m.service_url)}</span></div>
+      ${m.local?'':`<div class="field"><span class="k">Режим</span><span class="pill ${live?'live':'dev'}">${esc(modeLabel)}</span></div>`}
+      ${localNote}
+      ${m.local?'':presets}
+      ${transportSel}
+      ${fld('sendmail_path','Путь sendmail',m.sendmail_path||'/usr/sbin/sendmail')}
+      ${fld('smtp_host','SMTP-хост (если SMTP)',m.smtp_host)}
       ${fld('smtp_port','Порт',m.smtp_port,'number')}
-      ${fld('smtp_user','Логин',m.smtp_user)}
-      <div class="field"><span class="k">Пароль</span>
-        <input class="inp wide" id="mail_smtp_password" type="password" placeholder="${m.has_password?'●●●●● (сохранён, оставьте пустым)':'не задан'}"></div>
-      <div class="field"><span class="k">STARTTLS</span>
-        <label class="switch"><input type="checkbox" id="mail_smtp_starttls" ${m.smtp_starttls?'checked':''}>
+      ${fld('smtp_user','Логин SMTP',m.smtp_user)}
+      <div class="field"><span class="k">Пароль SMTP</span>
+        <input class="inp wide" id="mail_smtp_password" type="password" placeholder="${m.has_password?'●●●●● (сохранён, оставьте пустым)':'не задан'}" ${m.local?'disabled':''}></div>
+      <div class="field"><span class="k">STARTTLS (587)</span>
+        <label class="switch"><input type="checkbox" id="mail_smtp_starttls" ${m.smtp_starttls?'checked':''} ${m.local?'disabled':''}>
+          <span class="track"></span></label></div>
+      <div class="field"><span class="k">SSL (465)</span>
+        <label class="switch"><input type="checkbox" id="mail_smtp_ssl" ${m.smtp_ssl||Number(m.smtp_port)===465?'checked':''} ${m.local?'disabled':''}>
           <span class="track"></span></label></div>
       ${fld('mail_from','Адрес отправителя',m.mail_from)}
       ${fld('mail_from_name','Имя отправителя',m.mail_from_name)}
-      ${fld('rate_per_min','Лимит писем/мин',m.rate_per_min,'number')}
-      <button class="btn primary" style="margin-top:12px" onclick="saveMail()">Сохранить провайдера</button>
+      ${m.rate_per_min!=null?fld('rate_per_min','Лимит писем/мин',m.rate_per_min,'number'):''}
+      ${m.local?'':`<button class="btn primary" style="margin-top:12px" onclick="saveMail()">Сохранить провайдера</button>`}
     </div>
     <div class="card">
       <div class="svc-name" style="margin-bottom:8px">Проверка</div>
-      <div class="svc-sub" style="margin-bottom:12px">Отправить тестовое письмо через текущие настройки провайдера.</div>
+      <div class="svc-sub" style="margin-bottom:12px">Отправить тестовое письмо через текущий транспорт (sendmail / SMTP).</div>
       <div style="display:flex;gap:8px">
         <input id="mail_test_to" class="inp wide" type="email" placeholder="email для теста">
         <button class="btn" onclick="testMail()">Отправить тест</button>
       </div>
       <div id="mail_test_result" class="svc-sub" style="margin-top:10px"></div>
     </div></div>`;
+  if(m.local){
+    ['sendmail_path','smtp_host','smtp_port','smtp_user','mail_from','mail_from_name'].forEach(k=>{
+      const el=$('mail_'+k); if(el) el.disabled=true;
+    });
+  }
+}
+function mailPreset(kind){
+  const map={
+    yandex:{host:'smtp.yandex.ru',port:465,ssl:true,starttls:false},
+    mailru:{host:'smtp.mail.ru',port:465,ssl:true,starttls:false},
+    gmail:{host:'smtp.gmail.com',port:587,ssl:false,starttls:true},
+  };
+  const p=map[kind]; if(!p) return;
+  const set=(id,v)=>{ const el=$(id); if(el) el.value=v; };
+  const chk=(id,on)=>{ const el=$(id); if(el) el.checked=!!on; };
+  set('mail_mail_transport','smtp');
+  set('mail_smtp_host',p.host);
+  set('mail_smtp_port',p.port);
+  chk('mail_smtp_ssl',p.ssl);
+  chk('mail_smtp_starttls',p.starttls);
+  toast('Подставлено: '+p.host+':'+p.port+' — укажите логин, пароль приложения и From');
 }
 async function saveMail(){
   const g=k=>($('mail_'+k)||{}).value;
-  const patch={smtp_host:g('smtp_host'), smtp_port:+g('smtp_port')||587, smtp_user:g('smtp_user'),
-    smtp_starttls:$('mail_smtp_starttls').checked, mail_from:g('mail_from'),
+  const patch={
+    mail_transport:g('mail_transport'),
+    sendmail_path:g('sendmail_path'),
+    smtp_host:g('smtp_host'), smtp_port:+g('smtp_port')||587, smtp_user:g('smtp_user'),
+    smtp_starttls:$('mail_smtp_starttls').checked,
+    smtp_ssl:$('mail_smtp_ssl').checked,
+    mail_from:g('mail_from'),
     mail_from_name:g('mail_from_name'), rate_per_min:+g('rate_per_min')||120};
   const pw=g('smtp_password'); if(pw) patch.smtp_password=pw;
   const r=await j('/admin/mail/config',{method:'PUT',headers:{'Content-Type':'application/json'},body:JSON.stringify(patch)});
@@ -2456,7 +2660,8 @@ async function testMail(){
   $('mail_test_result').textContent='Отправка…';
   const r=await j('/admin/mail/test',{method:'POST',headers:{'Content-Type':'application/json'},body:JSON.stringify({to})});
   $('mail_test_result').innerHTML = r.ok
-    ? '<span style="color:var(--ok)">✓ Отправлено ('+esc(r.message_id||'')+')</span>'
+    ? `<span style="color:var(--ok)">✓ Отправлено (${esc(r.message_id||'')})${r.mailer?' · '+esc(r.mailer):''}</span>`
+      +(r.hint?`<div class="svc-sub" style="margin-top:6px">${esc(r.hint)}</div>`:'')
     : '<span style="color:var(--alert)">✗ '+esc(r.error||'ошибка')+'</span>';
 }
 
@@ -2498,6 +2703,41 @@ async function viewLeads(){
   </section>`;
 }
 
+async function viewEmail(id){
+  setTitle('Письмо клиенту', '#'+id);
+  let d;
+  try{ d=await j('/admin/logs/'+encodeURIComponent(id)); }
+  catch(e){ $('view').innerHTML='<section><div class="card empty">Ошибка загрузки.</div></section>'; return; }
+  if(!d.found){ $('view').innerHTML='<section><div class="card empty">Письмо не найдено.</div></section>'; return; }
+  const dt2=iso=>iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+  const f=(k,v)=>`<div class="field"><span class="k">${k}</span><span class="mono">${esc(v)}</span></div>`;
+  $('view').innerHTML=`<section>
+    <div class="filters">
+      <a class="btn" href="#/emails">← журнал</a>
+      <a class="btn" href="#/lead/${encodeURIComponent(d.user_id)}">карточка лида</a>
+    </div>
+    <div class="eyebrow"><h2>Что ушло клиенту</h2><span class="rule"></span></div>
+    <div class="card" style="margin-bottom:16px">
+      ${f('Тема', d.subject||'—')}
+      ${f('Кому', d.recipient_email||d.user_id)}
+      ${f('Сценарий', SVC[d.service]?.ru||d.service)}
+      ${f('Статус', d.status)}
+      ${f('Отправлено', dt2(d.sent_at))}
+      ${f('Товары', (d.product_ids||[]).join(', ')||'—')}
+    </div>
+    ${!d.has_html && d.can_preview ? `<div class="card" style="margin-bottom:12px;padding:12px 16px;color:var(--muted);font-size:13px">
+      Снимок HTML не сохранялся для этой отправки — ниже письмо собрано заново по товарам и шаблону.
+      Цены/наличие/макет могли измениться. Точный снимок будет у новых писем после обновления воркеров.
+    </div>` : ''}
+    ${d.can_preview || d.has_html
+      ? `<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff">
+           <iframe title="Письмо как у клиента" sandbox="" src="/admin/logs/${+d.id}/preview"
+             style="width:100%;min-height:720px;border:0;background:#fff;display:block"></iframe>
+         </div>`
+      : `<div class="tablewrap"><div class="empty">Нечего показать: нет HTML и списка товаров.</div></div>`}
+  </section>`;
+}
+
 async function viewLead(uid){
   setTitle('Карточка лида', uid);
   let d;
@@ -2509,10 +2749,12 @@ async function viewLead(uid){
   const emails=d.emails.map(e=>`<tr>
     <td>${esc(SVC[e.service]?.ru||e.service)}</td>
     <td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
+    <td>${esc(e.subject||'—')}</td>
     <td class="mono">${esc((e.product_ids||[]).join(', ')||'—')}</td>
     <td class="mono">${dt2(e.sent_at)}</td>
     <td class="mono">${e.order_id?esc(e.order_id):'—'}</td>
-    <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('');
+    <td class="mono">${e.revenue?rub(e.revenue):'—'}</td>
+    <td><button type="button" class="btn" onclick="openEmail(${+e.id},event)">Открыть</button></td></tr>`).join('');
   const orders=d.orders.map(o=>`<tr>
     <td class="mono">${esc(o.order_id)}</td>
     <td><span class="pill ${['cancelled','returned','refunded'].includes((o.status||'').toLowerCase())?'unsubscribed':'sent'}">${esc(o.status)}</span></td>
@@ -2537,7 +2779,7 @@ async function viewLead(uid){
       </div></div>
     </div></section>
     <section><div class="eyebrow"><h2>История писем (${d.emails.length})</h2><span class="rule"></span></div>
-      ${d.emails.length?`<div class="tablewrap"><table><thead><tr><th>Сценарий</th><th>Статус</th><th>Товары</th><th>Отправлено</th><th>Заказ</th><th>Доход</th></tr></thead><tbody>${emails}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Писем не было.</div></div>'}</section>
+      ${d.emails.length?`<div class="tablewrap"><table><thead><tr><th>Сценарий</th><th>Статус</th><th>Тема</th><th>Товары</th><th>Отправлено</th><th>Заказ</th><th>Доход</th><th></th></tr></thead><tbody>${emails}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Писем не было.</div></div>'}</section>
     <section><div class="eyebrow"><h2>Заказы (${d.orders.length})</h2><span class="rule"></span></div>
       ${d.orders.length?`<div class="tablewrap"><table><thead><tr><th>Заказ</th><th>Статус</th><th>Дата</th><th>Сумма</th></tr></thead><tbody>${orders}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Заказов нет.</div></div>'}</section>`;
 }
@@ -2561,10 +2803,11 @@ async function run(s){
 const ROUTES={overview:viewOverview,leads:viewLeads,services:viewServices,report:viewReport,analytics:viewAnalytics,feeds:viewFeeds,emails:viewEmails,templates:viewTemplates,wheel:viewWheel,settings:viewSettings,integration:viewIntegration};
 async function route(){
   const h=(location.hash||'#/overview').slice(2);
-  markActive(h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
+  markActive(h.startsWith('email/')?'emails':h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
   try {
     if(h.startsWith('service/')) return await viewService(h.split('/')[1]);
     if(h.startsWith('lead/')) return await viewLead(decodeURIComponent(h.slice(5)));
+    if(h.startsWith('email/')) return await viewEmail(h.split('/')[1]);
     if(h==='templates'){ tplView='list'; return await viewTemplates(); }
     if(h.startsWith('templates/')) return await openTemplateView(decodeURIComponent(h.split('/')[1]));
     await (ROUTES[h]||viewOverview)();

@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     next_attempt REAL NOT NULL DEFAULT 0,
     message_id  TEXT,
     last_event  TEXT,
+    last_error  TEXT,
     created_at  REAL NOT NULL,
     sent_at     REAL
 );
@@ -39,8 +40,9 @@ CREATE TABLE IF NOT EXISTS config (key TEXT PRIMARY KEY, value TEXT);
 """
 
 # Ключи конфигурации провайдера (переопределяют .env).
-_CFG_KEYS = ("smtp_host", "smtp_port", "smtp_user", "smtp_password",
-             "smtp_starttls", "mail_from", "mail_from_name", "rate_per_min")
+_CFG_KEYS = ("mail_transport", "sendmail_path",
+             "smtp_host", "smtp_port", "smtp_user", "smtp_password",
+             "smtp_starttls", "smtp_ssl", "mail_from", "mail_from_name", "rate_per_min")
 
 
 def config_sync() -> dict:
@@ -53,13 +55,21 @@ def config_sync() -> dict:
         v = db.get(k)
         return v if v not in (None, "") else default
 
-    starttls = db.get("smtp_starttls")
+    def flag(key, default: bool) -> bool:
+        raw = db.get(key)
+        if raw is None or raw == "":
+            return default
+        return raw.lower() in ("1", "true", "yes")
+
     return {
+        "mail_transport": s("mail_transport", settings.mail_transport),
+        "sendmail_path": s("sendmail_path", settings.sendmail_path),
         "smtp_host": s("smtp_host", settings.smtp_host),
         "smtp_port": int(s("smtp_port", settings.smtp_port)),
         "smtp_user": s("smtp_user", settings.smtp_user),
         "smtp_password": s("smtp_password", settings.smtp_password),
-        "smtp_starttls": (starttls.lower() in ("1", "true", "yes")) if starttls else settings.smtp_starttls,
+        "smtp_starttls": flag("smtp_starttls", settings.smtp_starttls),
+        "smtp_ssl": flag("smtp_ssl", settings.smtp_ssl),
         "mail_from": s("mail_from", settings.mail_from),
         "mail_from_name": s("mail_from_name", settings.mail_from_name),
         "rate_per_min": int(s("rate_per_min", settings.rate_per_min)),
@@ -72,6 +82,10 @@ def _init_sync() -> None:
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
     _conn.executescript(_SCHEMA)
+    # Идемпотентно для уже существующих БД (CREATE TABLE IF NOT EXISTS колонку не добавит).
+    cols = {r[1] for r in _conn.execute("PRAGMA table_info(outbox)").fetchall()}
+    if "last_error" not in cols:
+        _conn.execute("ALTER TABLE outbox ADD COLUMN last_error TEXT")
     _conn.commit()
 
 
@@ -129,6 +143,11 @@ async def mark_failed(id: str, attempts: int) -> None:
         _exec, "UPDATE outbox SET state='failed', attempts=? WHERE id=?", (attempts, id))
 
 
+async def set_last_error(id: str, error: str) -> None:
+    await asyncio.to_thread(
+        _exec, "UPDATE outbox SET last_error=? WHERE id=?", (error[:1000], id))
+
+
 async def get(id: str) -> dict | None:
     rows = await asyncio.to_thread(_query, "SELECT * FROM outbox WHERE id=?", (id,))
     return dict(rows[0]) if rows else None
@@ -143,9 +162,13 @@ async def set_event(id: str, event: str) -> None:
     await asyncio.to_thread(_exec, "UPDATE outbox SET last_event=? WHERE id=?", (event, id))
 
 
-async def stats() -> dict:
-    rows = await asyncio.to_thread(_query, "SELECT state, count(*) c FROM outbox GROUP BY state")
+def stats_sync() -> dict:
+    rows = _query("SELECT state, count(*) c FROM outbox GROUP BY state")
     return {r["state"]: r["c"] for r in rows}
+
+
+async def stats() -> dict:
+    return await asyncio.to_thread(stats_sync)
 
 
 async def get_config() -> dict:

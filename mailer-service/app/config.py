@@ -7,12 +7,18 @@ from pydantic_settings import BaseSettings, SettingsConfigDict
 class Settings(BaseSettings):
     model_config = SettingsConfigDict(env_file=".env", extra="ignore")
 
-    # Подключение к провайдеру (SMTP-relay ESP). Пусто host → dev-режим (лог, без реальной отправки).
+    # Транспорт: sendmail | smtp | '' (авто: sendmail если бинарь есть и smtp пуст).
+    mail_transport: str = ""
+    sendmail_path: str = "/usr/sbin/sendmail"
+
+    # SMTP: ESP или свой ящик. Пусто host + не sendmail → dev-режим (лог).
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_starttls: bool = True
+    # Implicit SSL (обычно порт 465). Если false и port=465 — всё равно SSL.
+    smtp_ssl: bool = False
     mail_from: str = "noreply@mail.groster.me"
     mail_from_name: str = "groster.me"
 

@@ -17,7 +17,7 @@ from fastapi import APIRouter, HTTPException
 from fastapi.responses import FileResponse
 from pydantic import BaseModel
 
-from app import app_settings, db, onec, postsale, svc_config
+from app import activity_log, app_settings, db, onec, postsale, svc_config
 from app.config import settings
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
@@ -412,13 +412,21 @@ async def run_due(con, mailer=None, force: bool = False) -> int:
     mailer = mailer or get_mailer()
 
     # Фаза 1: активные без heartbeat дольше таймаута и с непустой корзиной → departed.
-    await con.execute(
+    marked = await con.execute(
         """UPDATE cart_sessions SET state = 'departed', departed_at = now()
            WHERE state = 'active'
              AND now() - last_ping_at > make_interval(secs => $1)
              AND jsonb_array_length(cart_items) > 0""",
         cfg["depart_timeout_sec"],
     )
+    departed_n = int(str(marked).split()[-1]) if marked else 0
+    if departed_n:
+        await activity_log.write(
+            con, level="info", source="cart", event="departed", service="cart",
+            message=f"детект ухода: {departed_n} сессий → departed "
+                    f"(timeout {cfg['depart_timeout_sec']}с)",
+            details={"count": departed_n, "depart_timeout_sec": cfg["depart_timeout_sec"]},
+        )
 
     # Фаза 2: departed дольше grace и не вернулись → обработка.
     departed = await con.fetch(
@@ -428,6 +436,14 @@ async def run_due(con, mailer=None, force: bool = False) -> int:
              AND now() - departed_at > make_interval(secs => $1)
            FOR UPDATE SKIP LOCKED""",
         cfg["grace_sec"],
+    )
+    if not departed:
+        return 0
+    await activity_log.write(
+        con, level="info", source="cart", event="tick_start", service="cart",
+        message=f"обработка departed-сессий: {len(departed)} (grace {cfg['grace_sec']}с)"
+                + (" · ручной запуск" if force else ""),
+        details={"sessions": len(departed), "grace_sec": cfg["grace_sec"], "force": force},
     )
     await app_settings.load_site(con)   # адреса из админки: ссылка отписки и CTA в магазин
     look = await app_settings.template_look(con)
@@ -441,6 +457,17 @@ async def run_due(con, mailer=None, force: bool = False) -> int:
                 sent += 1
         except Exception as e:  # noqa: BLE001 — одна битая сессия не останавливает тик
             print(f"[cart] session {s['session_id']} ERROR {type(e).__name__}: {e}")
+            await activity_log.write(
+                con, level="error", source="cart", event="send_failed", service="cart",
+                session_id=s["session_id"],
+                message=f"ошибка сессии: {type(e).__name__}: {e}",
+                details={"error": str(e)[:500]},
+            )
+    await activity_log.write(
+        con, level="info", source="cart", event="tick_done", service="cart",
+        message=f"тик корзины: отправлено {sent} из {len(departed)} сессий",
+        details={"sent": sent, "sessions": len(departed)},
+    )
     return sent
 
 
@@ -490,7 +517,9 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         )
     )
     order_placed = await _order_placed(con, s["user_id"], s["email"], s["created_at"])
+    from app import images
     products = await _load_products(con, [i["product_id"] for i in items])
+    products = await images.warm_products(products, require_live=True)
 
     reason = cart_gate(
         has_items=len(items) > 0,
@@ -508,12 +537,26 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
             "UPDATE cart_sessions SET state = 'sent' WHERE session_id = $1",  # закрываем, не ретраим
             s["session_id"],
         )
+        await activity_log.write(
+            con, level="warn", source="cart", event="skip", service="cart",
+            user_id=s["user_id"] or (sub["user_id"] if sub else None),
+            session_id=s["session_id"],
+            message=f"skip: {activity_log.reason_ru(reason)}",
+            details={"reason": reason, "items": len(items), "products_found": len(products),
+                     "has_email": bool(email), "within_cooldown": within_cooldown},
+        )
         return False
 
     # Двойная проверка заказа непосредственно перед отправкой (ТЗ 3.6, гонка письмо/заказ).
     if await _order_placed(con, s["user_id"], s["email"], s["created_at"]):
         await con.execute(
             "UPDATE cart_sessions SET state = 'converted' WHERE session_id = $1", s["session_id"]
+        )
+        await activity_log.write(
+            con, level="warn", source="cart", event="skip", service="cart",
+            user_id=sub["user_id"], session_id=s["session_id"],
+            message=f"skip: {activity_log.reason_ru('race_order')}",
+            details={"reason": "race_order"},
         )
         return False
 
@@ -522,15 +565,23 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
     else:
         intro = "<h2>Вы забыли товары в корзине</h2><p>Оформите заказ, пока товары в наличии:</p>"
         html = render_email(intro, products, sub["user_id"], "cart", cfg.get("template", "default"), look)
+    product_ids = [i["product_id"] for i in items]
+    sent_ids = [p["product_id"] for p in products]
     log_id = await con.fetchval(
-        """INSERT INTO email_log(user_id, service, product_ids, template_id, status)
-           VALUES($1, 'cart', $2, $3, 'queued') RETURNING id""",
-        sub["user_id"], [p["product_id"] for p in products], template_id,
+        """INSERT INTO email_log(user_id, service, product_ids, template_id, subject, html, status)
+           VALUES($1, 'cart', $2, $3, $4, $5, 'queued') RETURNING id""",
+        sub["user_id"], sent_ids, template_id, cfg["subject"], html,
     )
     ok = await mailer.send(email, cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
     if not ok:
         await con.execute("UPDATE email_log SET status='failed' WHERE id=$1", log_id)
+        await activity_log.write(
+            con, level="error", source="cart", event="send_failed", service="cart",
+            user_id=sub["user_id"], session_id=s["session_id"], ref_id=log_id,
+            message=f"отправка не удалась: {activity_log.reason_ru('mail_failed')}",
+            details={"reason": "mail_failed", "product_ids": product_ids, "to": email},
+        )
         return False
 
     async with con.transaction():
@@ -542,12 +593,18 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         await con.execute(
             "UPDATE cart_sessions SET state = 'sent' WHERE session_id = $1", s["session_id"]
         )
+    await activity_log.write(
+        con, level="info", source="cart", event="queued", service="cart",
+        user_id=sub["user_id"], session_id=s["session_id"], ref_id=log_id,
+        message=f"принято в очередь: брошенная корзина, товаров {len(sent_ids)} → {email}",
+        details={"product_ids": sent_ids, "to": email},
+    )
     return True
 
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
-    # in_stock: «нет в наличии» в письмо корзины не кладём (как в Best Offer / Постпродаже).
-    # Иначе кнопка «Купить» ведёт на товар, который уже нельзя заказать.
+    # in_stock + фото: иначе кнопка «Купить» ведёт на OOS или письмо с плейсхолдерами.
+    from app import images
     ids: list[str] = []
     seen: set[str] = set()
     for raw in product_ids:
@@ -558,8 +615,9 @@ async def _load_products(con, product_ids: list[str]) -> list[dict]:
     if not ids:
         return []
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[]) AND in_stock
+             AND {images.HAS_PHOTO_SQL}""",
         ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}

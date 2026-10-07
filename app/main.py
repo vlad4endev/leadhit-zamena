@@ -11,6 +11,7 @@ from app.admin import router as admin_router
 from app.analytics import router as analytics_router
 from app.cart import router as cart_router
 from app.feeds import router as feeds_router
+from app.images import router as images_router
 
 
 @asynccontextmanager
@@ -23,6 +24,28 @@ async def lifespan(_: FastAPI):
             await app_settings.load_site(con)
     except Exception as e:  # noqa: BLE001 — БД/таблица недоступна: логируем и живём на .env
         print(f"[startup] настройки адресов не прочитаны ({type(e).__name__}): работаем на .env")
+    # Почта: типичная поломка — URL http://mailer:8080 при host-network mailer.
+    try:
+        from urllib.parse import urlparse
+        from app.config import settings as env
+        import urllib.request
+        murl = (env.mailer_service_url or "").strip()
+        if murl:
+            host = (urlparse(murl).hostname or "").lower()
+            if host == "mailer":
+                print("[startup] WARN: MAILER_SERVICE_URL указывает на hostname «mailer» — "
+                      "при network_mode:host mailer так не резолвится. "
+                      "Нужен http://host.docker.internal:8080 + MAILER_HOST_IP. "
+                      "См. deploy/check-mail.sh")
+            else:
+                try:
+                    urllib.request.urlopen(murl.rstrip("/") + "/health", timeout=3).read()
+                    print(f"[startup] mailer OK {murl}")
+                except Exception as me:  # noqa: BLE001
+                    print(f"[startup] WARN: mailer недоступен ({murl}): "
+                          f"{type(me).__name__}: {me} — bash deploy/check-mail.sh")
+    except Exception as e:  # noqa: BLE001
+        print(f"[startup] mailer probe skipped: {type(e).__name__}")
     yield
     await db.disconnect()
 
@@ -65,6 +88,7 @@ app.include_router(auth.router)
 app.include_router(feeds_router)
 app.include_router(cart_router)
 app.include_router(analytics_router)
+app.include_router(images_router)
 app.include_router(admin_router)
 
 

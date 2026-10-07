@@ -14,7 +14,11 @@ import sys
 
 sys.path.insert(0, os.path.dirname(os.path.dirname(os.path.abspath(__file__))))
 
-from app import analytics, app_settings, best_offer, cart, db, onec, postsale  # noqa: E402
+from app import activity_log, analytics, app_settings, best_offer, cart, db, onec, postsale  # noqa: E402
+
+# Источник в activity_log: сценарии пишем своим source, остальное — worker.
+_SOURCE = {"cart": "cart", "postsale": "postsale", "best_offer": "best_offer",
+           "attribution": "worker", "catalog_1c": "onec"}
 
 
 async def _loop(name: str, interval: int, fn) -> None:
@@ -26,6 +30,15 @@ async def _loop(name: str, interval: int, fn) -> None:
                 print(f"[{name}] {result}")
         except Exception as e:  # noqa: BLE001 — воркер не должен падать целиком из-за одной ошибки
             print(f"[{name}] ERROR {type(e).__name__}: {e}")
+            try:
+                await activity_log.write(
+                    level="error", source=_SOURCE.get(name, "worker"), event="worker_error",
+                    service=name if name in ("best_offer", "cart", "postsale") else None,
+                    message=f"воркер {name}: {type(e).__name__}: {e}",
+                    details={"worker": name, "error_type": type(e).__name__, "error": str(e)[:800]},
+                )
+            except Exception:  # noqa: BLE001
+                pass
         await asyncio.sleep(interval)
 
 
@@ -38,6 +51,16 @@ async def main() -> None:
     print("worker_loop: старт "
           f"(cart={cfg['cart_tick_sec']}s, postsale={cfg['postsale_tick_sec']}s, "
           f"attribution={cfg['attribution_tick_sec']}s, best_offer={cfg['best_offer_tick_sec']}s)")
+    await activity_log.write(
+        level="info", source="worker", event="worker_start",
+        message="воркеры запущены",
+        details={"cart_tick_sec": cfg["cart_tick_sec"], "postsale_tick_sec": cfg["postsale_tick_sec"],
+                 "attribution_tick_sec": cfg["attribution_tick_sec"],
+                 "best_offer_tick_sec": cfg["best_offer_tick_sec"],
+                 "onec": onec.configured()},
+    )
+    # Чистим старые диагностические записи при старте (retention).
+    await activity_log.prune()
 
     loops = [
         _loop("cart", cfg["cart_tick_sec"], cart.run_due),

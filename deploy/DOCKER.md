@@ -12,10 +12,15 @@ cp .env.example .env                   # заполнить секреты (см
 - `POSTGRES_PASSWORD` — пароль контейнерной БД (обязателен).
 - `CORS_ORIGINS=https://groster.me,https://www.groster.me` — домены витрины.
 - `PUBLIC_BASE_URL=https://groster.skypath.fun` — домен API (ссылки в письмах, embed).
-- `SMTP_HOST/SMTP_USER/SMTP_PASSWORD` (или оставить пустыми → dev-лог вместо отправки).
+- Почта: сервис `mailer` на **host-network** (на VPS bridge часто не ходит в SMTP).
+  В `.env` обязателен `MAILER_HOST_IP` — IP моста `br-*` (`ip -br a | grep '^br-'`,
+  обычно `172.18.0.1`). SMTP: `SMTP_*` или админка **Настройки → Почта**
+  (порт **465** = SSL). Без SMTP — dev-лог. См. [MAIL_DNS.md](MAIL_DNS.md).
 - `MAILER_SERVICE_TOKEN` — общий секрет app↔mailer (compose прокинет его как `API_TOKEN`).
+- Снаружи закройте порт 8080 на eth0; с docker-моста разрешите
+  (`ufw allow from 172.18.0.0/16 to any port 8080`).
 
-`DATABASE_URL` и `MAILER_SERVICE_URL` в Docker задаёт сам compose (сервисы `db`/`mailer`).
+`DATABASE_URL` задаёт compose. `MAILER_SERVICE_URL` = `http://host.docker.internal:8080`.
 
 ## 2. TLS-сертификат (на хосте, один раз)
 nginx-контейнер монтирует серты с хоста (`/etc/letsencrypt`). Выпуск — хостовым certbot:
@@ -67,13 +72,20 @@ docker compose pull && docker compose up -d --build   # обновление
 ```bash
 cd /opt/grosterhit && git pull && git log --oneline -1     # убедиться, что коммит приехал
 ls db/migrations                                           # появились новые файлы — применить (ниже)
-docker compose up -d --build api workers                   # ОБА: воркеры на том же образе
+# api + workers + mailer: mailer на host-network, без --force-recreate останется старый env/сеть
+docker compose up -d --build --force-recreate api workers mailer
 docker compose -f docker-compose.edge.yml up -d --force-recreate edge   # конфиг смонтирован файлом
+bash deploy/check-mail.sh                                  # SMTP + api→mailer + callback
 ```
 Миграции применяются **после `git pull`** (до него файла на сервере просто нет) и до пересборки;
 все они идемпотентны, повтор безопасен:
 ```bash
 docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_script_hits.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/004_image_proxy.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/007_activity_log.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/008_email_log_body.sql
 ```
 Признак, что обновление реально применилось: в сборке `COPY app ./app` **без** `CACHED`, новый sha
 образа и `Recreated`/`Started` у контейнеров. Если `CACHED` и `Running` — `git pull` не принёс
@@ -114,10 +126,47 @@ NPM закэшировал ошибку: у прокси-хоста включё
   лежат в `db/migrations/` и идемпотентны — применяются так:
   ```bash
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_script_hits.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/004_image_proxy.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/007_activity_log.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/008_email_log_body.sql
   ```
   Без `003` индикатор связи в админке останется в состоянии «тег не грузился» (таблицы нет —
-  счётчик молча не пишется), остальное работает.
+  счётчик молча не пишется), остальное работает. Без `004`–`006` и без `location /img/` в
+  edge-конфиге фото товаров в каталоге и письмах останутся битыми (неверное расширение / 404).
+  Без `007` вкладка «Настройки → Логи» покажет ошибку загрузки (таблицы `activity_log` нет).
+  Без `008` в журнале писем нельзя открыть HTML-снимок письма (колонок `subject`/`html` нет).
 - **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
   на уровне маршрутизации (не отдаются наружу), а вебхук ESP аутентифицируется в приложении.
+- **Почта стабильно (чеклист)**: mailer на **host-network**; api/workers →
+  `http://host.docker.internal:8080`; `MAILER_HOST_IP` = IP `br-*` (не docker0);
+  ufw: allow с `172.16.0.0/12` на 8080; eth0:8080 закрыт снаружи; `API_HOST_PORT`
+  совпадает с `CALLBACK_URL`. Одна строка `MAILER_HOST_IP` в `.env`.
+
+  ```bash
+  bash deploy/check-mail.sh                 # единая проверка контура
+  ```
+
+  Если check падает:
+
+  ```bash
+  ip -br a | grep '^br-'                    # → 172.18.0.1
+  # одна строка MAILER_HOST_IP в .env
+  ufw allow from 172.16.0.0/12 to any port 8080 proto tcp
+  iptables -C INPUT -i eth0 -p tcp --dport 8080 -j DROP 2>/dev/null || \
+    iptables -I INPUT -i eth0 -p tcp --dport 8080 -j DROP
+  docker compose up -d --build --force-recreate api workers mailer
+  bash deploy/check-mail.sh
+  ```
+
+  Типичные симптомы → причина:
+  - `Network is unreachable` / SMTP timeout из mailer → не host-network (старый compose/ветка)
+  - `Temporary failure in name resolution` / `http://mailer:8080` → нужен host.docker.internal
+  - api `Connection refused` на :8080 → ufw или неверный `MAILER_HOST_IP`
+  - `[callback-fail] Connection refused` → api не на `127.0.0.1:$API_HOST_PORT`
+  - SMTP `535` → новый пароль приложения Яндекса (не обычный пароль ящика)
+
+  Самопроверка в админке («Интеграция») тоже проверяет mailer/SMTP/callback.

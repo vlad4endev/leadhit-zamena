@@ -9,7 +9,7 @@ import json
 
 import asyncpg
 
-from app import app_settings, svc_config
+from app import activity_log, app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -108,6 +108,14 @@ async def run_due(con: asyncpg.Connection, mailer=None, force: bool = False) -> 
            WHERE service = 'postsale' AND state = 'scheduled' AND run_after <= now()
            FOR UPDATE SKIP LOCKED"""
     )
+    if not jobs:
+        return 0
+    await activity_log.write(
+        con, level="info", source="postsale", event="tick_start", service="postsale",
+        message=f"обработка очереди Постпродажи: {len(jobs)} задач"
+                + (" · ручной запуск" if force else ""),
+        details={"jobs": len(jobs), "force": force, "template_id": template_id},
+    )
     for job in jobs:
         try:
             result = await _process_one(con, job, mailer, cfg, look, blocks, template_id)
@@ -118,6 +126,11 @@ async def run_due(con: asyncpg.Connection, mailer=None, force: bool = False) -> 
             continue
         if result:
             sent += 1
+    await activity_log.write(
+        con, level="info", source="postsale", event="tick_done", service="postsale",
+        message=f"тик Постпродажи: отправлено {sent} из {len(jobs)}",
+        details={"sent": sent, "jobs": len(jobs)},
+    )
     return sent
 
 
@@ -132,6 +145,12 @@ async def _bump_attempt(con: asyncpg.Connection, job) -> bool:
 async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=None, template_id=None) -> bool:
     if int(job["attempts"] or 0) >= MAX_ATTEMPTS:
         await _finish(con, job["id"], "failed")
+        await activity_log.write(
+            con, level="error", source="postsale", event="queue_failed", service="postsale",
+            user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+            message=f"задача failed: {activity_log.reason_ru('max_attempts')}",
+            details={"reason": "max_attempts", "attempts": job["attempts"]},
+        )
         return False
 
     order = await con.fetchrow(
@@ -147,9 +166,29 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
     # Проверки актуальности НА МОМЕНТ ОТПРАВКИ (ТЗ 4.5), не постановки.
     if order is None or order["status"].lower() in CANCELLED_STATUSES:
         await _finish(con, job["id"], "cancelled")
+        await activity_log.write(
+            con, level="warn", source="postsale", event="queue_cancel", service="postsale",
+            user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+            message=f"отмена: {activity_log.reason_ru('order_cancelled')}",
+            details={"reason": "order_cancelled",
+                     "order_status": order["status"] if order else None},
+        )
         return False
     if sub is None or sub["is_unsubscribed"] or not sub["email"] or sub["consent_at"] is None:
         await _finish(con, job["id"], "cancelled")
+        detail = {
+            "reason": "no_subscriber",
+            "missing": True if sub is None else False,
+            "unsubscribed": bool(sub and sub["is_unsubscribed"]),
+            "no_email": bool(sub and not sub["email"]),
+            "no_consent": bool(sub and sub["consent_at"] is None),
+        }
+        await activity_log.write(
+            con, level="warn", source="postsale", event="queue_cancel", service="postsale",
+            user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+            message=f"отмена: {activity_log.reason_ru('no_subscriber')}",
+            details=detail,
+        )
         return False
     # Антидубль: не более одного триггера в день (Постпродажа уступает Корзине).
     if sub["last_any_trigger_at"] is not None:
@@ -162,6 +201,12 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
                 "UPDATE send_queue SET run_after = (now() + interval '1 day') WHERE id = $1",
                 job["id"],
             )
+            await activity_log.write(
+                con, level="info", source="postsale", event="queue_defer", service="postsale",
+                user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+                message=f"отложено на день: {activity_log.reason_ru('antidupe')}",
+                details={"reason": "antidupe"},
+            )
             return False
 
     items = await _order_items(con, order["items"])
@@ -169,12 +214,25 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
     category, product_ids = pick_cross_sell(items, top5)
     if not product_ids:
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
+        await activity_log.write(
+            con, level="warn", source="postsale", event="queue_cancel", service="postsale",
+            user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+            message=f"отмена: {activity_log.reason_ru('no_cross_sell')}",
+            details={"reason": "no_cross_sell", "order_items": len(items)},
+        )
         return False
 
-    products = await _load_products(con, product_ids)
+    products = images.photo_first(await _load_products(con, product_ids), 5)
+    products = await images.warm_products(products, require_live=True)
     if not products:
-        # Cross-sell выжжен out-of-stock → пустое письмо не шлём (ТЗ 4.8).
+        # Cross-sell выжжен out-of-stock / без фото → пустое письмо не шлём (ТЗ 4.8).
         await _finish(con, job["id"], "cancelled")
+        await activity_log.write(
+            con, level="warn", source="postsale", event="queue_cancel", service="postsale",
+            user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+            message=f"отмена: {activity_log.reason_ru('oos')}",
+            details={"reason": "oos", "category": category, "picked": product_ids},
+        )
         return False
     if blocks:
         html = render_blocks(blocks, products, order["user_id"], "postsale", look)
@@ -184,17 +242,29 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
     sent_ids = [p["product_id"] for p in products]
     # Строку лога создаём ДО отправки (уник-индекс по order_id держит «1 письмо на заказ»).
     log_id = await con.fetchval(
-        """INSERT INTO email_log(user_id, service, category_id, product_ids, order_id, template_id, status)
-           VALUES($1, 'postsale', $2, $3, $4, $5, 'queued') RETURNING id""",
+        """INSERT INTO email_log(user_id, service, category_id, product_ids, order_id, template_id,
+                                subject, html, status)
+           VALUES($1, 'postsale', $2, $3, $4, $5, $6, $7, 'queued') RETURNING id""",
         order["user_id"], category, sent_ids, order["order_id"], template_id,
+        cfg["subject"], html,
     )
     ok = await mailer.send(sub["email"], cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
     if not ok:
         # Удаляем queued-строку, чтобы ретрай задачи не упёрся в уник-индекс по заказу.
         await con.execute("DELETE FROM email_log WHERE id = $1", log_id)
-        if await _bump_attempt(con, job):
+        exhausted = await _bump_attempt(con, job)
+        if exhausted:
             await _finish(con, job["id"], "failed")
+        await activity_log.write(
+            con, level="error", source="postsale", event="send_failed", service="postsale",
+            user_id=job["user_id"], order_id=job["order_id"], ref_id=job["id"],
+            message=("задача failed: " if exhausted else "отправка не удалась, ретрай: ")
+                    + activity_log.reason_ru("mail_failed" if not exhausted else "max_attempts"),
+            details={"reason": "max_attempts" if exhausted else "mail_failed",
+                     "attempts": int(job["attempts"] or 0) + 1, "to": sub["email"],
+                     "product_ids": sent_ids},
+        )
         return False
 
     async with con.transaction():
@@ -204,6 +274,13 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
             order["user_id"],
         )
         await _finish(con, job["id"], "sent")
+    await activity_log.write(
+        con, level="info", source="postsale", event="queued", service="postsale",
+        user_id=order["user_id"], order_id=order["order_id"], ref_id=log_id,
+        message=f"принято в очередь: постпродажа, категория {category}, "
+                f"товаров {len(sent_ids)} → {sub['email']}",
+        details={"category": category, "product_ids": sent_ids, "to": sub["email"]},
+    )
     return True
 
 
@@ -265,8 +342,9 @@ async def _load_products(con: asyncpg.Connection, product_ids: list[str]) -> lis
     if not ids:
         return []
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[]) AND in_stock
+             AND {images.HAS_PHOTO_SQL}""",
         ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}

@@ -34,11 +34,14 @@ class EspEvent(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    mail_transport: Optional[str] = None   # sendmail | smtp | ''
+    sendmail_path: Optional[str] = None
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
     smtp_user: Optional[str] = None
     smtp_password: Optional[str] = None   # пусто/не передан → пароль не меняется
     smtp_starttls: Optional[bool] = None
+    smtp_ssl: Optional[bool] = None
     mail_from: Optional[str] = None
     mail_from_name: Optional[str] = None
     rate_per_min: Optional[int] = None
@@ -57,7 +60,20 @@ def _auth(authorization: Optional[str]) -> None:
 async def lifespan(_: FastAPI):
     await store.init()
     task = asyncio.create_task(worker.run())
+
+    # Диагностика ПОСЛЕ готовности принимать HTTP: иначе /health молчит, пока
+    # идёт TCP к SMTP (check-mail / compose healthcheck ловят ложный FAIL).
+    async def _diag_bg() -> None:
+        await asyncio.sleep(0.3)
+        try:
+            from app import diagnostics
+            await asyncio.to_thread(diagnostics.warn_on_startup)
+        except Exception as e:  # noqa: BLE001 — не валим воркер
+            print(f"[mailer-diag] startup check failed: {type(e).__name__}: {e}")
+
+    diag_task = asyncio.create_task(_diag_bg())
     yield
+    diag_task.cancel()
     task.cancel()
 
 
@@ -68,7 +84,15 @@ app = FastAPI(title="mailer-service", lifespan=lifespan)
 async def health() -> dict:
     cfg = await store.get_config()
     return {"status": "ok", "outbox": await store.stats(),
-            "provider": "smtp" if cfg["smtp_host"] else "dev"}
+            "provider": sender.provider_name(cfg)}
+
+
+@app.get("/v1/diagnostics")
+async def diagnostics_endpoint(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Глубокая проверка: SMTP TCP + callback TCP. Для deploy/check-mail.sh и админки."""
+    _auth(authorization)
+    from app import diagnostics
+    return await asyncio.to_thread(diagnostics.run_all)
 
 
 @app.get("/v1/config")
@@ -77,7 +101,7 @@ async def get_config(authorization: Optional[str] = Header(default=None)) -> dic
     _auth(authorization)
     cfg = await store.get_config()
     has_password = bool(cfg.pop("smtp_password", ""))
-    return {**cfg, "has_password": has_password, "provider": "smtp" if cfg["smtp_host"] else "dev"}
+    return {**cfg, "has_password": has_password, "provider": sender.provider_name(cfg)}
 
 
 @app.put("/v1/config")
@@ -89,6 +113,8 @@ async def put_config(c: ProviderConfig, authorization: Optional[str] = Header(de
         patch.pop("smtp_password", None)
     if "smtp_starttls" in patch:
         patch["smtp_starttls"] = "true" if patch["smtp_starttls"] else "false"
+    if "smtp_ssl" in patch:
+        patch["smtp_ssl"] = "true" if patch["smtp_ssl"] else "false"
     await store.set_config(patch)
     return {"ok": True}
 
@@ -102,7 +128,7 @@ async def test_send(r: TestRequest, authorization: Optional[str] = Header(defaul
                                 "<p>Тестовое письмо. Настройки почтового провайдера работают.</p>", "", "")
         return {"ok": True, "message_id": mid}
     except Exception as e:  # noqa: BLE001 — показываем ошибку провайдера оператору
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": sender.format_send_error(e)}
 
 
 @app.post("/v1/send")
@@ -120,7 +146,7 @@ async def send_one_sync(m: Message, authorization: Optional[str] = Header(defaul
         mid = await sender.send(m.to, m.subject, m.html, m.from_email, m.from_name)
         return {"ok": True, "message_id": mid}
     except Exception as e:  # noqa: BLE001 — показываем ошибку провайдера оператору
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": sender.format_send_error(e)}
 
 
 @app.post("/v1/send/batch")
@@ -137,7 +163,9 @@ async def message(id: str) -> dict:
     if not row:
         raise HTTPException(404, "not found")
     return {"id": row["id"], "state": row["state"], "attempts": row["attempts"],
-            "message_id": row["message_id"], "last_event": row["last_event"]}
+            "message_id": row["message_id"], "last_event": row["last_event"],
+            "last_error": row.get("last_error"), "to": row.get("to_addr"),
+            "subject": row.get("subject")}
 
 
 @app.post("/v1/esp/webhook")
