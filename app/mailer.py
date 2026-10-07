@@ -42,6 +42,7 @@ class HttpMailer:
             return True
         except Exception as e:  # noqa: BLE001 — недоступность сервиса логируем, письмо не теряем
             print(f"[MAILER-SVC-ERROR] to={to} {type(e).__name__}: {e}")
+            await _log_mail_error("mailer_service", to, subject, e, meta)
             return False
 
     def _post(self, body: dict) -> None:
@@ -64,6 +65,7 @@ class SmtpMailer:
             return True
         except Exception as e:  # noqa: BLE001 — bounce/отказ логируем, письмо не теряем
             print(f"[MAIL-ERROR] to={to} {type(e).__name__}: {e}")
+            await _log_mail_error("smtp", to, subject, e, meta)
             return False
 
     def _send_sync(self, to: str, subject: str, html: str, from_email: str, from_name: str) -> None:
@@ -83,6 +85,23 @@ class SmtpMailer:
             if settings.smtp_user:
                 s.login(settings.smtp_user, settings.smtp_password)
             s.send_message(msg)
+
+
+async def _log_mail_error(transport: str, to: str, subject: str, err: Exception,
+                          meta: Optional[dict]) -> None:
+    """Пишем сбой транспорта в activity_log (без HTML/тела письма)."""
+    try:
+        from app import activity_log  # локальный импорт: избегаем циклов на старте
+        await activity_log.write(
+            level="error", source="mailer", event="transport_error",
+            message=f"{transport}: {type(err).__name__}: {err}",
+            ref_id=(meta or {}).get("log_id"),
+            details={"transport": transport, "to": to, "subject": subject,
+                     "error_type": type(err).__name__, "error": str(err)[:500],
+                     "meta": {k: v for k, v in (meta or {}).items() if k != "html"}},
+        )
+    except Exception:  # noqa: BLE001
+        pass
 
 
 def get_mailer() -> Mailer:

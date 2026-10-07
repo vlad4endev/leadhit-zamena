@@ -30,6 +30,7 @@ CREATE TABLE IF NOT EXISTS outbox (
     next_attempt REAL NOT NULL DEFAULT 0,
     message_id  TEXT,
     last_event  TEXT,
+    last_error  TEXT,
     created_at  REAL NOT NULL,
     sent_at     REAL
 );
@@ -72,6 +73,10 @@ def _init_sync() -> None:
     _conn.row_factory = sqlite3.Row
     _conn.execute("PRAGMA journal_mode=WAL")
     _conn.executescript(_SCHEMA)
+    # Идемпотентно для уже существующих БД (CREATE TABLE IF NOT EXISTS колонку не добавит).
+    cols = {r[1] for r in _conn.execute("PRAGMA table_info(outbox)").fetchall()}
+    if "last_error" not in cols:
+        _conn.execute("ALTER TABLE outbox ADD COLUMN last_error TEXT")
     _conn.commit()
 
 
@@ -127,6 +132,11 @@ async def mark_retry(id: str, attempts: int, next_attempt: float) -> None:
 async def mark_failed(id: str, attempts: int) -> None:
     await asyncio.to_thread(
         _exec, "UPDATE outbox SET state='failed', attempts=? WHERE id=?", (attempts, id))
+
+
+async def set_last_error(id: str, error: str) -> None:
+    await asyncio.to_thread(
+        _exec, "UPDATE outbox SET last_error=? WHERE id=?", (error[:1000], id))
 
 
 async def get(id: str) -> dict | None:

@@ -60,6 +60,9 @@ async def send(to, subject, html, from_email, from_name) -> str:
     return await asyncio.to_thread(send_sync, to, subject, html, from_email, from_name)
 
 
-async def callback(meta: dict, event: str) -> None:
-    """Пробрасывает событие доставки в основное приложение (meta + event)."""
-    await asyncio.to_thread(_callback_sync, {**meta, "event": event})
+async def callback(meta: dict, event: str, **extra) -> None:
+    """Пробрасывает событие доставки в основное приложение (meta + event + детали ошибки)."""
+    payload = {**(meta or {}), "event": event, **extra}
+    # Убираем None — иначе pydantic на стороне api может споткнуться о лишнее.
+    payload = {k: v for k, v in payload.items() if v is not None}
+    await asyncio.to_thread(_callback_sync, payload)

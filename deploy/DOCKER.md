@@ -67,13 +67,17 @@ docker compose pull && docker compose up -d --build   # обновление
 ```bash
 cd /opt/grosterhit && git pull && git log --oneline -1     # убедиться, что коммит приехал
 ls db/migrations                                           # появились новые файлы — применить (ниже)
-docker compose up -d --build api workers                   # ОБА: воркеры на том же образе
+docker compose up -d --build api workers mailer            # api+воркеры+mailer (логи SMTP)
 docker compose -f docker-compose.edge.yml up -d --force-recreate edge   # конфиг смонтирован файлом
 ```
 Миграции применяются **после `git pull`** (до него файла на сервере просто нет) и до пересборки;
 все они идемпотентны, повтор безопасен:
 ```bash
 docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_script_hits.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/004_image_proxy.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/007_activity_log.sql
 ```
 Признак, что обновление реально применилось: в сборке `COPY app ./app` **без** `CACHED`, новый sha
 образа и `Recreated`/`Started` у контейнеров. Если `CACHED` и `Running` — `git pull` не принёс
@@ -117,10 +121,12 @@ NPM закэшировал ошибку: у прокси-хоста включё
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/004_image_proxy.sql
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/007_activity_log.sql
   ```
   Без `003` индикатор связи в админке останется в состоянии «тег не грузился» (таблицы нет —
   счётчик молча не пишется), остальное работает. Без `004`–`006` и без `location /img/` в
   edge-конфиге фото товаров в каталоге и письмах останутся битыми (неверное расширение / 404).
+  Без `007` вкладка «Настройки → Логи» покажет ошибку загрузки (таблицы `activity_log` нет).
 - **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
