@@ -323,8 +323,9 @@ async def recommendations() -> dict:
             "name": r["product_name"], "price": float(r["price"]) if r["price"] is not None else None,
             "image_url": r["image_url"], "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]) if exists else False, "exists": exists,
-            # Не попадёт в письмо, если товара нет в каталоге или он не в наличии.
-            "usable": exists and bool(r["in_stock"]),
+            # В письмо — только в наличии и с GUID-фото (без фото → вкладка «Без фото»).
+            "usable": exists and bool(r["in_stock"]) and bool(r["image_url"]),
+            "has_photo": bool(r["image_url"]) if exists else False,
         })
     out = list(cats.values())
     total_usable = sum(1 for c in out for p in c["products"] if p["usable"])
@@ -388,6 +389,7 @@ ranked AS (
          ) AS rn
   FROM products p LEFT JOIN sold s ON s.product_id = p.product_id
   WHERE p.in_stock
+    AND p.image_url IS NOT NULL AND btrim(p.image_url) <> ''   -- без GUID-фото в топ/письма не берём
 )
 SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_id, rn
 """
@@ -545,14 +547,12 @@ class TestEmail(BaseModel):
 
 
 async def _sample_products(con, limit: int = 6) -> list[dict]:
-    """Товары для превью и тест-письма. Сначала те, у которых есть фото: иначе LIMIT без
-    сортировки вытаскивал первые строки каталога (часто без image_url), и превью показывало
-    серые плейсхолдеры при живом каталоге. Порядок стабильный — превью не «дёргается»
-    между рендерами. 6 штук = две строки карточек по 3."""
+    """Товары для превью и тест-письма — только с GUID-фото (как в авторассылке).
+    Порядок стабильный по product_id. 6 штук = две строки карточек по 3."""
     rows = await con.fetch(
         """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE in_stock
-           ORDER BY (image_url IS NULL OR image_url = ''), product_id
+           WHERE in_stock AND image_url IS NOT NULL AND btrim(image_url) <> ''
+           ORDER BY product_id
            LIMIT $1""", limit)
     return [dict(r, price=float(r["price"])) for r in rows]
 

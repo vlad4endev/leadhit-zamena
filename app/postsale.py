@@ -177,8 +177,9 @@ async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str,
 
 async def _load_products(con: asyncpg.Connection, product_ids: list[str]) -> list[dict]:
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[]) AND in_stock
+             AND {images.HAS_PHOTO_SQL}""",
         product_ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}

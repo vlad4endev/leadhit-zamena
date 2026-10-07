@@ -538,9 +538,12 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
 
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
+    # Без GUID-фото в письмо не кладём (как Best Offer / Постпродажа): иначе плейсхолдеры.
+    from app import images
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[])""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[])
+             AND {images.HAS_PHOTO_SQL}""",
         product_ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}

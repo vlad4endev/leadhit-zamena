@@ -97,8 +97,9 @@ async def _candidates(con, interval_days: int, after_purchase_days: int):
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[]) AND in_stock
+             AND {images.HAS_PHOTO_SQL}""",
         product_ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}
@@ -134,7 +135,7 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         if not product_ids:
             continue  # нечего предложить
 
-        # photo_first — товары без фото в хвост, чтобы слоты письма не съели плейсхолдеры.
+        # Только с GUID-фото (_load_products уже отсёк без фото); limit слотов письма.
         products = images.photo_first(await _load_products(con, product_ids), 5)
         if not products:
             continue

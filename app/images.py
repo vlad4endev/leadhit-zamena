@@ -68,16 +68,23 @@ def proxied(url: str | None, product_id: str | None = None) -> str | None:
     return "/img/" + name
 
 
-def photo_first(products: list[dict], limit: int) -> list[dict]:
-    """Товары для письма: сначала с фото, потом остальные, всего не больше limit.
+def has_photo(url: str | None) -> bool:
+    """Есть GUID-фото: непустой image_url (после proxied пусто = артикул/нет файла)."""
+    return bool(url and str(url).strip())
 
-    Сортировка устойчивая — внутри групп сохраняется порядок подборки (позиции из
-    админки/фида). Так карточки-плейсхолдеры «нет фото» уходят в хвост и обрезаются
-    первыми: пока выгрузка 1С не отдаёт GUID-ссылки, без фото сидит заметная часть
-    каталога (см. проверку в шапке модуля), и письмо из одних плейсхолдеров — худшее,
-    что можно показать. Тот же порядок у превью шаблона в админке.
+
+# SQL-фрагмент: товар годится в авторассылку (есть фото). Подставлять в WHERE как есть.
+HAS_PHOTO_SQL = "image_url IS NOT NULL AND btrim(image_url) <> ''"
+
+
+def photo_first(products: list[dict], limit: int) -> list[dict]:
+    """Товары для письма: только с фото, порядок подборки сохраняется, не больше limit.
+
+    Без GUID-ссылки в авторассылку не берём — плейсхолдер «нет фото» в письме хуже,
+    чем меньшая подборка. Такие товары смотрят во вкладке «Без фото» админки.
     """
-    return sorted(products, key=lambda p: not p.get("image_url"))[:limit]
+    out = [p for p in products if has_photo(p.get("image_url"))]
+    return out[:limit]
 
 
 def _head_ok(url: str) -> bool:
@@ -140,11 +147,12 @@ def _demo() -> None:
     assert proxied(PREFIX + "6aecaf12-c045-11ee-8805-ac1f6b855a52.png", "0126367") \
         == "/img/6aecaf12-c045-11ee-8805-ac1f6b855a52.png"
 
-    # Фото вперёд, порядок подборки внутри групп сохраняется, лишнее обрезается.
+    # Только с фото, порядок подборки сохраняется, без фото выкидываются.
+    assert has_photo("/img/x.png") and not has_photo(None) and not has_photo("")
     pp = [{"product_id": "a"}, {"product_id": "b", "image_url": "/img/b.png"},
           {"product_id": "c", "image_url": ""}, {"product_id": "d", "image_url": "/img/d.png"}]
-    assert [x["product_id"] for x in photo_first(pp, 10)] == ["b", "d", "a", "c"]
-    assert [x["product_id"] for x in photo_first(pp, 2)] == ["b", "d"]   # без фото обрезаются первыми
+    assert [x["product_id"] for x in photo_first(pp, 10)] == ["b", "d"]
+    assert [x["product_id"] for x in photo_first(pp, 1)] == ["b"]
     assert photo_first([], 5) == []
 
     global _head_ok
