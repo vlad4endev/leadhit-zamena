@@ -906,7 +906,7 @@ async function viewFeeds(){
   // Фильтр «только проблемные»: нет в каталоге / нет в наличии (в письмо не попадут).
   if(recProblems) cats=cats.map(c=>({...c, products:c.products.filter(p=>!p.usable)})).filter(c=>c.products.length);
   const empty = !cats.length;
-  if(rec.purged_no_photo) toast(`Из топ-5 убрано без фото: ${num(rec.purged_no_photo)} → вкладка «Без фото»`);
+  if(rec.purged_no_photo) toast(`Из топ-5 убрано без фото / битый CDN: ${num(rec.purged_no_photo)} → «Без фото»`);
 
   const catCards = cats.map(c=>{
     const items=c.products.map(pr=>{

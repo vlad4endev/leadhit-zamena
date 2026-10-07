@@ -301,11 +301,38 @@ async def services_summary() -> list[dict]:
              "sent": r["sent"]} for r in rows]
 
 
-async def _purge_top5_no_photo(con) -> int:
-    """Убрать из топ-5 позиции без GUID-фото (и без товара в каталоге) → они только во вкладке «Без фото».
+async def _null_broken_top5_photos(con) -> int:
+    """Проверить image_url позиций топ-5 на CDN; битые обнулить в products.
 
-    Перенумеровывает position 1..N в каждой категории. Возвращает число удалённых строк.
+    Иначе в топ-5 остаётся карточка «нет фото» при непустом image_url (резолвер раньше
+    отдавал 302 на заведомый 404). Только строки топ-5 — не весь каталог (~2к HEAD).
     """
+    from app import images
+    rows = await con.fetch(
+        """SELECT DISTINCT p.product_id, p.image_url
+             FROM top5_by_category t
+             JOIN products p ON p.product_id = t.product_id
+            WHERE p.image_url IS NOT NULL AND btrim(p.image_url) <> ''""")
+    broken = []
+    for r in rows:
+        ok = await asyncio.to_thread(images.url_alive_sync, r["image_url"])
+        if not ok:
+            broken.append(r["product_id"])
+    if not broken:
+        return 0
+    await con.execute(
+        """UPDATE products SET image_url = NULL, updated_at = now()
+           WHERE product_id = ANY($1::text[])""", broken)
+    return len(broken)
+
+
+async def _purge_top5_no_photo(con) -> int:
+    """Убрать из топ-5 позиции без GUID-фото (и без товара в каталоге) → вкладка «Без фото».
+
+    Сначала обнуляет битые URL (файл на CDN 404), потом удаляет пустые из топ-5 и
+    перенумеровывает position. Возвращает число удалённых строк топ-5.
+    """
+    await _null_broken_top5_photos(con)
     deleted = await con.fetchval(
         """WITH doomed AS (
              DELETE FROM top5_by_category t

@@ -8,6 +8,9 @@
 реальном файле и редиректит на него. Импорт при этом не делает ни одного запроса:
 цена вопроса — один HEAD на картинку за время жизни процесса.
 
+Если файла нет ни в одном расширении — 404 и image_url в БД обнуляется: иначе в топ-5
+висит «нет фото» при зелёном «в наличии» (ссылка в БД есть, на CDN — нет).
+
 Когда выгрузку починят (см. db/import_json_contract.md), ничего убирать не нужно:
 верное расширение резолвер угадает с первой попытки.
 """
@@ -29,8 +32,8 @@ EXTS = (".png", ".jpg", ".jpeg")
 # в CDN-URL подставляется только то, что прошло эту проверку.
 _NAME_RE = re.compile(r"^[0-9A-Za-z_-]{4,64}\.(png|jpe?g)$")
 
-# ponytail: кэш в памяти процесса, живёт до рестарта. Хватает — картинок ~2к,
-# промах стоит один HEAD. Понадобится общий на воркеры — класть в app_config.
+# ponytail: кэш в памяти процесса, живёт до рестарта. "" = проверили, файла нет.
+# Хватает — картинок ~2к, промах стоит один HEAD. Понадобится общий на воркеры — app_config.
 _resolved: dict[str, str] = {}
 
 
@@ -96,28 +99,95 @@ def _head_ok(url: str) -> bool:
         return False
 
 
-def _resolve_sync(name: str) -> str:
-    """Имя из выгрузки → URL файла, который на static реально есть.
+def _resolve_sync(name: str) -> str | None:
+    """Имя из выгрузки → URL файла на static, либо None если файла нет нигде.
 
-    Сначала пробуем расширение как прислали, потом остальные. Не нашли ничего —
-    отдаём исходное: пусть будет честный 404, а не молчаливая подмена.
+    Сначала расширение как прислали, потом остальные. None — честный «фото нет»,
+    а не 302 на заведомый 404 (иначе в топ-5 карточка с «нет фото» и статусом «в наличии»).
     """
     base, _, ext = name.rpartition(".")
     for e in ("." + ext, *(x for x in EXTS if x != "." + ext)):
         if _head_ok(PREFIX + base + e):
             return PREFIX + base + e
-    return PREFIX + name
+    return None
+
+
+def url_alive_sync(url: str) -> bool:
+    """Жива ли ссылка на фото (для чистки топ-5). /img/… — через резолвер расширений."""
+    if not url:
+        return False
+    if url.startswith("/img/"):
+        name = url[len("/img/"):]
+        if not _NAME_RE.match(name):
+            return False
+        cached = _resolved.get(name)
+        if cached is not None:
+            return cached != ""
+        found = _resolve_sync(name)
+        _resolved[name] = found or ""
+        return found is not None
+    if url.startswith(PREFIX):
+        name = url[len(PREFIX):]
+        if _NAME_RE.match(name):
+            return url_alive_sync("/img/" + name)
+        return _head_ok(url)
+    if url.startswith("http://") or url.startswith("https://"):
+        return _head_ok(url)
+    return False
+
+
+async def resolve(name: str) -> str | None:
+    """Асинхронная обёртка резолвера с кэшем процесса."""
+    if not _NAME_RE.match(name):
+        return None
+    cached = _resolved.get(name)
+    if cached is not None:
+        return cached or None
+    found = await asyncio.to_thread(_resolve_sync, name)
+    _resolved[name] = found or ""
+    return found
+
+
+async def clear_broken_image_url(name: str) -> int:
+    """Обнулить image_url у товаров с /img/<name> или абсолютным static…/<base>.*."""
+    from app import db
+    if not _NAME_RE.match(name):
+        return 0
+    base = name.rsplit(".", 1)[0]
+    async with db.pool().acquire() as con:
+        return int(await con.fetchval(
+            """WITH u AS (
+                 UPDATE products
+                    SET image_url = NULL, updated_at = now()
+                  WHERE image_url = $1
+                     OR image_url = $2
+                     OR image_url LIKE $3
+                     OR image_url LIKE $4
+                 RETURNING 1
+               )
+               SELECT count(*)::int FROM u""",
+            "/img/" + name,
+            PREFIX + name,
+            "/img/" + base + ".%",
+            PREFIX + base + ".%",
+        ) or 0)
 
 
 @router.get("/img/{name}")
+@router.head("/img/{name}")
 async def image(name: str):
-    """302 на реальный файл картинки. 302, а не 301: ошибочный ответ не должен
-    залипать в кэше почтовика навсегда."""
+    """302 на реальный файл. Нет файла — 404 и чистим битую ссылку в products."""
     if not _NAME_RE.match(name):
         raise HTTPException(404, "нет такой картинки")
-    url = _resolved.get(name)
-    if url is None:
-        url = _resolved[name] = await asyncio.to_thread(_resolve_sync, name)
+    url = await resolve(name)
+    if not url:
+        # ponytail: побочный эффект на GET картинки — иначе топ-5 вечно показывает
+        # «нет фото» при непустом image_url. Один UPDATE на промах, дальше кэш "".
+        try:
+            await clear_broken_image_url(name)
+        except Exception:  # noqa: BLE001 — отдача 404 важнее учёта в БД
+            pass
+        raise HTTPException(404, "нет такой картинки")
     return RedirectResponse(url, status_code=302)
 
 
@@ -155,21 +225,29 @@ def _demo() -> None:
     assert [x["product_id"] for x in photo_first(pp, 1)] == ["b"]
     assert photo_first([], 5) == []
 
-    global _head_ok
+    global _head_ok, _resolved
     real, alive = _head_ok, set()
+    _resolved.clear()
+    # Имя ≥4 символов — как в _NAME_RE (короткое «x.png» резолвер отклонит).
+    n = "abcd.png"
     try:
         _head_ok = lambda u: u in alive  # noqa: E731
         # Файл лежит как .jpg, хотя выгрузка прислала .png.
-        alive = {PREFIX + "x.jpg"}
-        assert _resolve_sync("x.png") == PREFIX + "x.jpg"
+        alive = {PREFIX + "abcd.jpg"}
+        assert _resolve_sync(n) == PREFIX + "abcd.jpg"
         # Прислали верное расширение — берём его с первой попытки.
-        alive = {PREFIX + "x.png", PREFIX + "x.jpg"}
-        assert _resolve_sync("x.png") == PREFIX + "x.png"
-        # Нет нигде — отдаём как прислали.
+        alive = {PREFIX + "abcd.png", PREFIX + "abcd.jpg"}
+        assert _resolve_sync(n) == PREFIX + "abcd.png"
+        # Нет нигде — None (раньше возвращали битый URL → «нет фото» в топ-5).
         alive = set()
-        assert _resolve_sync("x.png") == PREFIX + "x.png"
+        assert _resolve_sync(n) is None
+        assert url_alive_sync("/img/" + n) is False
+        alive = {PREFIX + "abcd.jpg"}
+        _resolved.clear()
+        assert url_alive_sync("/img/" + n) is True
     finally:
         _head_ok = real
+        _resolved.clear()
     print("images._demo OK")
 
 
