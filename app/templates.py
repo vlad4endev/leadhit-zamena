@@ -300,7 +300,9 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict, user_i
         # сохранить табличную вёрстку готового письма. Но через Jinja-слой: в импортированных
         # письмах товары и фото приходят циклом {% for item in get_*() %} — без рендера
         # в письмо уезжал сам код шаблона вместо карточек.
-        return render_html_template(b.get("html") or "", products, user_id, campaign, lk)
+        # inject=False: иначе при блоке «Товары» рядом карточки вставляются второй раз.
+        return render_html_template(b.get("html") or "", products, user_id, campaign, lk,
+                                    inject=False)
     if t == "columns":
         left = sanitize_html(b.get("left") or "")
         right = sanitize_html(b.get("right") or "")
@@ -421,7 +423,14 @@ _WHY_US_RE = re.compile(r"Почему выбирают", re.I)
 
 
 def _html_already_has_products(html: str, products: list[dict]) -> bool:
-    """В письме уже есть хотя бы одна карточка из переданной подборки?"""
+    """В письме уже есть товарная сетка (наш блок «Товары» или отработавший Jinja-цикл)?"""
+    if not html:
+        return False
+    # Наши карточки: квадрат 150 + object-fit / кнопка в колонке 180.
+    if 'object-fit:contain' in html and 'width="180"' in html:
+        return True
+    if html.count('width="180"') >= 2 and ("Купить" in html or "купить" in html):
+        return True
     for p in products or []:
         name = (p.get("name") or "").strip()
         if name and _esc(name) in html:
@@ -429,13 +438,17 @@ def _html_already_has_products(html: str, products: list[dict]) -> bool:
         pic = img_src(p.get("image_url") or "")
         if pic and pic in html:
             return True
+        pid = str(p.get("product_id") or "")
+        if pid and pid in html:
+            return True
     return False
 
 
 def _inject_products_if_missing(html: str, products: list[dict], campaign: str,
                                 look: dict | None = None) -> str:
     """Если в готовом HTML есть заголовок подборки, но нет карточек (пустой цикл или
-    «замороженный» после конвертации MJML шаблон) — вставляем сетку товаров."""
+    «замороженный» после конвертации MJML шаблон) — вставляем сетку товаров.
+    Не вызывается для фрагментов рядом с блоком type=products — иначе дубль."""
     if not html or not products:
         return html
     if _html_already_has_products(html, products):
@@ -473,20 +486,20 @@ def _inject_products_if_missing(html: str, products: list[dict], campaign: str,
 
 
 def render_html_template(raw: str, products: list[dict], user_id: str, campaign: str,
-                         look: dict | None = None) -> str:
+                         look: dict | None = None, *, inject: bool = True) -> str:
     """Готовый HTML-шаблон целиком. Если внутри есть Jinja ({{…}}/{%…%}) — прогоняем через
     тот же Jinja-слой (заполнит {{unsubscribe_url}}, циклы; неизвестное — пусто). Если Jinja
     не нужна или сломалась — отдаём как есть, подставив ссылку отписки.
-    После рендера: если подборка пустая при живых товарах — вставляем карточки."""
+    inject=False — для html-фрагментов в смешанном письме с блоком «Товары» (без дубля)."""
     unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
     if "{{" in raw or "{%" in raw:
         try:
             out = _jinja_render(raw, products, user_id, campaign)
-            return _inject_products_if_missing(out, products, campaign, look)
+            return _inject_products_if_missing(out, products, campaign, look) if inject else out
         except Exception:  # noqa: BLE001 — не Jinja/битый шаблон → безопасный fallback
             pass
     out = raw.replace("{{unsubscribe_url}}", unsub)
-    return _inject_products_if_missing(out, products, campaign, look)
+    return _inject_products_if_missing(out, products, campaign, look) if inject else out
 
 
 def render_mjml(source: str, products: list[dict], user_id: str, campaign: str,
@@ -591,6 +604,7 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
     lk = _look(look)
     unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
     blocks = blocks or []
+    has_native_products = any((b or {}).get("type") == "products" for b in blocks)
     # Импортированное письмо целиком (единственный блок) → отдаём документ, минуя брендовую обёртку.
     # MJML (type=mjml или содержимое с <mjml>) компилируем; сырой HTML отдаём как есть.
     if len(blocks) == 1:
@@ -616,18 +630,22 @@ def render_blocks(blocks: list[dict], products: list[dict], user_id: str,
                 parts.append(b.get("html") or "")
             else:
                 parts.append(_wrap_block_box(b, _render_block(b, products, campaign, lk, user_id)))
-        body = render_html_template("".join(parts), products, user_id, campaign, look)
-        # render_html_template уже мог обернуть/вставить товары; если это полный документ —
-        # не двойная брендовая обёртка. Здесь склейка даёт фрагмент → оборачиваем.
+        # Рядом с type=products инъекцию не делаем — иначе дубль сетки.
+        body = render_html_template("".join(parts), products, user_id, campaign, look,
+                                    inject=not has_native_products)
         if body.lstrip().lower().startswith(("<!doctype", "<html", "<mjml")):
             return body
-        return _wrap_branded(body.replace("{{unsubscribe_url}}", unsub), lk, unsub)
+        out = _wrap_branded(body.replace("{{unsubscribe_url}}", unsub), lk, unsub)
+        return out if has_native_products else _inject_products_if_missing(out, products, campaign, look)
     parts = []
     for b in blocks:
         html = _wrap_block_box(b or {}, _render_block(b or {}, products, campaign, lk, user_id))
         parts.append(html)
     body = "".join(parts).replace("{{unsubscribe_url}}", unsub)
     out = _wrap_branded(body, lk, unsub)
+    # Блок «Товары» уже нарисовал сетку — второй раз не вставляем.
+    if has_native_products:
+        return out
     return _inject_products_if_missing(out, products, campaign, look)
 
 
@@ -723,6 +741,15 @@ def _demo() -> None:
         {"type": "html", "html": '{% endfor %}'},
     ], P[:2], "u1", "best_offer")
     assert "Товар &amp;" in split_mixed and "{% for" not in split_mixed, split_mixed
+
+    # Заголовок подборки + type=products (+ html) → без дубля сетки (кнопка ровно N раз).
+    no_dupe = render_blocks([
+        {"type": "heading", "text": "Подборка товаров для вас"},
+        {"type": "html", "html": "<p>текст</p>"},
+        {"type": "products"},
+    ], P[:3], "u1", "postsale")
+    assert no_dupe.count(LOOK_DEFAULTS["button"]) == 3, no_dupe.count(LOOK_DEFAULTS["button"])
+    assert no_dupe.count('width="180"') == 3  # ровно 3 карточки, без второго ряда от inject
 
     print("templates._demo OK")
 

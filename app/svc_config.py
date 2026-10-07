@@ -14,7 +14,7 @@ DEFAULTS = {
     "cart": {**_SENDER, "subject": "Ваша корзина ждёт",
              "cooldown_hours": 72, "depart_timeout_sec": 180, "grace_sec": 90},
     "postsale": {**_SENDER, "subject": "Спасибо за заказ — рекомендации для вас",
-                 "delay_days": 7},
+                 "delay_days": 7, "items_limit": 30},
 }
 
 # Метаданные полей для редактора: тип и группа. Аудитория — read-only (правила зашиты по ТЗ).
@@ -28,6 +28,7 @@ FIELD_META = {
     "send_hour": {"type": "number", "group": "timing", "label": "Час отправки"},
     "max_per_day": {"type": "number", "group": "timing", "label": "Макс. писем/день (0 = без лимита)"},
     "delay_days": {"type": "number", "group": "timing", "label": "Задержка отправки, дней"},
+    "items_limit": {"type": "number", "group": "timing", "label": "Товаров в письме (макс.)"},
     "cooldown_hours": {"type": "number", "group": "timing", "label": "Частотный кап, часов"},
     "depart_timeout_sec": {"type": "number", "group": "timing", "label": "Таймаут ухода, сек"},
     "grace_sec": {"type": "number", "group": "timing", "label": "Grace-период, сек"},
