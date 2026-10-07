@@ -177,9 +177,6 @@ def format_send_error(exc: BaseException, cfg: dict | None = None) -> str:
                 f"Детали: {raw}")
 
     if isinstance(exc, OSError) or "connection refused" in low or "unreachable" in low:
-        if "Network is unreachable" in msg or "cannot connect" in msg:
-            return (f"Нет TCP до {host}:{port}. Из контейнера mailer хост недоступен "
-                    f"(firewall / IPv6 / неверный хост). Детали: {raw}")
         return (f"Нет TCP до {host}:{port}. Из контейнера mailer хост недоступен "
                 f"(firewall / IPv6 / неверный хост). Детали: {raw}")
 
