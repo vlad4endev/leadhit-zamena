@@ -1,5 +1,9 @@
 # GrosterHit — прод-стек в Docker. Переменные берутся из .env (см. .env.example, раздел Docker).
 # Запуск: docker compose up -d --build   (подробности — deploy/DOCKER.md)
+#
+# Mailer на network_mode: host: на многих VPS Docker bridge не ходит в SMTP
+# (OSError 101 / timeout). api/workers достучатся через host.docker.internal
+# (MAILER_HOST_IP = IP compose-моста br-*, обычно 172.18.0.1).
 
 services:
   db:
@@ -26,10 +30,13 @@ services:
       args:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     env_file: .env
+    extra_hosts:
+      # IP моста: MAILER_HOST_IP в .env (ip -br a | grep '^br-'). Не docker0.
+      - "host.docker.internal:${MAILER_HOST_IP:-host-gateway}"
     environment:
-      # В сети compose БД и mailer — по имени сервиса (перебивают .env).
       DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
-      MAILER_SERVICE_URL: http://mailer:8080
+      # mailer на host-network — не имя сервиса «mailer».
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
     # Порт только на loopback хоста: наружу — через nginx; admin/feeds — по SSH-туннелю.
     # Хостовый порт настраивается (API_HOST_PORT) — на случай, если 8000 занят (напр. Portainer).
     ports:
@@ -51,9 +58,11 @@ services:
         PIP_INDEX_URL: ${PIP_INDEX_URL:-}
     command: python scripts/worker_loop.py
     env_file: .env
+    extra_hosts:
+      - "host.docker.internal:${MAILER_HOST_IP:-host-gateway}"
     environment:
       DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
-      MAILER_SERVICE_URL: http://mailer:8080
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
     depends_on:
       db:
         condition: service_healthy
@@ -62,14 +71,16 @@ services:
   mailer:
     build: ./mailer-service
     env_file: .env
+    # Исходящий SMTP как с хоста (bridge на VPS часто даёт Network is unreachable).
+    network_mode: host
     environment:
       DB_PATH: /data/outbox.db
-      # Токен API mailer'а = токен, которым app к нему стучится (один секрет в .env).
       API_TOKEN: ${MAILER_SERVICE_TOKEN:-}
-      # Колбэк статусов доставки обратно в app.
-      CALLBACK_URL: http://api:8000/esp/webhook
+      # api слушает 127.0.0.1:${API_HOST_PORT} на хосте.
+      CALLBACK_URL: http://127.0.0.1:${API_HOST_PORT:-8000}/esp/webhook
     volumes:
       - mailer_data:/data
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
     depends_on:
       - api
     restart: unless-stopped

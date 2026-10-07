@@ -12,13 +12,15 @@ cp .env.example .env                   # заполнить секреты (см
 - `POSTGRES_PASSWORD` — пароль контейнерной БД (обязателен).
 - `CORS_ORIGINS=https://groster.me,https://www.groster.me` — домены витрины.
 - `PUBLIC_BASE_URL=https://groster.skypath.fun` — домен API (ссылки в письмах, embed).
-- Почта: в Docker всё идёт через сервис `mailer`. Либо `SMTP_*` в `.env` (хост/логин/пароль
-  ящика или ESP; порт **465** = SSL), либо пусто → настройте в админке
-  **Настройки → Почта** (пресеты Яндекс/Mail.ru/Gmail). Без SMTP — dev-лог.
-  Sendmail в slim-контейнере нет; без ESP см. [MAIL_DNS.md](MAIL_DNS.md).
+- Почта: сервис `mailer` на **host-network** (на VPS bridge часто не ходит в SMTP).
+  В `.env` обязателен `MAILER_HOST_IP` — IP моста `br-*` (`ip -br a | grep '^br-'`,
+  обычно `172.18.0.1`). SMTP: `SMTP_*` или админка **Настройки → Почта**
+  (порт **465** = SSL). Без SMTP — dev-лог. См. [MAIL_DNS.md](MAIL_DNS.md).
 - `MAILER_SERVICE_TOKEN` — общий секрет app↔mailer (compose прокинет его как `API_TOKEN`).
+- Снаружи закройте порт 8080 на eth0; с docker-моста разрешите
+  (`ufw allow from 172.18.0.0/16 to any port 8080`).
 
-`DATABASE_URL` и `MAILER_SERVICE_URL` в Docker задаёт сам compose (сервисы `db`/`mailer`).
+`DATABASE_URL` задаёт compose. `MAILER_SERVICE_URL` = `http://host.docker.internal:8080`.
 
 ## 2. TLS-сертификат (на хосте, один раз)
 nginx-контейнер монтирует серты с хоста (`/etc/letsencrypt`). Выпуск — хостовым certbot:
