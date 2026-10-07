@@ -20,11 +20,19 @@ async def _process(msg: dict) -> None:
         "subject": msg["subject"],
         "outbox_id": msg["id"],
     }
+    t0 = time.monotonic()
     try:
         message_id = await sender.send(
             msg["to_addr"], msg["subject"], msg["html"], msg["from_email"], msg["from_name"])
         await store.mark_sent(msg["id"], message_id)
-        await sender.callback(meta, "sent", **err_ctx)   # событие «отправлено» в основное приложение
+        # Callback вне критического пути: ошибка/тормоза API не копят очередь.
+        try:
+            await sender.callback(meta, "sent", **err_ctx)
+        except Exception as ce:  # noqa: BLE001
+            print(f"[callback-fail] {msg['id']} {type(ce).__name__}: {ce}")
+        dt = time.monotonic() - t0
+        if dt > 5:
+            print(f"[send-slow] {msg['id']} to={msg['to_addr']} {dt:.1f}s")
     except Exception as e:  # noqa: BLE001 — сбой отправки → ретрай/фейл
         attempts = msg["attempts"] + 1
         err_type = type(e).__name__
@@ -32,32 +40,43 @@ async def _process(msg: dict) -> None:
         await store.set_last_error(msg["id"], f"{err_type}: {err_text}")
         if attempts >= settings.max_attempts:
             await store.mark_failed(msg["id"], attempts)
-            await sender.callback(
-                meta, "failed",
-                error=err_text, error_type=err_type, attempts=attempts, **err_ctx,
-            )
+            try:
+                await sender.callback(
+                    meta, "failed",
+                    error=err_text, error_type=err_type, attempts=attempts, **err_ctx,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             print(f"[send-failed] {msg['id']} to={msg['to_addr']} {err_type}: {e}")
         else:
             backoff = settings.retry_base_sec * (2 ** (attempts - 1))
             await store.mark_retry(msg["id"], attempts, time.time() + backoff)
             # Ретрай тоже шлём в api — чтобы в «Настройки → Логи» была видна причина SMTP.
-            await sender.callback(
-                meta, "retry",
-                error=err_text, error_type=err_type, attempts=attempts,
-                retry_in_sec=backoff, **err_ctx,
-            )
+            try:
+                await sender.callback(
+                    meta, "retry",
+                    error=err_text, error_type=err_type, attempts=attempts,
+                    retry_in_sec=backoff, **err_ctx,
+                )
+            except Exception:  # noqa: BLE001
+                pass
             print(f"[send-retry] {msg['id']} attempt={attempts} in {backoff}s: {e}")
 
 
 async def run() -> None:
     print("mailer-worker: старт")
     while True:
-        rate = (await store.get_config())["rate_per_min"]   # актуальный рейт-лимит из конфига
-        interval = 60 / max(rate, 1)
+        rate = int((await store.get_config())["rate_per_min"] or 120)
+        # Защита от «1 письмо / 2 мин»: слишком маленький rate в админке.
+        if rate < 1:
+            rate = 1
+        interval = 60.0 / rate
         batch = await store.due(limit=20)
         if not batch:
-            await asyncio.sleep(1)
+            await asyncio.sleep(0.5)
             continue
-        for msg in batch:
+        for i, msg in enumerate(batch):
             await _process(msg)
-            await asyncio.sleep(interval)   # рейт-лимит между отправками
+            # Пауза только МЕЖДУ письмами, не после последнего в пачке.
+            if i + 1 < len(batch) and interval > 0:
+                await asyncio.sleep(interval)

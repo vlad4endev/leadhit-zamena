@@ -11,12 +11,18 @@ class Settings(BaseSettings):
     mailer_service_url: str = ""
     mailer_service_token: str = ""
 
-    # SMTP-relay ESP. Пусто host → dev-LogMailer.
+    # Транспорт: sendmail | smtp | '' (авто: mailer-service → sendmail → smtp → log).
+    # На хосте без ESP: MAIL_TRANSPORT=sendmail (локальный MTA: postfix/exim/ssmtp).
+    mail_transport: str = ""
+    sendmail_path: str = "/usr/sbin/sendmail"
+
+    # SMTP: ESP или свой ящик. Нужен при mail_transport=smtp (или авто без sendmail).
     smtp_host: str = ""
     smtp_port: int = 587
     smtp_user: str = ""
     smtp_password: str = ""
     smtp_starttls: bool = True
+    smtp_ssl: bool = False  # порт 465 / implicit SSL; иначе STARTTLS на 587
     mail_from: str = "noreply@mail.groster.me"
     mail_from_name: str = "groster.me"
 

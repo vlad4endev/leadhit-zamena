@@ -5,7 +5,10 @@
 и пробрасывает статусы доставки обратно в основное приложение.
 
 Обслуживает и **авторассылку** (основное приложение шлёт письма триггеров по одному),
-и **массовую рассылку** (`/v1/send/batch`).
+и **массовую рассылку** (`/v1/send/batch`). Со стороны приложения: `get_mailer().send_batch()`
+и админ `POST /admin/mail/send-batch`.
+
+Транспорт: **sendmail** (`MAIL_TRANSPORT=sendmail`) или SMTP. DNS: `../deploy/MAIL_DNS.md`.
 
 ## Зачем отдельно
 - ESP-интеграция и прогрев домена изолированы от бизнес-логики.
@@ -18,7 +21,8 @@ python3.11 -m venv .venv && .venv/bin/pip install -r requirements.txt
 cp .env.example .env        # заполнить SMTP_* и CALLBACK_URL
 .venv/bin/uvicorn app.main:app --port 8080
 ```
-Пустой `SMTP_HOST` → dev-режим: письма только логируются (для локали/тестов).
+Пустой `SMTP_HOST` и без sendmail → dev-режим: письма только логируются.
+Порт 465 (или `SMTP_SSL=true`) — implicit SSL для ящиков Яндекс/Mail.ru.
 
 ## API
 | Метод | Путь | Назначение |
