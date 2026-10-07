@@ -17,6 +17,33 @@ CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
 MAX_ATTEMPTS = 5  # после N сбоев ESP/mailer задача → failed (не крутим вечно)
 
 
+def normalize_order_items(items: list[dict], catalog: dict[str, dict]) -> list[dict]:
+    """Позиции заказа → {product_id, category_id, price}.
+
+    Заказ с витрины (POST /order) не несёт category_id — без него cross-sell падал
+    и товары в письмо постпродажи не попадали. Категорию и цену добираем из каталога.
+    Явная category_id заказа важнее каталога: это категория покупки, не текущая карточки.
+    """
+    out: list[dict] = []
+    for i in items or []:
+        pid = str(i.get("product_id") or "").strip()
+        if not pid:
+            continue
+        row = catalog.get(pid) or {}
+        cat = str(i.get("category_id") or "").strip() or str(row.get("category_id") or "").strip()
+        if not cat:
+            continue
+        price = i.get("price")
+        if price is None or price == "":
+            price = row.get("price", 0)
+        try:
+            price_f = float(price or 0)
+        except (TypeError, ValueError):
+            price_f = 0.0
+        out.append({"product_id": pid, "category_id": cat, "price": price_f})
+    return out
+
+
 def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]]) -> tuple[str | None, list[str]]:
     """Подбор cross-sell (ТЗ 4.4), без ML.
 
@@ -82,7 +109,13 @@ async def run_due(con: asyncpg.Connection, mailer=None, force: bool = False) -> 
            FOR UPDATE SKIP LOCKED"""
     )
     for job in jobs:
-        result = await _process_one(con, job, mailer, cfg, look, blocks, template_id)
+        try:
+            result = await _process_one(con, job, mailer, cfg, look, blocks, template_id)
+        except Exception as e:  # noqa: BLE001 — один битый заказ не останавливает очередь
+            print(f"[postsale] job {job['id']} ERROR {type(e).__name__}: {e}")
+            if await _bump_attempt(con, job):
+                await _finish(con, job["id"], "failed")
+            continue
         if result:
             sent += 1
     return sent
@@ -131,7 +164,7 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
             )
             return False
 
-    items = json.loads(order["items"])
+    items = await _order_items(con, order["items"])
     top5 = await _top5_map(con, [i["category_id"] for i in items])
     category, product_ids = pick_cross_sell(items, top5)
     if not product_ids:
@@ -178,11 +211,42 @@ async def _finish(con: asyncpg.Connection, job_id: int, state: str) -> None:
     await con.execute("UPDATE send_queue SET state = $2 WHERE id = $1", job_id, state)
 
 
+def _parse_items(raw) -> list:
+    if raw is None:
+        return []
+    if isinstance(raw, str):
+        raw = json.loads(raw)
+    return list(raw) if isinstance(raw, list) else []
+
+
+async def _order_items(con: asyncpg.Connection, raw) -> list[dict]:
+    items = _parse_items(raw)
+    pids = list({str(i.get("product_id") or "").strip() for i in items if str(i.get("product_id") or "").strip()})
+    catalog: dict[str, dict] = {}
+    if pids:
+        rows = await con.fetch(
+            """SELECT product_id, category_id, price FROM products
+               WHERE product_id = ANY($1::text[])""",
+            pids,
+        )
+        catalog = {r["product_id"]: {"category_id": r["category_id"], "price": float(r["price"])}
+                   for r in rows}
+    return normalize_order_items(items, catalog)
+
+
 async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str, list[str]]:
+    cats = [c for c in set(categories) if c]
+    if not cats:
+        return {}
+    # in_stock здесь, а не после подбора: выжженная категория должна отдать ход следующей,
+    # а не отменять письмо, пока в заказе есть другая категория с живым топ-5.
     rows = await con.fetch(
-        """SELECT category_id, product_id FROM top5_by_category
-           WHERE category_id = ANY($1::text[]) ORDER BY category_id, position""",
-        list(set(categories)),
+        """SELECT t.category_id, t.product_id
+           FROM top5_by_category t
+           JOIN products p ON p.product_id = t.product_id AND p.in_stock
+           WHERE t.category_id = ANY($1::text[])
+           ORDER BY t.category_id, t.position""",
+        cats,
     )
     out: dict[str, list[str]] = {}
     for r in rows:
@@ -191,14 +255,23 @@ async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str,
 
 
 async def _load_products(con: asyncpg.Connection, product_ids: list[str]) -> list[dict]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for raw in product_ids:
+        pid = str(raw or "").strip()
+        if pid and pid not in seen:
+            seen.add(pid)
+            ids.append(pid)
+    if not ids:
+        return []
     rows = await con.fetch(
         """SELECT product_id, name, price, image_url, product_url FROM products
            WHERE product_id = ANY($1::text[]) AND in_stock""",
-        product_ids,
+        ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}
     # Сохраняем порядок из подбора (позиции топ-5).
-    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in product_ids if pid in by_id]
+    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
 def _demo() -> None:
@@ -220,6 +293,17 @@ def _demo() -> None:
     # Совсем нечего предложить → (None, []).
     assert pick_cross_sell([{"product_id": "b1", "category_id": "bags", "price": 100},
                             {"product_id": "b2", "category_id": "bags", "price": 90}], top5) == (None, [])
+    # Заказ с витрины без category_id: категорию берём из каталога, цену заказа не затираем.
+    catalog = {"s1": {"category_id": "shoes", "price": 5990}}
+    norm = normalize_order_items([{"product_id": " s1 ", "price": 100}], catalog)
+    assert norm == [{"product_id": "s1", "category_id": "shoes", "price": 100.0}], norm
+    # Цены в заказе нет — подставляем каталожную, иначе сортировка «самый дорогой» врёт.
+    assert normalize_order_items([{"product_id": "s1"}], catalog)[0]["price"] == 5990.0
+    # Явная категория заказа важнее каталога.
+    assert normalize_order_items(
+        [{"product_id": "s1", "category_id": "bags", "price": 1}], catalog)[0]["category_id"] == "bags"
+    # Товара нет в каталоге и категории в заказе нет — позицию не из чего подбирать.
+    assert normalize_order_items([{"product_id": "ghost", "price": 1}], catalog) == []
     print("postsale._demo OK")
 
 

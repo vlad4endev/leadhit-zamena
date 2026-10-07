@@ -540,15 +540,29 @@ class TestEmail(BaseModel):
 
 
 async def _sample_products(con, limit: int = 6) -> list[dict]:
-    """Товары для превью и тест-письма. Сначала те, у которых есть фото: иначе LIMIT без
-    сортировки вытаскивал первые строки каталога (часто без image_url), и превью показывало
-    серые плейсхолдеры при живом каталоге. Порядок стабильный — превью не «дёргается»
-    между рендерами. 6 штук = две строки карточек по 3."""
+    """Товары для превью и тест-письма.
+
+    Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
+    без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
+    не совпадало с письмом. Внутри топа фото идут вперёд (иначе серые плейсхолдеры),
+    порядок стабильный. 6 штук = две строки карточек по 3. Нет топ-5 — любые в наличии.
+    """
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE in_stock
-           ORDER BY (image_url IS NULL OR image_url = ''), product_id
-           LIMIT $1""", limit)
+        """SELECT product_id, name, price, image_url, product_url FROM (
+             SELECT DISTINCT ON (p.product_id)
+                    p.product_id, p.name, p.price, p.image_url, p.product_url,
+                    (t.product_id IS NULL) AS not_top,
+                    COALESCE(t.position, 99) AS pos,
+                    (p.image_url IS NULL OR p.image_url = '') AS no_img
+             FROM products p
+             LEFT JOIN top5_by_category t ON t.product_id = p.product_id
+             WHERE p.in_stock
+             ORDER BY p.product_id, t.position NULLS LAST
+           ) s
+           ORDER BY not_top, pos, no_img, product_id
+           LIMIT $1""",
+        limit,
+    )
     return [dict(r, price=float(r["price"])) for r in rows]
 
 
