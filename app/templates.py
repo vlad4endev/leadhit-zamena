@@ -263,8 +263,10 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict, user_i
     if t == "image":
         if not b.get("src"):
             return ""
+        # /admin/uploads/… и прочие относительные → абсолютный URL (srcdoc-превью и почта
+        # иначе не резолвят путь от about:srcdoc / без хоста сервиса).
         rad = _RADIUS.get(b.get("radius", "s"), "10px")
-        tag = (f'<img src="{_esc(b["src"])}" alt="{_esc(b.get("alt"))}" '
+        tag = (f'<img src="{_esc(img_src(b["src"]))}" alt="{_esc(b.get("alt"))}" '
                f'style="max-width:100%;border-radius:{rad};display:block;margin:10px 0">')
         return f'<a href="{_utm(b["url"], campaign)}">{tag}</a>' if b.get("url") else tag
     if t == "divider":
@@ -750,6 +752,13 @@ def _demo() -> None:
     ], P[:3], "u1", "postsale")
     assert no_dupe.count(LOOK_DEFAULTS["button"]) == 3, no_dupe.count(LOOK_DEFAULTS["button"])
     assert no_dupe.count('width="180"') == 3  # ровно 3 карточки, без второго ряда от inject
+
+    # Блок «Картинка» с относительным /admin/uploads/… → абсолютный src (превью srcdoc + письмо).
+    img_blk = render_blocks(
+        [{"type": "image", "src": "/admin/uploads/bea59c5cd7d9f217.png", "alt": "groster"}],
+        [], "u1", "best_offer")
+    assert 'src="http' in img_blk and "/admin/uploads/bea59c5cd7d9f217.png" in img_blk, img_blk
+    assert 'src="/admin/uploads/' not in img_blk  # не оставляем относительный путь
 
     print("templates._demo OK")
 
