@@ -1,7 +1,26 @@
-# Устарело: host-network mailer вшит в docker-compose.yml.
-# Оставлен для совместимости со старыми командами `-f docker-compose.mailer-host.yml`.
-# Достаточно: docker compose up -d --build
-#
-# В .env обязательно: MAILER_HOST_IP=172.18.0.1  (ip -br a | grep '^br-')
+# Совместимость: тот же host-network mailer, что уже в docker-compose.yml.
+# Можно не указывать этот файл: достаточно `docker compose up -d`.
+# В .env: MAILER_HOST_IP=172.18.0.1  (ip -br a | grep '^br-')
 
-services: {}
+services:
+  api:
+    extra_hosts:
+      - "host.docker.internal:${MAILER_HOST_IP:-host-gateway}"
+    environment:
+      DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
+
+  workers:
+    extra_hosts:
+      - "host.docker.internal:${MAILER_HOST_IP:-host-gateway}"
+    environment:
+      DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
+
+  mailer:
+    network_mode: host
+    environment:
+      DB_PATH: /data/outbox.db
+      API_TOKEN: ${MAILER_SERVICE_TOKEN:-}
+      CALLBACK_URL: http://127.0.0.1:${API_HOST_PORT:-8000}/esp/webhook
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]
