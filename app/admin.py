@@ -872,26 +872,44 @@ async def _sample_products(con, limit: int = 6) -> list[dict]:
     Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
     без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
     не совпадало с письмом. Внутри топа фото идут вперёд, затем прогрев CDN-URL.
-    6 штук = две строки карточек по 3. Нет топ-5 — любые в наличии с фото.
+    6 штук = две строки карточек по 3.
+
+    Фолбэки (чтобы превью не было пустым «Подборка без товаров»):
+    1) топ-5 / каталог с фото + живой CDN;
+    2) те же url без require_live (CDN временно недоступен);
+    3) любые in_stock без фото — карточки с плейсхолдером.
     """
     from app import images
-    rows = await con.fetch(
-        f"""SELECT product_id, name, price, image_url, product_url FROM (
-             SELECT DISTINCT ON (p.product_id)
-                    p.product_id, p.name, p.price, p.image_url, p.product_url,
-                    (t.product_id IS NULL) AS not_top,
-                    COALESCE(t.position, 99) AS pos
-             FROM products p
-             LEFT JOIN top5_by_category t ON t.product_id = p.product_id
-             WHERE p.in_stock AND {images.HAS_PHOTO_SQL.replace('image_url', 'p.image_url')}
-             ORDER BY p.product_id, t.position NULLS LAST
-           ) s
-           ORDER BY not_top, pos, product_id
-           LIMIT $1""",
-        limit,
-    )
-    products = [dict(r, price=float(r["price"])) for r in rows]
-    return await images.warm_products(products, require_live=True)
+
+    async def _fetch(*, with_photo: bool) -> list[dict]:
+        photo_sql = ("AND " + images.HAS_PHOTO_SQL.replace("image_url", "p.image_url")
+                     if with_photo else "")
+        rows = await con.fetch(
+            f"""SELECT product_id, name, price, image_url, product_url FROM (
+                 SELECT DISTINCT ON (p.product_id)
+                        p.product_id, p.name, p.price, p.image_url, p.product_url,
+                        (t.product_id IS NULL) AS not_top,
+                        COALESCE(t.position, 99) AS pos
+                 FROM products p
+                 LEFT JOIN top5_by_category t ON t.product_id = p.product_id
+                 WHERE p.in_stock {photo_sql}
+                 ORDER BY p.product_id, t.position NULLS LAST
+               ) s
+               ORDER BY not_top, pos, product_id
+               LIMIT $1""",
+            limit,
+        )
+        return [dict(r, price=float(r["price"])) for r in rows]
+
+    raw = await _fetch(with_photo=True)
+    products = await images.warm_products(raw, require_live=True)
+    if products:
+        return products
+    products = await images.warm_products(raw, require_live=False)
+    if products:
+        return products
+    # Каталог с фото пуст / CDN мёртв — всё равно покажем карточки (серый плейсхолдер).
+    return await _fetch(with_photo=False)
 
 
 @router.post("/scenario/{service}/test")

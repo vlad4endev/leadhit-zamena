@@ -122,6 +122,29 @@ async def _load_products(con, product_ids: list[str]) -> list[dict]:
     return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
+async def _fallback_catalog_products(con, recent: set[str], limit: int = 5) -> list[dict]:
+    """Запасная подборка: любые in_stock с фото из каталога, минус недавний дедуп.
+    Нужна, когда топ-5 категории выжжен по фото/OOS, а письмо иначе уйдёт пустым."""
+    rows = await con.fetch(
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE in_stock AND {images.HAS_PHOTO_SQL}
+           ORDER BY updated_at DESC NULLS LAST, product_id
+           LIMIT $1""",
+        max(limit * 4, 20),
+    )
+    picked = []
+    for r in rows:
+        if r["product_id"] in recent:
+            continue
+        picked.append(dict(r, price=float(r["price"])))
+        if len(picked) >= limit:
+            break
+    if len(picked) < limit:
+        # Дедуп выжег всё — берём как есть.
+        picked = [dict(r, price=float(r["price"])) for r in rows[:limit]]
+    return await images.warm_products(picked, require_live=True)
+
+
 async def run_batch(con, mailer=None, force: bool = False) -> int:
     """Батч-джоб Best Offer (раз/сутки). Возвращает число отправленных писем."""
     cfg = await svc_config.load(con, "best_offer")
@@ -192,24 +215,24 @@ async def _send_one(con, cand, mailer, cfg, look, blocks, template_id, order, to
     start = cand["rotation_pointer_category_id"] or cand["last_purchase_category_id"] or default_start
     recent = await _recent_products(con, cand["user_id"])
     category, product_ids, next_ptr = rotate_and_pick(start, order, top5, recent)
-    if not product_ids:
-        await activity_log.write(
-            con, level="warn", source="best_offer", event="skip", service="best_offer",
-            user_id=cand["user_id"],
-            message=f"skip: {activity_log.reason_ru('no_products')}",
-            details={"reason": "no_products", "start_category": start, "recent_n": len(recent)},
-        )
-        return 0
-
-    # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
-    products = images.photo_first(await _load_products(con, product_ids), 5)
-    products = await images.warm_products(products, require_live=True)
+    products: list[dict] = []
+    if product_ids:
+        # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
+        products = images.photo_first(await _load_products(con, product_ids), 5)
+        products = await images.warm_products(products, require_live=True)
+    if not products:
+        # Топ пуст / выжжен по фото — не бросаем письмо: любые in_stock с фото из каталога.
+        products = await _fallback_catalog_products(con, recent, limit=5)
+        category = category or "catalog"
+        if not next_ptr and order:
+            next_ptr = order[(order.index(start) + 1) % len(order)] if start in order else order[0]
     if not products:
         await activity_log.write(
             con, level="warn", source="best_offer", event="skip", service="best_offer",
             user_id=cand["user_id"],
-            message=f"skip: {activity_log.reason_ru('oos')}",
-            details={"reason": "oos", "category": category, "picked": product_ids},
+            message=f"skip: {activity_log.reason_ru('no_products')}",
+            details={"reason": "no_products", "start_category": start, "recent_n": len(recent),
+                     "picked": product_ids},
         )
         return 0
     if blocks:
