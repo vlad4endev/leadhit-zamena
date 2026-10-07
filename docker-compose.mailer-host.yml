@@ -1,0 +1,33 @@
+# Mailer на сети хоста: исходящий SMTP как с хоста (фикс ENETUNREACH из bridge).
+#
+# Запуск:
+#   docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml up -d --build api workers mailer
+#
+# Важно: host-gateway часто = 172.17.0.1 (docker0), а у compose свой мост br-… (часто
+# 172.18.0.1). Если docker0 DOWN — api не достучится до mailer. Задайте в .env:
+#   MAILER_HOST_IP=172.18.0.1
+# Узнать IP: ip -br a | grep '^br-'
+
+services:
+  api:
+    extra_hosts:
+      - "host.docker.internal:${MAILER_HOST_IP:-host-gateway}"
+    environment:
+      DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
+
+  workers:
+    extra_hosts:
+      - "host.docker.internal:${MAILER_HOST_IP:-host-gateway}"
+    environment:
+      DATABASE_URL: postgresql://grosterhit:${POSTGRES_PASSWORD}@db:5432/grosterhit
+      MAILER_SERVICE_URL: http://host.docker.internal:8080
+
+  mailer:
+    network_mode: host
+    environment:
+      DB_PATH: /data/outbox.db
+      API_TOKEN: ${MAILER_SERVICE_TOKEN:-}
+      CALLBACK_URL: http://127.0.0.1:${API_HOST_PORT:-8000}/esp/webhook
+    # 0.0.0.0 — api ходит через IP моста (MAILER_HOST_IP). С eth0 закройте 8080.
+    command: ["uvicorn", "app.main:app", "--host", "0.0.0.0", "--port", "8080"]

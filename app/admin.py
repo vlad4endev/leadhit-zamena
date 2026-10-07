@@ -50,6 +50,7 @@ async def get_config() -> list[dict]:
 async def get_settings() -> dict:
     """Глобальные настройки: редактируемые значения + метаданные + read-only статус интеграций."""
     from app.config import settings as env
+    from app.mailer import get_mailer
     async with db.pool().acquire() as con:
         values = await app_settings.get(con)
         await onec.load_overrides(con)
@@ -58,10 +59,35 @@ async def get_settings() -> dict:
             or bool(env.onec_token)
     meta = {k: {"type": m[0], "group": m[1], "label": m[2], "restart": m[3]}
             for k, m in app_settings.EDITABLE.items()}
+
+    # Статус почты: при mailer-service — его provider; иначе локальный транспорт.
+    mail_label = "на вкладке «Почта»"
+    mail_ok = False
+    if env.mailer_service_url:
+        try:
+            cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
+            provider = cfg.get("provider") or "dev"
+            mail_ok = provider in ("smtp", "sendmail")
+            host = cfg.get("smtp_host") or ""
+            if provider == "sendmail":
+                mail_label = "sendmail"
+            elif provider == "smtp" and host:
+                mail_label = host
+            else:
+                mail_label = f"mailer · {provider}"
+        except Exception:  # noqa: BLE001
+            mail_label = "mailer недоступен"
+    else:
+        name = type(get_mailer()).__name__
+        mail_ok = name in ("SendmailMailer", "SmtpMailer")
+        mail_label = {"SendmailMailer": "sendmail", "SmtpMailer": env.smtp_host or "smtp",
+                      "LogMailer": "dev-лог"}.get(name, name)
+
     return {
         "values": values, "meta": meta,
         "readonly": {
-            "smtp_host": env.smtp_host or None, "smtp_configured": bool(env.smtp_host),
+            "smtp_host": env.smtp_host or None, "smtp_configured": mail_ok,
+            "mail_status": mail_label,
             # base_url/token правятся в админке (app_config) поверх .env; токен наружу не отдаём.
             "onec_base_url": onec.base_url() or None, "onec_configured": onec.configured(),
             "onec_token_set": onec_token_set,
@@ -574,7 +600,7 @@ async def scenario_test(service: str, body: TestEmail) -> dict:
         try:
             res = await asyncio.to_thread(_mailer_svc, "POST", "/v1/send/sync", {
                 "to": body.email, "subject": subject, "html": html,
-                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]})
+                "from_email": cfg["sender_email"], "from_name": cfg["sender_name"]}, 45)
         except Exception as e:  # noqa: BLE001 — сервис недоступен
             return {"ok": False, "error": f"{type(e).__name__}: {e}", "live": True}
         return {"ok": bool(res.get("ok")), "error": res.get("error"),
@@ -868,8 +894,13 @@ async def get_vendor(path: str):
     return FileResponse(full, headers={"Cache-Control": "public, max-age=604800"})
 
 
-def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
-    """Синхронный вызов mailer-service (в потоке)."""
+def _mailer_svc(method: str, path: str, body: Optional[dict] = None,
+                timeout: float = 15) -> dict:
+    """Синхронный вызов mailer-service (в потоке).
+
+    Для /v1/test и /v1/send/sync нужен timeout > SMTP (30с), иначе API обрывает
+    раньше и маскирует реальную ошибку провайдера.
+    """
     import urllib.request
     from app.config import settings
     url = settings.mailer_service_url.rstrip("/") + path
@@ -878,23 +909,25 @@ def _mailer_svc(method: str, path: str, body: Optional[dict] = None) -> dict:
         headers["Authorization"] = f"Bearer {settings.mailer_service_token}"
     data = json.dumps(body).encode() if body is not None else None
     req = urllib.request.Request(url, data=data, method=method, headers=headers)
-    with urllib.request.urlopen(req, timeout=15) as r:
+    with urllib.request.urlopen(req, timeout=timeout) as r:
         return json.loads(r.read().decode())
 
 
 async def _mailer_is_live(mailer) -> bool:
-    """live = письмо реально уйдёт в ESP, а не осядет в dev-логе.
+    """live = письмо реально уйдёт (sendmail/SMTP), а не осядет в dev-логе.
 
-    Учитывает dev-режим самого mailer-service: HttpMailer != LogMailer ещё не значит,
-    что сервис отправит — у него может быть пустой smtp_host (provider='dev').
+    Учитывает режим mailer-service: HttpMailer != LogMailer ещё не значит,
+    что сервис отправит — у него может быть provider='dev'.
     """
     name = type(mailer).__name__
     if name == "LogMailer":
         return False
+    if name == "SendmailMailer":
+        return True
     if name == "HttpMailer":
         try:
             cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
-            return cfg.get("provider") == "smtp"
+            return cfg.get("provider") in ("smtp", "sendmail")
         except Exception:  # noqa: BLE001 — сервис недоступен → не рисуем ложный «отправлено»
             return False
     return True   # SmtpMailer — шлёт напрямую в SMTP-relay
@@ -902,23 +935,52 @@ async def _mailer_is_live(mailer) -> bool:
 
 @router.get("/mail/config")
 async def mail_config() -> dict:
-    """Настройки почтового провайдера (из mailer-service). Пароль не отдаётся."""
+    """Настройки почтового провайдера. mailer-service или локальный sendmail/SMTP."""
     from app.config import settings
-    if not settings.mailer_service_url:
-        return {"configured": False}
-    try:
-        cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
-        return {"configured": True, "service_url": settings.mailer_service_url, **cfg}
-    except Exception as e:  # noqa: BLE001
-        return {"configured": True, "service_url": settings.mailer_service_url,
-                "error": f"{type(e).__name__}: {e}"}
+    from app.mailer import get_mailer
+
+    if settings.mailer_service_url:
+        try:
+            cfg = await asyncio.to_thread(_mailer_svc, "GET", "/v1/config")
+            return {"configured": True, "service_url": settings.mailer_service_url, **cfg}
+        except Exception as e:  # noqa: BLE001
+            return {"configured": True, "service_url": settings.mailer_service_url,
+                    "error": f"{type(e).__name__}: {e}"}
+
+    # Без микросервиса — локальный транспорт приложения.
+    mailer = get_mailer()
+    name = type(mailer).__name__
+    if name == "SendmailMailer":
+        provider = "sendmail"
+    elif name == "SmtpMailer":
+        provider = "smtp"
+    else:
+        provider = "dev"
+    return {
+        "configured": True,
+        "service_url": None,
+        "local": True,
+        "provider": provider,
+        "mail_transport": settings.mail_transport or provider,
+        "sendmail_path": settings.sendmail_path,
+        "smtp_host": settings.smtp_host or "",
+        "smtp_port": settings.smtp_port,
+        "smtp_user": settings.smtp_user or "",
+        "smtp_starttls": settings.smtp_starttls,
+        "smtp_ssl": settings.smtp_ssl,
+        "mail_from": settings.mail_from,
+        "mail_from_name": settings.mail_from_name,
+        "has_password": bool(settings.smtp_password),
+        "rate_per_min": None,
+    }
 
 
 @router.put("/mail/config")
 async def mail_config_save(patch: dict) -> dict:
     from app.config import settings
     if not settings.mailer_service_url:
-        return {"ok": False, "reason": "mailer-service не подключён (MAILER_SERVICE_URL пуст)"}
+        return {"ok": False, "reason": "локальный sendmail/SMTP задаётся в .env "
+                "(MAIL_TRANSPORT, SENDMAIL_PATH, MAIL_FROM); mailer-service не подключён"}
     try:
         await asyncio.to_thread(_mailer_svc, "PUT", "/v1/config", patch)
         return {"ok": True}
@@ -929,12 +991,87 @@ async def mail_config_save(patch: dict) -> dict:
 @router.post("/mail/test")
 async def mail_test(body: dict) -> dict:
     from app.config import settings
-    if not settings.mailer_service_url:
-        return {"ok": False, "error": "mailer-service не подключён"}
+    from app.mailer import get_mailer
+
+    to = str(body.get("to") or "").strip()
+    if not to:
+        return {"ok": False, "error": "укажите to"}
+
+    if settings.mailer_service_url:
+        try:
+            # 45с > SMTP timeout 30с в mailer, иначе API сам даёт TimeoutError
+            return await asyncio.to_thread(
+                _mailer_svc, "POST", "/v1/test", {"to": to}, 45)
+        except Exception as e:  # noqa: BLE001
+            err = f"{type(e).__name__}: {e}"
+            if "timed out" in err.lower() or "timeout" in err.lower():
+                err += (" — не дождались ответа mailer/SMTP. Проверьте исходящие "
+                        "порты 465/587 с хоста и из контейнера mailer "
+                        "(nc/curl), часто VPS режет SMTP.")
+            return {"ok": False, "error": err}
+
+    mailer = get_mailer()
     try:
-        return await asyncio.to_thread(_mailer_svc, "POST", "/v1/test", {"to": body.get("to", "")})
+        ok = await mailer.send(
+            to, "Проверка отправки",
+            "<p>Тестовое письмо. Локальный sendmail/SMTP работает.</p>")
     except Exception as e:  # noqa: BLE001
-        return {"ok": False, "error": f"{type(e).__name__}: {e}"}
+        return {"ok": False, "error": f"{type(e).__name__}: {e}",
+                "mailer": type(mailer).__name__}
+    if not ok:
+        return {"ok": False, "error": "отправка не удалась (см. логи приложения)",
+                "mailer": type(mailer).__name__}
+    return {"ok": True, "mailer": type(mailer).__name__,
+            "message_id": "local",
+            "hint": "Message-ID значит «принято MTA», не «доставлено во входящие». "
+                    "Проверьте spam и mailq/postqueue -p на сервере."}
+
+
+@router.post("/mail/send-batch")
+async def mail_send_batch(body: dict) -> dict:
+    """Массовая постановка писем в очередь (через get_mailer().send_batch).
+
+    Тело: { "messages": [ {to, subject, html, from_email?, from_name?, meta?} , ... ] }
+    Либо общий шаблон: { "emails": [...], "subject", "html", "from_email?", "from_name?" }.
+    """
+    from app.mailer import get_mailer
+
+    messages = body.get("messages")
+    if not isinstance(messages, list):
+        emails = body.get("emails") or []
+        subject = str(body.get("subject") or "").strip()
+        html = str(body.get("html") or "")
+        if not isinstance(emails, list) or not subject or not html:
+            return {"ok": False, "error": "нужны messages[] или emails[] + subject + html"}
+        from_email = str(body.get("from_email") or "")
+        from_name = str(body.get("from_name") or "")
+        messages = [
+            {"to": str(e).strip(), "subject": subject, "html": html,
+             "from_email": from_email, "from_name": from_name}
+            for e in emails if str(e).strip()
+        ]
+
+    if not messages:
+        return {"ok": False, "error": "пустой список писем"}
+    # Кап на один запрос — защита от случайного гигантского payload в админке.
+    if len(messages) > 5000:
+        return {"ok": False, "error": "не больше 5000 писем за один запрос"}
+
+    mailer = get_mailer()
+    live = await _mailer_is_live(mailer)
+    result = await mailer.send_batch(messages)
+    queued = int(result.get("queued") or result.get("sent") or 0)
+    failed = int(result.get("failed") or 0)
+    ok = queued > 0 and not result.get("error")
+    return {
+        "ok": ok,
+        "live": live,
+        "queued": queued,
+        "failed": failed,
+        "ids": result.get("ids") or [],
+        "error": result.get("error"),
+        "mailer": type(mailer).__name__,
+    }
 
 
 # ── Колесо фортуны ──

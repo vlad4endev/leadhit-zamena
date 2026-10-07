@@ -34,11 +34,14 @@ class EspEvent(BaseModel):
 
 
 class ProviderConfig(BaseModel):
+    mail_transport: Optional[str] = None   # sendmail | smtp | ''
+    sendmail_path: Optional[str] = None
     smtp_host: Optional[str] = None
     smtp_port: Optional[int] = None
     smtp_user: Optional[str] = None
     smtp_password: Optional[str] = None   # пусто/не передан → пароль не меняется
     smtp_starttls: Optional[bool] = None
+    smtp_ssl: Optional[bool] = None
     mail_from: Optional[str] = None
     mail_from_name: Optional[str] = None
     rate_per_min: Optional[int] = None
@@ -68,7 +71,7 @@ app = FastAPI(title="mailer-service", lifespan=lifespan)
 async def health() -> dict:
     cfg = await store.get_config()
     return {"status": "ok", "outbox": await store.stats(),
-            "provider": "smtp" if cfg["smtp_host"] else "dev"}
+            "provider": sender.provider_name(cfg)}
 
 
 @app.get("/v1/config")
@@ -77,7 +80,7 @@ async def get_config(authorization: Optional[str] = Header(default=None)) -> dic
     _auth(authorization)
     cfg = await store.get_config()
     has_password = bool(cfg.pop("smtp_password", ""))
-    return {**cfg, "has_password": has_password, "provider": "smtp" if cfg["smtp_host"] else "dev"}
+    return {**cfg, "has_password": has_password, "provider": sender.provider_name(cfg)}
 
 
 @app.put("/v1/config")
@@ -89,6 +92,8 @@ async def put_config(c: ProviderConfig, authorization: Optional[str] = Header(de
         patch.pop("smtp_password", None)
     if "smtp_starttls" in patch:
         patch["smtp_starttls"] = "true" if patch["smtp_starttls"] else "false"
+    if "smtp_ssl" in patch:
+        patch["smtp_ssl"] = "true" if patch["smtp_ssl"] else "false"
     await store.set_config(patch)
     return {"ok": True}
 
