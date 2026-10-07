@@ -1383,6 +1383,109 @@ async def selftest(product_id: Optional[str] = None) -> dict:
             "hint": "" if found else "Сайт должен слать product_id ровно как в каталоге/1С. "
                                      "Иначе письмо по такой корзине не уйдёт.",
         })
+
+    # Почта: mailer-service (host-network) должен отвечать; hostname «mailer» — типичная поломка.
+    from app.config import settings as env
+    from urllib.parse import urlparse
+    murl = (env.mailer_service_url or "").strip()
+    if murl:
+        host = (urlparse(murl).hostname or "").lower()
+        if host == "mailer":
+            checks.append({
+                "id": "mailer_url", "t": "Адрес mailer-service",
+                "status": "fail",
+                "detail": murl,
+                "hint": "mailer на host-network не резолвится как «mailer». "
+                        "Нужен http://host.docker.internal:8080 (compose + MAILER_HOST_IP) "
+                        "и --force-recreate api workers mailer. См. deploy/check-mail.sh.",
+            })
+        else:
+            try:
+                health = await asyncio.to_thread(_mailer_svc, "GET", "/health")
+                provider = health.get("provider") or "?"
+                outbox = health.get("outbox") or {}
+                queued = int(outbox.get("queued") or 0)
+                failed = int(outbox.get("failed") or 0)
+                live = provider in ("smtp", "sendmail")
+                detail = f"{murl} · provider={provider} · очередь={queued} · failed={failed}"
+                if not live:
+                    checks.append({
+                        "id": "mailer", "t": "Mailer-service отвечает",
+                        "status": "fail",
+                        "detail": detail,
+                        "hint": "Провайдер dev — письма не уходят. Настройки → Почта: SMTP "
+                                "(Яндекс 465+SSL) или sendmail.",
+                    })
+                elif failed > 100 or queued > 2000:
+                    checks.append({
+                        "id": "mailer", "t": "Mailer-service отвечает",
+                        "status": "warn",
+                        "detail": detail,
+                        "hint": "Очередь/ошибки раздуты — смотрите docker compose logs mailer "
+                                "и SMTP-пароль (535). Сеть: bash deploy/check-mail.sh",
+                    })
+                else:
+                    checks.append({
+                        "id": "mailer", "t": "Mailer-service отвечает",
+                        "status": "ok",
+                        "detail": detail,
+                        "hint": "",
+                    })
+                # Глубокая диагностика (SMTP + callback), если эндпоинт есть.
+                try:
+                    diag = await asyncio.to_thread(_mailer_svc, "GET", "/v1/diagnostics")
+                    smtp = diag.get("smtp") or {}
+                    cb = diag.get("callback") or {}
+                    if smtp.get("ok") is False:
+                        checks.append({
+                            "id": "mailer_smtp", "t": "SMTP из mailer",
+                            "status": "fail",
+                            "detail": f"{smtp.get('host')}:{smtp.get('port')} — {smtp.get('detail')}",
+                            "hint": "На VPS mailer должен быть network_mode: host. "
+                                    "Иначе ENETUNREACH. bash deploy/check-mail.sh",
+                        })
+                    elif smtp.get("ok") is True:
+                        checks.append({
+                            "id": "mailer_smtp", "t": "SMTP из mailer",
+                            "status": "ok",
+                            "detail": f"{smtp.get('host')}:{smtp.get('port')}",
+                            "hint": "",
+                        })
+                    if cb.get("ok") is False:
+                        checks.append({
+                            "id": "mailer_callback", "t": "Callback mailer → api",
+                            "status": "warn",
+                            "detail": f"{cb.get('url')} — {cb.get('detail')}",
+                            "hint": "Письма уходят, статусы в админке могут не обновляться. "
+                                    "Проверьте API_HOST_PORT и что api слушает 127.0.0.1.",
+                        })
+                    elif cb.get("ok") is True:
+                        checks.append({
+                            "id": "mailer_callback", "t": "Callback mailer → api",
+                            "status": "ok",
+                            "detail": cb.get("url") or "",
+                            "hint": "",
+                        })
+                except Exception:  # noqa: BLE001 — старый mailer без /v1/diagnostics
+                    pass
+            except Exception as e:  # noqa: BLE001
+                checks.append({
+                    "id": "mailer", "t": "Mailer-service отвечает",
+                    "status": "fail",
+                    "detail": f"{murl} — {type(e).__name__}: {e}",
+                    "hint": "api не достучался до mailer. Нужны MAILER_HOST_IP=IP br-*, "
+                            "ufw allow с моста на 8080, --force-recreate. "
+                            "bash deploy/check-mail.sh",
+                })
+    else:
+        checks.append({
+            "id": "mailer", "t": "Mailer-service",
+            "status": "warn",
+            "detail": "MAILER_SERVICE_URL не задан",
+            "hint": "В Docker compose задаёт URL сам. Если письма идут локально — "
+                    "проверьте MAIL_TRANSPORT/SMTP в .env.",
+        })
+
     return {"base": base, "checks": checks}
 
 

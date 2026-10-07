@@ -59,6 +59,12 @@ def _auth(authorization: Optional[str]) -> None:
 @asynccontextmanager
 async def lifespan(_: FastAPI):
     await store.init()
+    # Стартовые WARN в лог: SMTP/callback/dev — чтобы не копить очередь вслепую.
+    try:
+        from app import diagnostics
+        await asyncio.to_thread(diagnostics.warn_on_startup)
+    except Exception as e:  # noqa: BLE001 — диагностика не должна валить старт
+        print(f"[mailer-diag] startup check failed: {type(e).__name__}: {e}")
     task = asyncio.create_task(worker.run())
     yield
     task.cancel()
@@ -72,6 +78,14 @@ async def health() -> dict:
     cfg = await store.get_config()
     return {"status": "ok", "outbox": await store.stats(),
             "provider": sender.provider_name(cfg)}
+
+
+@app.get("/v1/diagnostics")
+async def diagnostics_endpoint(authorization: Optional[str] = Header(default=None)) -> dict:
+    """Глубокая проверка: SMTP TCP + callback TCP. Для deploy/check-mail.sh и админки."""
+    _auth(authorization)
+    from app import diagnostics
+    return await asyncio.to_thread(diagnostics.run_all)
 
 
 @app.get("/v1/config")

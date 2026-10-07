@@ -72,8 +72,10 @@ docker compose pull && docker compose up -d --build   # обновление
 ```bash
 cd /opt/grosterhit && git pull && git log --oneline -1     # убедиться, что коммит приехал
 ls db/migrations                                           # появились новые файлы — применить (ниже)
-docker compose up -d --build api workers                   # ОБА: воркеры на том же образе
+# api + workers + mailer: mailer на host-network, без --force-recreate останется старый env/сеть
+docker compose up -d --build --force-recreate api workers mailer
 docker compose -f docker-compose.edge.yml up -d --force-recreate edge   # конфиг смонтирован файлом
+bash deploy/check-mail.sh                                  # SMTP + api→mailer + callback
 ```
 Миграции применяются **после `git pull`** (до него файла на сервере просто нет) и до пересборки;
 все они идемпотентны, повтор безопасен:
@@ -126,22 +128,32 @@ NPM закэшировал ошибку: у прокси-хоста включё
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
   на уровне маршрутизации (не отдаются наружу), а вебхук ESP аутентифицируется в приложении.
-- **SMTP Network is unreachable / timed out**: mailer уже на **host-network** в
-  `docker-compose.yml`. Нужен `MAILER_HOST_IP` в `.env` и ufw с моста на 8080:
+- **Почта стабильно (чеклист)**: mailer на **host-network**; api/workers →
+  `http://host.docker.internal:8080`; `MAILER_HOST_IP` = IP `br-*` (не docker0);
+  ufw: allow с `172.16.0.0/12` на 8080; eth0:8080 закрыт снаружи; `API_HOST_PORT`
+  совпадает с `CALLBACK_URL`. Одна строка `MAILER_HOST_IP` в `.env`.
+
+  ```bash
+  bash deploy/check-mail.sh                 # единая проверка контура
+  ```
+
+  Если check падает:
 
   ```bash
   ip -br a | grep '^br-'                    # → 172.18.0.1
-  grep MAILER_HOST_IP .env || echo 'MAILER_HOST_IP=172.18.0.1' >> .env
-  ufw allow from 172.18.0.0/16 to any port 8080 proto tcp
+  # одна строка MAILER_HOST_IP в .env
+  ufw allow from 172.16.0.0/12 to any port 8080 proto tcp
   iptables -C INPUT -i eth0 -p tcp --dport 8080 -j DROP 2>/dev/null || \
     iptables -I INPUT -i eth0 -p tcp --dport 8080 -j DROP
-
-  docker compose up -d --build api workers mailer
-
-  docker compose exec mailer python -c \
-    "import socket; socket.create_connection(('smtp.yandex.ru',465),5); print('SMTP OK')"
-  docker compose exec api python -c \
-    "import urllib.request; print(urllib.request.urlopen('http://host.docker.internal:8080/health', timeout=5).read())"
+  docker compose up -d --build --force-recreate api workers mailer
+  bash deploy/check-mail.sh
   ```
 
-  В админке URL mailer должен быть `http://host.docker.internal:8080`, не `http://mailer:8080`.
+  Типичные симптомы → причина:
+  - `Network is unreachable` / SMTP timeout из mailer → не host-network (старый compose/ветка)
+  - `Temporary failure in name resolution` / `http://mailer:8080` → нужен host.docker.internal
+  - api `Connection refused` на :8080 → ufw или неверный `MAILER_HOST_IP`
+  - `[callback-fail] Connection refused` → api не на `127.0.0.1:$API_HOST_PORT`
+  - SMTP `535` → новый пароль приложения Яндекса (не обычный пароль ящика)
+
+  Самопроверка в админке («Интеграция») тоже проверяет mailer/SMTP/callback.

@@ -179,18 +179,27 @@ def send_sync(to: str, subject: str, html: str, from_email: str, from_name: str)
 
 
 def _callback_sync(payload: dict) -> None:
+    """Best-effort POST в api. 3 попытки — api иногда кратко недоступен при recreate."""
     if not settings.callback_url:
         return
+    import time
     headers = {"Content-Type": "application/json"}
     if settings.callback_token:
         headers["Authorization"] = f"Bearer {settings.callback_token}"
-    req = urllib.request.Request(
-        settings.callback_url, data=json.dumps(payload).encode(), method="POST", headers=headers)
-    try:
-        # Короткий timeout: callback не должен тормозить очередь (раньше до 15с на письмо).
-        urllib.request.urlopen(req, timeout=3).read()
-    except Exception as e:  # noqa: BLE001 — доставка события best-effort
-        print(f"[callback-fail] {type(e).__name__}: {e}")
+    body = json.dumps(payload).encode()
+    last: Exception | None = None
+    for attempt in range(3):
+        req = urllib.request.Request(
+            settings.callback_url, data=body, method="POST", headers=headers)
+        try:
+            # Короткий timeout: callback не должен тормозить очередь.
+            urllib.request.urlopen(req, timeout=3).read()
+            return
+        except Exception as e:  # noqa: BLE001 — доставка события best-effort
+            last = e
+            if attempt < 2:
+                time.sleep(0.5 * (attempt + 1))
+    print(f"[callback-fail] {type(last).__name__}: {last}")
 
 
 async def send(to, subject, html, from_email, from_name) -> str:

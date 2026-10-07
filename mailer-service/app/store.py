@@ -152,9 +152,13 @@ async def set_event(id: str, event: str) -> None:
     await asyncio.to_thread(_exec, "UPDATE outbox SET last_event=? WHERE id=?", (event, id))
 
 
-async def stats() -> dict:
-    rows = await asyncio.to_thread(_query, "SELECT state, count(*) c FROM outbox GROUP BY state")
+def stats_sync() -> dict:
+    rows = _query("SELECT state, count(*) c FROM outbox GROUP BY state")
     return {r["state"]: r["c"] for r in rows}
+
+
+async def stats() -> dict:
+    return await asyncio.to_thread(stats_sync)
 
 
 async def get_config() -> dict:

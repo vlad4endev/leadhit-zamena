@@ -55,6 +55,15 @@ async def main() -> None:
     # IPv4-first helper exists (unit, без сети).
     assert callable(sender._connect_ipv4_first)
 
+    # diagnostics: без host → ok=None; callback пуст → ok=False (без сети).
+    from app import diagnostics
+    smtp_empty = diagnostics.check_smtp({"smtp_host": "", "smtp_port": 0})
+    assert smtp_empty.get("ok") is None, smtp_empty
+    cb = diagnostics.check_callback()
+    assert cb.get("ok") is False and "пуст" in (cb.get("detail") or ""), cb
+    assert callable(diagnostics.warn_on_startup)
+    assert callable(diagnostics.run_all)
+
     print("mailer-service selfcheck OK")
 
 
