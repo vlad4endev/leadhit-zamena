@@ -11,7 +11,7 @@ from typing import Optional
 from fastapi import APIRouter
 from pydantic import BaseModel
 
-from app import db, postsale
+from app import db, images, postsale
 
 router = APIRouter(prefix="/feeds", tags=["feeds"])
 
@@ -89,13 +89,20 @@ async def upsert_products_rows(con, rows: list[Product]) -> None:
            VALUES($1, $2, $3, $4, $5, $6, $7, $8, now())
            ON CONFLICT (product_id) DO UPDATE SET
              name = EXCLUDED.name, price = EXCLUDED.price,
-             image_url = EXCLUDED.image_url, category_id = EXCLUDED.category_id,
+             -- COALESCE: выгрузка без картинки не затирает уже известную ссылку —
+             -- один товар приходит из нескольких фидов, и у «сопутствующих» фото нет.
+             -- ponytail: обратная сторона — снять фото импортом больше нельзя, только
+             -- прислать новое; понадобится очистка — заводить явный признак «фото нет».
+             image_url = COALESCE(EXCLUDED.image_url, products.image_url),
+             category_id = EXCLUDED.category_id,
              product_url = EXCLUDED.product_url, in_stock = EXCLUDED.in_stock,
              -- union-merge тегов: товар накапливает членство в фидах (Новинка+Топ и т.п.)
              tags = COALESCE((SELECT array_agg(DISTINCT x)
                               FROM unnest(products.tags || EXCLUDED.tags) AS x), '{}'),
              updated_at = now()""",
-        [(p.product_id, p.name, p.price, p.image_url,
+        # image_url — через images.proxied: выгрузка всем ставит .png, часть файлов на
+        # static лежит как .jpg (см. app/images.py). Сети тут нет, только подмена префикса.
+        [(p.product_id, p.name, p.price, images.proxied(p.image_url, p.product_id),
           p.category_id, p.product_url, p.in_stock, p.tags) for p in rows],
     )
 

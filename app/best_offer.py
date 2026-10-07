@@ -6,7 +6,7 @@
 """
 from __future__ import annotations
 
-from app import app_settings, svc_config
+from app import app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -98,8 +98,9 @@ async def _candidates(con, interval_days: int, after_purchase_days: int):
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[]) AND in_stock
+             AND {images.HAS_PHOTO_SQL}""",
         product_ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}
@@ -135,9 +136,11 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         if not product_ids:
             continue  # нечего предложить
 
-        products = await _load_products(con, product_ids)
+        # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
+        products = images.photo_first(await _load_products(con, product_ids), 5)
+        products = await images.warm_products(products, require_live=True)
         if not products:
-            # Топ-5 выжжен out-of-stock → пустое письмо не шлём (как ТЗ 4.8 для Постпродажи).
+            # Топ-5 выжжен out-of-stock / без фото → пустое письмо не шлём (как ТЗ 4.8).
             continue
         if blocks:
             html = render_blocks(blocks, products, cand["user_id"], "best_offer", look)

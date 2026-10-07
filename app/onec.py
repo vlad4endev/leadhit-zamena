@@ -11,6 +11,7 @@ import json
 import urllib.parse
 import urllib.request
 
+from app import images
 from app.config import settings
 
 
@@ -82,7 +83,8 @@ async def order_exists(user_id: str, since: str) -> dict:
 # --- Маппинг товара 1С -> строка products ---
 
 def map_product(p: dict) -> tuple:
-    return (p["product_id"], p["name"], p["price"], p.get("image_url"),
+    return (p["product_id"], p["name"], p["price"],
+            images.proxied(p.get("image_url"), p["product_id"]),
             p["category_id"], p["product_url"], bool(p.get("in_stock", True)))
 
 
@@ -90,7 +92,9 @@ _UPSERT_PRODUCT = """
 INSERT INTO products(product_id, name, price, image_url, category_id, product_url, in_stock, updated_at)
 VALUES($1, $2, $3, $4, $5, $6, $7, now())
 ON CONFLICT (product_id) DO UPDATE SET
-  name=EXCLUDED.name, price=EXCLUDED.price, image_url=EXCLUDED.image_url,
+  name=EXCLUDED.name, price=EXCLUDED.price,
+  -- как в feeds.upsert_products_rows: отсутствие картинки не затирает известную ссылку
+  image_url=COALESCE(EXCLUDED.image_url, products.image_url),
   category_id=EXCLUDED.category_id, product_url=EXCLUDED.product_url,
   in_stock=EXCLUDED.in_stock, updated_at=now()"""
 
@@ -140,6 +144,14 @@ def _demo() -> None:
     global _transport
     assert map_product({"product_id": "1", "name": "A", "price": 10.0,
                         "category_id": "c", "product_url": "u"}) == ("1", "A", 10.0, None, "c", "u", True)
+    # GUID на static → /img/; ссылка из артикула → None (файла нет).
+    assert map_product({"product_id": "0126367", "name": "B", "price": 1,
+                        "image_url": "https://static.groster.me/images/shop/6aecaf12-c045-11ee-8805-ac1f6b855a52.png",
+                        "category_id": "c", "product_url": "u"})[3] \
+        == "/img/6aecaf12-c045-11ee-8805-ac1f6b855a52.png"
+    assert map_product({"product_id": "0057412", "name": "C", "price": 1,
+                        "image_url": "https://groster.me/upload/iblock/0057412.jpg",
+                        "category_id": "c", "product_url": "u"})[3] is None
     # Пагинация: транспорт отдаёт 2 страницы по 1 товару, total=2.
     pages = {
         1: {"items": [{"product_id": "1", "name": "A", "price": 10, "category_id": "c",

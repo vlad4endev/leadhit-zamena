@@ -114,9 +114,13 @@ NPM закэшировал ошибку: у прокси-хоста включё
   лежат в `db/migrations/` и идемпотентны — применяются так:
   ```bash
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/003_script_hits.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/004_image_proxy.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
   ```
   Без `003` индикатор связи в админке останется в состоянии «тег не грузился» (таблицы нет —
-  счётчик молча не пишется), остальное работает.
+  счётчик молча не пишется), остальное работает. Без `004`–`006` и без `location /img/` в
+  edge-конфиге фото товаров в каталоге и письмах останутся битыми (неверное расширение / 404).
 - **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты

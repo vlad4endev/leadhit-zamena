@@ -9,7 +9,7 @@ import json
 
 import asyncpg
 
-from app import app_settings, svc_config
+from app import app_settings, images, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -138,9 +138,10 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
         return False
 
-    products = await _load_products(con, product_ids)
+    products = images.photo_first(await _load_products(con, product_ids), 5)
+    products = await images.warm_products(products, require_live=True)
     if not products:
-        # Cross-sell выжжен out-of-stock → пустое письмо не шлём (ТЗ 4.8).
+        # Cross-sell выжжен out-of-stock / без фото → пустое письмо не шлём (ТЗ 4.8).
         await _finish(con, job["id"], "cancelled")
         return False
     if blocks:
@@ -192,8 +193,9 @@ async def _top5_map(con: asyncpg.Connection, categories: list[str]) -> dict[str,
 
 async def _load_products(con: asyncpg.Connection, product_ids: list[str]) -> list[dict]:
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[]) AND in_stock""",
+        f"""SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[]) AND in_stock
+             AND {images.HAS_PHOTO_SQL}""",
         product_ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}

@@ -301,41 +301,102 @@ async def services_summary() -> list[dict]:
              "sent": r["sent"]} for r in rows]
 
 
+async def _purge_top5_no_photo(con) -> int:
+    """Убрать из топ-5 позиции с пустым image_url (и без товара) → вкладка «Без фото».
+
+    Не трогает CDN: обнуление по HEAD раньше сжигало рабочие фото при таймаутах.
+    Живость картинок — через images.warm_products при отдаче/письме.
+    """
+    deleted = await con.fetchval(
+        """WITH doomed AS (
+             DELETE FROM top5_by_category t
+              WHERE NOT EXISTS (
+                      SELECT 1 FROM products p
+                       WHERE p.product_id = t.product_id
+                         AND p.image_url IS NOT NULL AND btrim(p.image_url) <> '')
+             RETURNING 1
+           )
+           SELECT count(*)::int FROM doomed""")
+    await con.execute(
+        """WITH ordered AS (
+             SELECT category_id, product_id,
+                    row_number() OVER (PARTITION BY category_id ORDER BY position, product_id) AS rn
+               FROM top5_by_category
+           )
+           UPDATE top5_by_category t
+              SET position = o.rn, updated_at = now()
+             FROM ordered o
+            WHERE t.category_id = o.category_id AND t.product_id = o.product_id
+              AND t.position IS DISTINCT FROM o.rn""")
+    return int(deleted or 0)
+
+
 @router.get("/recommendations")
 async def recommendations() -> dict:
-    """Топ-5 товаров по категориям с деталями — то, что реально идёт в письма (Best Offer, Постпродажа)."""
-    rows = await db.pool().fetch(
-        """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
-                  t.product_id, t.updated_at,
-                  p.name AS product_name, p.price, p.image_url, p.product_url, p.in_stock
-           FROM top5_by_category t
-           JOIN categories c ON c.category_id = t.category_id
-           LEFT JOIN products p ON p.product_id = t.product_id
-           ORDER BY c.sort_order, t.position""")
-    cats: dict = {}
+    """Топ-5 с деталями. Прогревает фото (CDN URL) при каждом входе в раздел."""
+    from app import images
+    async with db.pool().acquire() as con:
+        purged = await _purge_top5_no_photo(con)
+        rows = await con.fetch(
+            """SELECT t.category_id, c.name AS category_name, c.sort_order, t.position,
+                      t.product_id, t.updated_at,
+                      p.name AS product_name, p.price, p.image_url, p.product_url, p.in_stock
+               FROM top5_by_category t
+               JOIN categories c ON c.category_id = t.category_id
+               LEFT JOIN products p ON p.product_id = t.product_id
+               ORDER BY c.sort_order, t.position""")
+    # Плоский список для прогрева, потом разложим обратно по категориям.
+    flat = []
     for r in rows:
-        cat = cats.setdefault(r["category_id"], {
-            "category_id": r["category_id"], "category_name": r["category_name"],
-            "updated_at": _iso(r["updated_at"]), "products": []})
         exists = r["product_name"] is not None
-        cat["products"].append({
+        flat.append({
             "position": r["position"], "product_id": r["product_id"],
-            "name": r["product_name"], "price": float(r["price"]) if r["price"] is not None else None,
+            "name": r["product_name"],
+            "price": float(r["price"]) if r["price"] is not None else None,
             "image_url": r["image_url"], "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]) if exists else False, "exists": exists,
-            # Не попадёт в письмо, если товара нет в каталоге или он не в наличии.
-            "usable": exists and bool(r["in_stock"]),
+            "category_id": r["category_id"],
+            "category_name": r["category_name"],
+            "updated_at": _iso(r["updated_at"]),
+        })
+    warmed = await images.warm_products(
+        [p for p in flat if p["exists"] and p["image_url"]], require_live=False)
+    by_id = {p["product_id"]: p for p in warmed}
+    cats: dict = {}
+    for item in flat:
+        cat = cats.setdefault(item["category_id"], {
+            "category_id": item["category_id"], "category_name": item["category_name"],
+            "updated_at": item["updated_at"], "products": []})
+        w = by_id.get(item["product_id"])
+        image_url = w["image_url"] if w else item["image_url"]
+        cat["products"].append({
+            "position": item["position"], "product_id": item["product_id"],
+            "name": item["name"], "price": item["price"],
+            "image_url": image_url, "product_url": item["product_url"],
+            "in_stock": item["in_stock"], "exists": item["exists"],
+            "usable": item["exists"] and item["in_stock"] and bool(image_url),
+            "has_photo": bool(image_url),
         })
     out = list(cats.values())
     total_usable = sum(1 for c in out for p in c["products"] if p["usable"])
     total = sum(len(c["products"]) for c in out)
     return {"categories": out, "category_count": len(out),
-            "position_count": total, "usable_count": total_usable}
+            "position_count": total, "usable_count": total_usable,
+            "purged_no_photo": purged, "photos_warmed": len(warmed)}
+
+
+def _abs_img(url: str | None) -> str | None:
+    """/img/… → абсолютный URL нашего хоста (браузер сам дернёт резолвер). Без HEAD по всему каталогу."""
+    if not url:
+        return url
+    if url.startswith("/"):
+        return app_settings.public_base_url().rstrip("/") + url
+    return url
 
 
 @router.get("/catalog")
 async def catalog() -> dict:
-    """Весь каталог, сгруппированный по категориям — для просмотра карточками."""
+    """Каталог карточками. /img/ отдаём абсолютным — фото тянет браузер через резолвер."""
     rows = await db.pool().fetch(
         """SELECT p.category_id, c.name AS category_name, c.sort_order,
                   p.product_id, p.name, p.price, p.image_url, p.product_url, p.in_stock, p.tags
@@ -352,12 +413,14 @@ async def catalog() -> dict:
         cat["products"].append({
             "product_id": r["product_id"], "name": r["name"],
             "price": float(r["price"]) if r["price"] is not None else None,
-            "image_url": r["image_url"], "product_url": r["product_url"],
+            "image_url": _abs_img(r["image_url"]), "product_url": r["product_url"],
             "in_stock": bool(r["in_stock"]), "tags": tags,
         })
     out = list(cats.values())
+    no_photo = sum(1 for c in out for p in c["products"] if not p["image_url"])
     return {"categories": out, "category_count": len(out),
             "product_count": sum(len(c["products"]) for c in out),
+            "no_photo_count": no_photo,
             "tags": [{"tag": t, "count": n} for t, n in sorted(all_tags.items())]}
 
 
@@ -383,6 +446,7 @@ ranked AS (
          ) AS rn
   FROM products p LEFT JOIN sold s ON s.product_id = p.product_id
   WHERE p.in_stock
+    AND p.image_url IS NOT NULL AND btrim(p.image_url) <> ''   -- без GUID-фото в топ/письма не берём
 )
 SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_id, rn
 """
@@ -390,7 +454,10 @@ SELECT category_id, product_id, rn FROM ranked WHERE rn <= 5 ORDER BY category_i
 
 @router.post("/compute-top5")
 async def compute_top5() -> dict:
-    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена."""
+    """Автогенерация топ-5 по категориям из заказов (замена ручного фида). Полная замена.
+
+    В топ попадают только товары в наличии с GUID-фото; без фото — во вкладке «Без фото».
+    """
     from app.feeds import Top5Row, upsert_top5_rows
     async with db.pool().acquire() as con:
         rows = await con.fetch(_TOP5_SQL)
@@ -398,6 +465,8 @@ async def compute_top5() -> dict:
                 for r in rows]
         if top5:
             await upsert_top5_rows(con, top5)  # TRUNCATE + insert (актуальный срез целиком)
+        else:
+            await con.execute("TRUNCATE top5_by_category")
     return {"ok": True, "categories": len({r["category_id"] for r in rows}), "positions": len(rows)}
 
 
@@ -540,16 +609,15 @@ class TestEmail(BaseModel):
 
 
 async def _sample_products(con, limit: int = 6) -> list[dict]:
-    """Товары для превью и тест-письма. Сначала те, у которых есть фото: иначе LIMIT без
-    сортировки вытаскивал первые строки каталога (часто без image_url), и превью показывало
-    серые плейсхолдеры при живом каталоге. Порядок стабильный — превью не «дёргается»
-    между рендерами. 6 штук = две строки карточек по 3."""
+    """Товары для превью и тест-письма — только с фото, прогретые до CDN-URL."""
+    from app import images
     rows = await con.fetch(
         """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE in_stock
-           ORDER BY (image_url IS NULL OR image_url = ''), product_id
+           WHERE in_stock AND image_url IS NOT NULL AND btrim(image_url) <> ''
+           ORDER BY product_id
            LIMIT $1""", limit)
-    return [dict(r, price=float(r["price"])) for r in rows]
+    products = [dict(r, price=float(r["price"])) for r in rows]
+    return await images.warm_products(products, require_live=True)
 
 
 @router.post("/scenario/{service}/test")
