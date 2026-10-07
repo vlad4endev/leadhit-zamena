@@ -126,29 +126,22 @@ NPM закэшировал ошибку: у прокси-хоста включё
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты
   на уровне маршрутизации (не отдаются наружу), а вебхук ESP аутентифицируется в приложении.
-- **SMTP из mailer: Network is unreachable**: с хоста 465/587 OK, из контейнера FAIL —
-  у bridge нет исходящего маршрута (не только IPv6). Рабочий обход — mailer на сети хоста:
+- **SMTP Network is unreachable / timed out**: mailer уже на **host-network** в
+  `docker-compose.yml`. Нужен `MAILER_HOST_IP` в `.env` и ufw с моста на 8080:
 
   ```bash
-  # IP моста (не docker0 — он часто DOWN):
-  ip -br a | grep '^br-'
-  # в .env: MAILER_HOST_IP=172.18.0.1
-  echo 'MAILER_HOST_IP=172.18.0.1' >> .env   # подставьте свой из br-
+  ip -br a | grep '^br-'                    # → 172.18.0.1
+  grep MAILER_HOST_IP .env || echo 'MAILER_HOST_IP=172.18.0.1' >> .env
+  ufw allow from 172.18.0.0/16 to any port 8080 proto tcp
+  iptables -C INPUT -i eth0 -p tcp --dport 8080 -j DROP 2>/dev/null || \
+    iptables -I INPUT -i eth0 -p tcp --dport 8080 -j DROP
 
-  docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml up -d --build api workers mailer
+  docker compose up -d --build api workers mailer
 
-  # проверка SMTP «как с хоста»:
-  docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml exec mailer \
-    python -c "import socket; socket.create_connection(('smtp.yandex.ru',465),5); print('OK')"
-
-  # api → mailer:
-  docker compose -f docker-compose.yml -f docker-compose.mailer-host.yml exec api \
-    python -c "import urllib.request; print(urllib.request.urlopen('http://host.docker.internal:8080/health', timeout=5).read())"
+  docker compose exec mailer python -c \
+    "import socket; socket.create_connection(('smtp.yandex.ru',465),5); print('SMTP OK')"
+  docker compose exec api python -c \
+    "import urllib.request; print(urllib.request.urlopen('http://host.docker.internal:8080/health', timeout=5).read())"
   ```
 
-  Файрвол: `iptables -I INPUT -i eth0 -p tcp --dport 8080 -j DROP` (только внешний if).
-  Не используйте `DROP … ! -i lo` — отрежет docker-мост.
-
-  Диагностика bridge (если хотите чинить сеть Docker, а не обход):
-  `docker compose exec mailer ip route` — должен быть `default via 172.…`.
-  `sysctl net.ipv4.ip_forward` — должно быть `1`.
+  В админке URL mailer должен быть `http://host.docker.internal:8080`, не `http://mailer:8080`.
