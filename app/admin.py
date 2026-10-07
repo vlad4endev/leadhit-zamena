@@ -1223,8 +1223,9 @@ async def upload_image(body: dict) -> dict:
     fn = hashlib.sha1(blob).hexdigest()[:16] + "." + ext
     with open(os.path.join(_UPLOAD_DIR, fn), "wb") as fh:
         fh.write(blob)
-    # ponytail: путь относительный — в реальной рассылке письма нужен абсолютный URL публичного хоста
-    return {"ok": True, "url": "/admin/uploads/" + fn}
+    # Абсолютный URL: превью в srcdoc и почтовики не резолвят /admin/uploads/….
+    rel = "/admin/uploads/" + fn
+    return {"ok": True, "url": app_settings.public_base_url().rstrip("/") + rel}
 
 
 @router.get("/uploads/{name}")
