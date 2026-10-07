@@ -78,6 +78,7 @@ docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/004_i
 docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
 docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
 docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/007_activity_log.sql
+docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/008_email_log_body.sql
 ```
 Признак, что обновление реально применилось: в сборке `COPY app ./app` **без** `CACHED`, новый sha
 образа и `Recreated`/`Started` у контейнеров. Если `CACHED` и `Running` — `git pull` не принёс
@@ -122,11 +123,13 @@ NPM закэшировал ошибку: у прокси-хоста включё
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/005_drop_fake_image_urls.sql
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/006_drop_artikul_image_urls.sql
   docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/007_activity_log.sql
+  docker compose exec -T db psql -U grosterhit -d grosterhit < db/migrations/008_email_log_body.sql
   ```
   Без `003` индикатор связи в админке останется в состоянии «тег не грузился» (таблицы нет —
   счётчик молча не пишется), остальное работает. Без `004`–`006` и без `location /img/` в
   edge-конфиге фото товаров в каталоге и письмах останутся битыми (неверное расширение / 404).
   Без `007` вкладка «Настройки → Логи» покажет ошибку загрузки (таблицы `activity_log` нет).
+  Без `008` в журнале писем нельзя открыть HTML-снимок письма (колонок `subject`/`html` нет).
 - **Бэкап БД**: `docker compose exec db pg_dump -U grosterhit grosterhit > backup.sql`.
 - **Внешняя БД вместо контейнера**: убрать сервис `db` и задать `DATABASE_URL` на внешний Postgres.
 - **Client IP**: под Docker nginx видит IP docker-шлюза, не клиента. Поэтому admin/feeds закрыты

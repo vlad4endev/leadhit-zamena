@@ -601,15 +601,18 @@ function kpiCard(svc,d){
     ${meter('Конверсия',m.conversion,b.conversion,st.conversion)}</div>`;
 }
 function logDate(iso){ return iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',hour:'2-digit',minute:'2-digit'}):'—'; }
+function openEmail(id,ev){ if(ev){ ev.preventDefault(); ev.stopPropagation(); } location.hash='#/email/'+id; }
 function logsTable(rows){
   if(!rows.length) return '<div class="tablewrap"><div class="empty">Писем пока нет.</div></div>';
   return `<div class="tablewrap"><table><thead><tr>
-    <th>Отправлено</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Товары</th><th>Заказ</th><th>Доход</th></tr></thead><tbody>`+
+    <th>Отправлено</th><th>Пользователь</th><th>Сервис</th><th>Статус</th><th>Тема</th><th>Товары</th><th>Заказ</th><th>Доход</th><th></th></tr></thead><tbody>`+
     rows.map(e=>`<tr onclick="location.hash='#/lead/'+encodeURIComponent('${esc(e.user_id)}')" style="cursor:pointer">
       <td class="mono">${esc(logDate(e.sent_at))}</td><td class="mono">${esc(e.user_id)}</td>
       <td>${esc(SVC[e.service]?.ru||e.service)}</td><td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
+      <td>${esc(e.subject||'—')}</td>
       <td class="mono">${esc((e.product_ids||[]).join(', '))}</td><td class="mono">${esc(e.attributed_order_id||'—')}</td>
-      <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('')+`</tbody></table></div>`;
+      <td class="mono">${e.revenue?rub(e.revenue):'—'}</td>
+      <td><button type="button" class="btn" onclick="openEmail(${+e.id},event)" ${e.has_html?'':'title="Снимок письма появится у новых отправок"'}>Открыть</button></td></tr>`).join('')+`</tbody></table></div>`;
 }
 /* Связь с сайтом — единый источник правды для индикатора в шапке и плашки в разделе.
    Два независимых сигнала:
@@ -2629,6 +2632,41 @@ async function viewLeads(){
   </section>`;
 }
 
+async function viewEmail(id){
+  setTitle('Письмо клиенту', '#'+id);
+  let d;
+  try{ d=await j('/admin/logs/'+encodeURIComponent(id)); }
+  catch(e){ $('view').innerHTML='<section><div class="card empty">Ошибка загрузки.</div></section>'; return; }
+  if(!d.found){ $('view').innerHTML='<section><div class="card empty">Письмо не найдено.</div></section>'; return; }
+  const dt2=iso=>iso?new Date(iso).toLocaleString('ru-RU',{day:'2-digit',month:'2-digit',year:'numeric',hour:'2-digit',minute:'2-digit'}):'—';
+  const f=(k,v)=>`<div class="field"><span class="k">${k}</span><span class="mono">${esc(v)}</span></div>`;
+  $('view').innerHTML=`<section>
+    <div class="filters">
+      <a class="btn" href="#/emails">← журнал</a>
+      <a class="btn" href="#/lead/${encodeURIComponent(d.user_id)}">карточка лида</a>
+    </div>
+    <div class="eyebrow"><h2>Что ушло клиенту</h2><span class="rule"></span></div>
+    <div class="card" style="margin-bottom:16px">
+      ${f('Тема', d.subject||'—')}
+      ${f('Кому', d.recipient_email||d.user_id)}
+      ${f('Сценарий', SVC[d.service]?.ru||d.service)}
+      ${f('Статус', d.status)}
+      ${f('Отправлено', dt2(d.sent_at))}
+      ${f('Товары', (d.product_ids||[]).join(', ')||'—')}
+    </div>
+    ${!d.has_html && d.can_preview ? `<div class="card" style="margin-bottom:12px;padding:12px 16px;color:var(--muted);font-size:13px">
+      Снимок HTML не сохранялся для этой отправки — ниже письмо собрано заново по товарам и шаблону.
+      Цены/наличие/макет могли измениться. Точный снимок будет у новых писем после обновления воркеров.
+    </div>` : ''}
+    ${d.can_preview || d.has_html
+      ? `<div style="border:1px solid var(--border);border-radius:12px;overflow:hidden;background:#fff">
+           <iframe title="Письмо как у клиента" sandbox="" src="/admin/logs/${+d.id}/preview"
+             style="width:100%;min-height:720px;border:0;background:#fff;display:block"></iframe>
+         </div>`
+      : `<div class="tablewrap"><div class="empty">Нечего показать: нет HTML и списка товаров.</div></div>`}
+  </section>`;
+}
+
 async function viewLead(uid){
   setTitle('Карточка лида', uid);
   let d;
@@ -2640,10 +2678,12 @@ async function viewLead(uid){
   const emails=d.emails.map(e=>`<tr>
     <td>${esc(SVC[e.service]?.ru||e.service)}</td>
     <td><span class="pill ${esc(e.status)}">${esc(e.status)}</span></td>
+    <td>${esc(e.subject||'—')}</td>
     <td class="mono">${esc((e.product_ids||[]).join(', ')||'—')}</td>
     <td class="mono">${dt2(e.sent_at)}</td>
     <td class="mono">${e.order_id?esc(e.order_id):'—'}</td>
-    <td class="mono">${e.revenue?rub(e.revenue):'—'}</td></tr>`).join('');
+    <td class="mono">${e.revenue?rub(e.revenue):'—'}</td>
+    <td><button type="button" class="btn" onclick="openEmail(${+e.id},event)">Открыть</button></td></tr>`).join('');
   const orders=d.orders.map(o=>`<tr>
     <td class="mono">${esc(o.order_id)}</td>
     <td><span class="pill ${['cancelled','returned','refunded'].includes((o.status||'').toLowerCase())?'unsubscribed':'sent'}">${esc(o.status)}</span></td>
@@ -2668,7 +2708,7 @@ async function viewLead(uid){
       </div></div>
     </div></section>
     <section><div class="eyebrow"><h2>История писем (${d.emails.length})</h2><span class="rule"></span></div>
-      ${d.emails.length?`<div class="tablewrap"><table><thead><tr><th>Сценарий</th><th>Статус</th><th>Товары</th><th>Отправлено</th><th>Заказ</th><th>Доход</th></tr></thead><tbody>${emails}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Писем не было.</div></div>'}</section>
+      ${d.emails.length?`<div class="tablewrap"><table><thead><tr><th>Сценарий</th><th>Статус</th><th>Тема</th><th>Товары</th><th>Отправлено</th><th>Заказ</th><th>Доход</th><th></th></tr></thead><tbody>${emails}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Писем не было.</div></div>'}</section>
     <section><div class="eyebrow"><h2>Заказы (${d.orders.length})</h2><span class="rule"></span></div>
       ${d.orders.length?`<div class="tablewrap"><table><thead><tr><th>Заказ</th><th>Статус</th><th>Дата</th><th>Сумма</th></tr></thead><tbody>${orders}</tbody></table></div>`:'<div class="tablewrap"><div class="empty">Заказов нет.</div></div>'}</section>`;
 }
@@ -2692,10 +2732,11 @@ async function run(s){
 const ROUTES={overview:viewOverview,leads:viewLeads,services:viewServices,report:viewReport,analytics:viewAnalytics,feeds:viewFeeds,emails:viewEmails,templates:viewTemplates,wheel:viewWheel,settings:viewSettings,integration:viewIntegration};
 async function route(){
   const h=(location.hash||'#/overview').slice(2);
-  markActive(h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
+  markActive(h.startsWith('email/')?'emails':h.startsWith('lead/')?'leads':h.startsWith('service/')?'services':h.startsWith('templates')?'templates':h);
   try {
     if(h.startsWith('service/')) return await viewService(h.split('/')[1]);
     if(h.startsWith('lead/')) return await viewLead(decodeURIComponent(h.slice(5)));
+    if(h.startsWith('email/')) return await viewEmail(h.split('/')[1]);
     if(h==='templates'){ tplView='list'; return await viewTemplates(); }
     if(h.startsWith('templates/')) return await openTemplateView(decodeURIComponent(h.split('/')[1]));
     await (ROUTES[h]||viewOverview)();

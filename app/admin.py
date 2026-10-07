@@ -181,8 +181,9 @@ async def lead(user_id: str) -> dict:
         if s is None:
             return {"found": False}
         emails = await con.fetch(
-            """SELECT id, service, status, category_id, product_ids,
-                      sent_at, opened_at, clicked_at, attributed_order_id, revenue
+            """SELECT id, service, status, category_id, product_ids, subject,
+                      sent_at, opened_at, clicked_at, attributed_order_id, revenue,
+                      (html IS NOT NULL AND html <> '') AS has_html
                FROM email_log WHERE user_id = $1 ORDER BY id DESC LIMIT 50""", user_id)
         orders = await con.fetch(
             """SELECT order_id, order_date, status,
@@ -204,10 +205,12 @@ async def lead(user_id: str) -> dict:
         },
         "emails": [{"id": e["id"], "service": e["service"], "status": e["status"],
                     "product_ids": list(e["product_ids"] or []),
+                    "subject": e["subject"],
                     "sent_at": _iso(e["sent_at"]), "opened": e["opened_at"] is not None,
                     "clicked": e["clicked_at"] is not None,
                     "order_id": e["attributed_order_id"],
-                    "revenue": float(e["revenue"]) if e["revenue"] is not None else None} for e in emails],
+                    "revenue": float(e["revenue"]) if e["revenue"] is not None else None,
+                    "has_html": bool(e["has_html"])} for e in emails],
         "orders": [{"order_id": o["order_id"], "order_date": _iso(o["order_date"]),
                     "status": o["status"], "total": float(o["total"] or 0)} for o in orders],
     }
@@ -504,7 +507,8 @@ async def logs(service: Optional[str] = None, status: Optional[str] = None,
                limit: int = 50, offset: int = 0) -> list[dict]:
     rows = await db.pool().fetch(
         """SELECT id, user_id, service, status, category_id, product_ids, order_id,
-                  attributed_order_id, revenue, sent_at
+                  attributed_order_id, revenue, sent_at, subject,
+                  (html IS NOT NULL AND html <> '') AS has_html
            FROM email_log
            WHERE ($1::text IS NULL OR service = $1::service_kind)
              AND ($2::text IS NULL OR status = $2::email_status)
@@ -512,7 +516,119 @@ async def logs(service: Optional[str] = None, status: Optional[str] = None,
         service, status, min(limit, 500), max(offset, 0),
     )
     return [dict(r, revenue=float(r["revenue"]) if r["revenue"] is not None else None,
-                 sent_at=r["sent_at"].isoformat() if r["sent_at"] else None) for r in rows]
+                 sent_at=r["sent_at"].isoformat() if r["sent_at"] else None,
+                 has_html=bool(r["has_html"])) for r in rows]
+
+
+async def _log_products(con, product_ids: list[str]) -> list[dict]:
+    """Товары для превью журнала — без фильтра in_stock (на момент отправки могли быть в наличии)."""
+    if not product_ids:
+        return []
+    rows = await con.fetch(
+        """SELECT product_id, name, price, image_url, product_url FROM products
+           WHERE product_id = ANY($1::text[])""",
+        product_ids,
+    )
+    by_id = {r["product_id"]: dict(r) for r in rows}
+    return [dict(by_id[pid], price=float(by_id[pid]["price"]))
+            for pid in product_ids if pid in by_id]
+
+
+async def _rebuild_log_html(con, row) -> str | None:
+    """Собрать HTML по product_ids + шаблону, если снимок не сохранён."""
+    from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
+
+    product_ids = list(row["product_ids"] or [])
+    products = await _log_products(con, product_ids)
+    if not products:
+        return None
+    service = row["service"]
+    await app_settings.load_site(con)
+    look = await app_settings.template_look(con)
+    blocks = None
+    if row["template_id"]:
+        tpl = await con.fetchrow(
+            "SELECT blocks FROM email_templates WHERE id = $1", row["template_id"])
+        if tpl is not None:
+            raw = tpl["blocks"]
+            blocks = json.loads(raw) if isinstance(raw, str) else raw
+    if blocks is None:
+        tpl = await app_settings.active_template(con, service)
+        blocks = tpl["blocks"] if tpl else DEFAULT_BLOCKS.get(service)
+    if blocks:
+        return render_blocks(blocks, products, row["user_id"], service, look)
+    return render_email("", products, row["user_id"], service, "default", look)
+
+
+@router.get("/logs/{log_id}")
+async def log_detail(log_id: int) -> dict:
+    """Метаданные письма + признак сохранённого HTML (тело — через /preview)."""
+    row = await db.pool().fetchrow(
+        """SELECT e.id, e.user_id, e.service, e.status, e.category_id, e.product_ids,
+                  e.order_id, e.attributed_order_id, e.revenue, e.sent_at, e.subject,
+                  e.template_id, e.created_at,
+                  (e.html IS NOT NULL AND e.html <> '') AS has_html,
+                  s.email AS recipient_email
+           FROM email_log e
+           LEFT JOIN subscribers s ON s.user_id = e.user_id
+           WHERE e.id = $1""",
+        log_id,
+    )
+    if row is None:
+        return {"found": False}
+    has_html = bool(row["has_html"])
+    can_preview = has_html or bool(row["product_ids"])
+    subject = row["subject"]
+    if not subject:
+        # старые записи без снимка — тема из текущих настроек сценария
+        async with db.pool().acquire() as con:
+            cfg = await svc_config.load(con, row["service"])
+            subject = cfg.get("subject")
+    return {
+        "found": True,
+        "id": row["id"],
+        "user_id": row["user_id"],
+        "recipient_email": row["recipient_email"],
+        "service": row["service"],
+        "status": row["status"],
+        "category_id": row["category_id"],
+        "product_ids": list(row["product_ids"] or []),
+        "order_id": row["order_id"],
+        "attributed_order_id": row["attributed_order_id"],
+        "revenue": float(row["revenue"]) if row["revenue"] is not None else None,
+        "sent_at": _iso(row["sent_at"]),
+        "created_at": _iso(row["created_at"]),
+        "subject": subject,
+        "template_id": row["template_id"],
+        "has_html": has_html,
+        "can_preview": can_preview,
+        "preview_exact": has_html,
+    }
+
+
+@router.get("/logs/{log_id}/preview", response_class=HTMLResponse)
+async def log_preview(log_id: int) -> HTMLResponse:
+    """HTML письма: снимок как ушло клиенту, иначе сборка по товарам и шаблону."""
+    async with db.pool().acquire() as con:
+        row = await con.fetchrow(
+            """SELECT id, user_id, service, product_ids, template_id, html
+               FROM email_log WHERE id = $1""",
+            log_id,
+        )
+        if row is None:
+            return HTMLResponse("<!doctype html><meta charset=utf-8><p>Письмо не найдено.</p>",
+                                status_code=404)
+        if row["html"]:
+            return HTMLResponse(row["html"])
+        rebuilt = await _rebuild_log_html(con, row)
+    if rebuilt:
+        return HTMLResponse(rebuilt)
+    return HTMLResponse(
+        "<!doctype html><meta charset=utf-8><body style='font:14px/1.5 system-ui;padding:24px;color:#453c52'>"
+        "<p>Не удалось показать письмо: нет сохранённого HTML и товаров в каталоге.</p>"
+        "</body>",
+        status_code=200,
+    )
 
 
 @router.get("/activity-log")

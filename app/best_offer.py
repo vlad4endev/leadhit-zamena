@@ -183,9 +183,10 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         sent_ids = [p["product_id"] for p in products]
         # Строку лога создаём ДО отправки (log_id связывает события доставки).
         log_id = await con.fetchval(
-            """INSERT INTO email_log(user_id, service, category_id, product_ids, template_id, status)
-               VALUES($1, 'best_offer', $2, $3, $4, 'queued') RETURNING id""",
-            cand["user_id"], category, sent_ids, template_id,
+            """INSERT INTO email_log(user_id, service, category_id, product_ids, template_id,
+                                    subject, html, status)
+               VALUES($1, 'best_offer', $2, $3, $4, $5, $6, 'queued') RETURNING id""",
+            cand["user_id"], category, sent_ids, template_id, cfg["subject"], html,
         )
         ok = await mailer.send(cand["email"], cfg["subject"], html,
                                cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})

@@ -87,8 +87,10 @@ async def test_best_offer(con) -> None:
     # HTML не пустой по товарам.
     assert any("Alpha" in m["html"] or "Beta" in m["html"] for m in mailer.sent)
     log = await con.fetchrow(
-        "SELECT status, product_ids FROM email_log WHERE user_id='u_ok' AND service='best_offer'")
+        "SELECT status, product_ids, subject, html FROM email_log WHERE user_id='u_ok' AND service='best_offer'")
     assert log and log["status"] == "sent" and len(log["product_ids"]) >= 1
+    assert log["html"] and ("Alpha" in log["html"] or "Beta" in log["html"]), "html snapshot missing"
+    assert log["subject"], "subject snapshot missing"
     print("  best_offer OK", f"sent={n}", f"to={sorted(tos)}")
 
 
