@@ -907,6 +907,7 @@ async function viewFeeds(){
   if(recProblems) cats=cats.map(c=>({...c, products:c.products.filter(p=>!p.usable)})).filter(c=>c.products.length);
   const empty = !cats.length;
   if(rec.purged_no_photo) toast(`Из топ-5 убрано без фото: ${num(rec.purged_no_photo)} → «Без фото»`);
+  if(rec.photos_warmed) toast(`Фото прогреты: ${num(rec.photos_warmed)} (CDN)`);
 
   const catCards = cats.map(c=>{
     const items=c.products.map(pr=>{
