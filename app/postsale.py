@@ -14,6 +14,7 @@ from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
 CANCELLED_STATUSES = {"cancelled", "canceled", "returned", "refunded"}
+MAX_ATTEMPTS = 5  # после N сбоев ESP/mailer задача → failed (не крутим вечно)
 
 
 def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]]) -> tuple[str | None, list[str]]:
@@ -76,7 +77,7 @@ async def run_due(con: asyncpg.Connection, mailer=None, force: bool = False) -> 
     template_id = tpl["id"] if tpl else None
     sent = 0
     jobs = await con.fetch(
-        """SELECT id, user_id, order_id FROM send_queue
+        """SELECT id, user_id, order_id, attempts FROM send_queue
            WHERE service = 'postsale' AND state = 'scheduled' AND run_after <= now()
            FOR UPDATE SKIP LOCKED"""
     )
@@ -87,13 +88,26 @@ async def run_due(con: asyncpg.Connection, mailer=None, force: bool = False) -> 
     return sent
 
 
+async def _bump_attempt(con: asyncpg.Connection, job) -> bool:
+    """+1 к attempts. True = лимит исчерпан, задачу надо закрыть как failed."""
+    attempts = int(job["attempts"] or 0) + 1
+    await con.execute(
+        "UPDATE send_queue SET attempts = $2 WHERE id = $1", job["id"], attempts)
+    return attempts >= MAX_ATTEMPTS
+
+
 async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=None, template_id=None) -> bool:
+    if int(job["attempts"] or 0) >= MAX_ATTEMPTS:
+        await _finish(con, job["id"], "failed")
+        return False
+
     order = await con.fetchrow(
         "SELECT order_id, user_id, email, status, items FROM orders WHERE order_id = $1",
         job["order_id"],
     )
     sub = await con.fetchrow(
-        "SELECT user_id, email, is_unsubscribed, last_any_trigger_at FROM subscribers WHERE user_id = $1",
+        """SELECT user_id, email, is_unsubscribed, consent_at, last_any_trigger_at
+           FROM subscribers WHERE user_id = $1""",
         job["user_id"],
     )
 
@@ -101,7 +115,7 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
     if order is None or order["status"].lower() in CANCELLED_STATUSES:
         await _finish(con, job["id"], "cancelled")
         return False
-    if sub is None or sub["is_unsubscribed"] or not sub["email"]:
+    if sub is None or sub["is_unsubscribed"] or not sub["email"] or sub["consent_at"] is None:
         await _finish(con, job["id"], "cancelled")
         return False
     # Антидубль: не более одного триггера в день (Постпродажа уступает Корзине).
@@ -125,23 +139,29 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
         return False
 
     products = await _load_products(con, product_ids)
+    if not products:
+        # Cross-sell выжжен out-of-stock → пустое письмо не шлём (ТЗ 4.8).
+        await _finish(con, job["id"], "cancelled")
+        return False
     if blocks:
         html = render_blocks(blocks, products, order["user_id"], "postsale", look)
     else:
         intro = "<h2>Спасибо за покупку!</h2><p>Возможно, вам подойдёт:</p>"
         html = render_email(intro, products, order["user_id"], "postsale", cfg.get("template", "default"), look)
+    sent_ids = [p["product_id"] for p in products]
     # Строку лога создаём ДО отправки (уник-индекс по order_id держит «1 письмо на заказ»).
     log_id = await con.fetchval(
         """INSERT INTO email_log(user_id, service, category_id, product_ids, order_id, template_id, status)
            VALUES($1, 'postsale', $2, $3, $4, $5, 'queued') RETURNING id""",
-        order["user_id"], category, product_ids, order["order_id"], template_id,
+        order["user_id"], category, sent_ids, order["order_id"], template_id,
     )
     ok = await mailer.send(sub["email"], cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
     if not ok:
         # Удаляем queued-строку, чтобы ретрай задачи не упёрся в уник-индекс по заказу.
         await con.execute("DELETE FROM email_log WHERE id = $1", log_id)
-        await con.execute("UPDATE send_queue SET attempts = attempts + 1 WHERE id = $1", job["id"])
+        if await _bump_attempt(con, job):
+            await _finish(con, job["id"], "failed")
         return False
 
     async with con.transaction():

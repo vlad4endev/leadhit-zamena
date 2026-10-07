@@ -81,6 +81,7 @@ async def _candidates(con, interval_days: int, after_purchase_days: int):
         """SELECT user_id, email, rotation_pointer_category_id, last_purchase_category_id
            FROM subscribers
            WHERE email IS NOT NULL AND NOT is_unsubscribed
+             AND consent_at IS NOT NULL                                   -- 152-ФЗ: есть согласие
              AND (last_any_trigger_at IS NULL
                   OR last_any_trigger_at < now() - interval '24 hours')     -- антидубль
              AND (
@@ -135,16 +136,21 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
             continue  # нечего предложить
 
         products = await _load_products(con, product_ids)
+        if not products:
+            # Топ-5 выжжен out-of-stock → пустое письмо не шлём (как ТЗ 4.8 для Постпродажи).
+            continue
         if blocks:
             html = render_blocks(blocks, products, cand["user_id"], "best_offer", look)
         else:
             intro = "<h2>Подборка для вас</h2>"
             html = render_email(intro, products, cand["user_id"], "best_offer", cfg.get("template", "default"), look)
+        # В лог — фактически отправленные (после фильтра in_stock), иначе дедуп «врёт».
+        sent_ids = [p["product_id"] for p in products]
         # Строку лога создаём ДО отправки (log_id связывает события доставки).
         log_id = await con.fetchval(
             """INSERT INTO email_log(user_id, service, category_id, product_ids, template_id, status)
                VALUES($1, 'best_offer', $2, $3, $4, 'queued') RETURNING id""",
-            cand["user_id"], category, product_ids, template_id,
+            cand["user_id"], category, sent_ids, template_id,
         )
         ok = await mailer.send(cand["email"], cfg["subject"], html,
                                cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})

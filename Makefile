@@ -34,6 +34,9 @@ test:                      ## Self-check чистой логики всех се
 	$(PY) -m app.import_yml
 	node scripts/test_trigger.js && node scripts/test_track.js && node scripts/test_wheel.js
 
+test-send:                 ## Интеграция: три сценария реально шлют через RecordingMailer (нужна БД)
+	$(PY) scripts/test_scenarios_send.py
+
 worker-postsale:    ; $(PY) scripts/run_worker.py postsale
 worker-best-offer:  ; $(PY) scripts/run_worker.py best_offer
 worker-cart:        ; $(PY) scripts/run_worker.py cart

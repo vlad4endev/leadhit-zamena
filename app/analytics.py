@@ -34,7 +34,78 @@ _EVENT_COL = {
 
 class Webhook(BaseModel):
     log_id: int
-    event: str  # delivered|opened|clicked|bounced|unsubscribed
+    event: str  # sent|delivered|opened|clicked|bounced|unsubscribed|failed
+
+
+_LAST_SENT_COL = {
+    "best_offer": "last_sent_best_offer_at",
+    "cart": "last_sent_cart_at",
+    "postsale": "last_sent_postsale_at",
+}
+
+
+async def rollback_failed_send(con, log_id: int) -> None:
+    """Письмо приняли в очередь, но ESP/mailer не отправил (event=failed).
+
+    Сценарии уже сдвинули last_sent_* / закрыли сессию или задачу. Без отката
+    получатель «выпадает» из цикла на весь cooldown/интервал, хотя письма не было.
+    """
+    row = await con.fetchrow(
+        "SELECT user_id, service, sent_at, order_id FROM email_log WHERE id = $1", log_id)
+    if row is None or row["sent_at"] is None:
+        return
+    svc = str(row["service"])
+    col = _LAST_SENT_COL.get(svc)
+    if not col:
+        return
+    uid, sent_at, order_id = row["user_id"], row["sent_at"], row["order_id"]
+
+    # Сбрасываем таймеры, только если нет более нового успешного письма того же сценария.
+    # Явный ::timestamptz — иначе asyncpg не выводит тип $2 в выражении «$2 - interval».
+    await con.execute(
+        f"""UPDATE subscribers SET
+               {col} = NULL,
+               last_any_trigger_at = CASE
+                 WHEN last_any_trigger_at IS NOT NULL
+                  AND last_any_trigger_at >= ($2::timestamptz - interval '5 seconds')
+                  AND last_any_trigger_at <= ($2::timestamptz + interval '5 seconds')
+                 THEN NULL ELSE last_any_trigger_at END
+             WHERE user_id = $1
+               AND {col} IS NOT NULL
+               AND {col} >= ($2::timestamptz - interval '5 seconds')
+               AND {col} <= ($2::timestamptz + interval '5 seconds')
+               AND NOT EXISTS (
+                 SELECT 1 FROM email_log e
+                  WHERE e.user_id = $1 AND e.service = $3::service_kind
+                    AND e.id <> $4
+                    AND e.sent_at IS NOT NULL
+                    AND e.status NOT IN ('failed', 'bounced')
+                    AND e.sent_at > $2::timestamptz)""",
+        uid, sent_at, svc, log_id,
+    )
+
+    if svc == "cart":
+        # Вернуть сессию в departed, чтобы воркер повторил near-real-time отправку.
+        # departed_at в прошлом с запасом > grace_sec — иначе тик снова будет ждать grace.
+        await con.execute(
+            """UPDATE cart_sessions SET state = 'departed',
+                   departed_at = now() - interval '1 hour'
+               WHERE state = 'sent'
+                 AND (user_id = $1
+                      OR email = (SELECT email FROM subscribers WHERE user_id = $1))""",
+            uid,
+        )
+    elif svc == "postsale" and order_id:
+        # Задача уже 'sent' — возвращаем в очередь (с лимитом attempts в postsale).
+        await con.execute(
+            """UPDATE send_queue SET state = 'scheduled', run_after = now(),
+                   attempts = attempts + 1
+               WHERE service = 'postsale' AND order_id = $1 AND state = 'sent'""",
+            order_id,
+        )
+        # Уник-индекс email_log(order_id) для postsale: failed-строку надо убрать,
+        # иначе ретрай упрётся в конфликт (как при синхронном fail в postsale._process_one).
+        await con.execute("DELETE FROM email_log WHERE id = $1", log_id)
 
 
 @router.post("/esp/webhook")
@@ -58,6 +129,8 @@ async def esp_webhook(wh: Webhook) -> dict:
                        WHERE user_id = (SELECT user_id FROM email_log WHERE id = $1)""",
                     wh.log_id,
                 )
+            elif wh.event == "failed":
+                await rollback_failed_send(con, wh.log_id)
         else:
             return {"ok": False, "reason": "unknown event"}
     return {"ok": True}
@@ -212,6 +285,8 @@ def _demo() -> None:
     href = "/unsubscribe?" + urlencode({"u": 'a"><b', "c": "cart", "confirm": 1})
     assert "confirm=1" in href and '"><b' not in _unsub_page("x", href)
     assert "Отписаться" not in _unsub_page("Вы отписаны.", None)  # финальная страница без кнопки
+    # Маппинг сервиса → колонка таймера (rollback failed) покрывает все три сценария.
+    assert set(_LAST_SENT_COL) == {"best_offer", "cart", "postsale"}
     print("analytics._demo OK")
 
 

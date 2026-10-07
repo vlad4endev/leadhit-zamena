@@ -382,6 +382,7 @@ async def order_post(o: OrderPost) -> dict:
 def cart_gate(
     has_items: bool, has_email: bool, order_placed: bool,
     within_cooldown: bool, unsubscribed: bool, products_found: bool = True,
+    has_consent: bool = True,
 ) -> Optional[str]:
     """Gate-проверки перед отправкой (ТЗ 3.3). None = можно слать, иначе причина skip."""
     if not has_items:
@@ -392,6 +393,8 @@ def cart_gate(
         return "unknown_products"
     if not has_email:
         return "no_email"
+    if not has_consent:
+        return "no_consent"  # 152-ФЗ: подписчик без consent_at (импорт/legacy) — не шлём
     if order_placed:
         return "order_placed"
     if unsubscribed:
@@ -463,7 +466,7 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
     cooldown_hours = cfg["cooldown_hours"]
     # Резолвим подписчика по user_id или email (нужен для капа и email_log.user_id).
     sub = await con.fetchrow(
-        """SELECT user_id, email, is_unsubscribed, last_sent_cart_at
+        """SELECT user_id, email, is_unsubscribed, consent_at, last_sent_cart_at
            FROM subscribers
            WHERE user_id = $1 OR ($2::text IS NOT NULL AND email = $2)
            LIMIT 1""",
@@ -492,6 +495,7 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         within_cooldown=within_cooldown,
         unsubscribed=bool(sub and sub["is_unsubscribed"]),
         products_found=bool(products),
+        has_consent=bool(sub and sub["consent_at"] is not None),
     )
     if reason is not None:
         await con.execute(
@@ -555,6 +559,7 @@ def _demo() -> None:
     assert cart_gate(True, True, False, False, False, products_found=False) == "unknown_products"
     assert cart_gate(False, True, False, False, False, products_found=False) == "empty_cart"
     assert cart_gate(True, False, False, False, False) == "no_email"
+    assert cart_gate(True, True, False, False, False, has_consent=False) == "no_consent"
     assert cart_gate(True, True, True, False, False) == "order_placed"  # заказ перебивает
     assert cart_gate(True, True, False, False, True) == "unsubscribed"
     assert cart_gate(True, True, False, True, False) == "cooldown"
