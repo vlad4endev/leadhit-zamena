@@ -388,8 +388,8 @@ def cart_gate(
     if not has_items:
         return "empty_cart"
     if not products_found:
-        # Ни один product_id из пинга не найден в каталоге → письмо «вы забыли товары»
-        # ушло бы с пустым блоком. Это поломка интеграции/фида, а не повод спамить.
+        # Нечего показать: id нет в каталоге или все позиции не в наличии.
+        # Письмо «вы забыли товары» ушло бы с пустым блоком.
         return "unknown_products"
     if not has_email:
         return "no_email"
@@ -452,8 +452,17 @@ async def run_due(con, mailer=None, force: bool = False) -> int:
     template_id = tpl["id"] if tpl else None
     sent = 0
     for s in departed:
-        if await _process(con, s, mailer, cfg, look, blocks, template_id):
-            sent += 1
+        try:
+            if await _process(con, s, mailer, cfg, look, blocks, template_id):
+                sent += 1
+        except Exception as e:  # noqa: BLE001 — одна битая сессия не останавливает тик
+            print(f"[cart] session {s['session_id']} ERROR {type(e).__name__}: {e}")
+            await activity_log.write(
+                con, level="error", source="cart", event="send_failed", service="cart",
+                session_id=s["session_id"],
+                message=f"ошибка сессии: {type(e).__name__}: {e}",
+                details={"error": str(e)[:500]},
+            )
     await activity_log.write(
         con, level="info", source="cart", event="tick_done", service="cart",
         message=f"тик корзины: отправлено {sent} из {len(departed)} сессий",
@@ -496,7 +505,8 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
     # Истина по составу корзины — последний ping сниппета (решение п.2): 1С данные
     # отдаёт файлом (каталог/топ-5/подписчики), живого запроса корзины по session_id нет.
     # Пустую/оформленную корзину закрывают gate has_items и проверка заказа ниже.
-    items = json.loads(s["cart_items"])
+    raw_items = s["cart_items"]
+    items = json.loads(raw_items) if isinstance(raw_items, str) else list(raw_items or [])
     email = s["email"] or (sub["email"] if sub else None)
 
     within_cooldown = bool(
@@ -556,10 +566,11 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
         intro = "<h2>Вы забыли товары в корзине</h2><p>Оформите заказ, пока товары в наличии:</p>"
         html = render_email(intro, products, sub["user_id"], "cart", cfg.get("template", "default"), look)
     product_ids = [i["product_id"] for i in items]
+    sent_ids = [p["product_id"] for p in products]
     log_id = await con.fetchval(
         """INSERT INTO email_log(user_id, service, product_ids, template_id, subject, html, status)
            VALUES($1, 'cart', $2, $3, $4, $5, 'queued') RETURNING id""",
-        sub["user_id"], product_ids, template_id, cfg["subject"], html,
+        sub["user_id"], sent_ids, template_id, cfg["subject"], html,
     )
     ok = await mailer.send(email, cfg["subject"], html,
                            cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
@@ -585,23 +596,32 @@ async def _process(con, s, mailer, cfg, look, blocks=None, template_id=None) -> 
     await activity_log.write(
         con, level="info", source="cart", event="queued", service="cart",
         user_id=sub["user_id"], session_id=s["session_id"], ref_id=log_id,
-        message=f"принято в очередь: брошенная корзина, товаров {len(product_ids)} → {email}",
-        details={"product_ids": product_ids, "to": email},
+        message=f"принято в очередь: брошенная корзина, товаров {len(sent_ids)} → {email}",
+        details={"product_ids": sent_ids, "to": email},
     )
     return True
 
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
-    # Без GUID-фото в письмо не кладём (как Best Offer / Постпродажа): иначе плейсхолдеры.
+    # in_stock + фото: иначе кнопка «Купить» ведёт на OOS или письмо с плейсхолдерами.
     from app import images
+    ids: list[str] = []
+    seen: set[str] = set()
+    for raw in product_ids:
+        pid = str(raw or "").strip()
+        if pid and pid not in seen:
+            seen.add(pid)
+            ids.append(pid)
+    if not ids:
+        return []
     rows = await con.fetch(
         f"""SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE product_id = ANY($1::text[])
+           WHERE product_id = ANY($1::text[]) AND in_stock
              AND {images.HAS_PHOTO_SQL}""",
-        product_ids,
+        ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}
-    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in product_ids if pid in by_id]
+    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
 def _demo() -> None:

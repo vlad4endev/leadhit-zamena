@@ -53,8 +53,13 @@ async def _categories_order(con) -> list[str]:
 
 
 async def _top5_map(con) -> dict[str, list[str]]:
+    # Только in_stock: иначе категория с 4 из 5 «нет в наличии» проходит порог min_items
+    # и в письмо уходит 1 карточка, хотя следующая категория набирает полную подборку.
     rows = await con.fetch(
-        "SELECT category_id, product_id FROM top5_by_category ORDER BY category_id, position"
+        """SELECT t.category_id, t.product_id
+           FROM top5_by_category t
+           JOIN products p ON p.product_id = t.product_id AND p.in_stock
+           ORDER BY t.category_id, t.position"""
     )
     out: dict[str, list[str]] = {}
     for r in rows:
@@ -97,14 +102,24 @@ async def _candidates(con, interval_days: int, after_purchase_days: int):
 
 
 async def _load_products(con, product_ids: list[str]) -> list[dict]:
+    ids: list[str] = []
+    seen: set[str] = set()
+    for raw in product_ids:
+        pid = str(raw or "").strip()
+        if pid and pid not in seen:
+            seen.add(pid)
+            ids.append(pid)
+    if not ids:
+        return []
     rows = await con.fetch(
         f"""SELECT product_id, name, price, image_url, product_url FROM products
            WHERE product_id = ANY($1::text[]) AND in_stock
              AND {images.HAS_PHOTO_SQL}""",
-        product_ids,
+        ids,
     )
     by_id = {r["product_id"]: dict(r) for r in rows}
-    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in product_ids if pid in by_id]
+    # Порядок топ-5, без повторов. in_stock — второй барьер, если остаток кончился между запросами.
+    return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
 async def run_batch(con, mailer=None, force: bool = False) -> int:
@@ -148,79 +163,22 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
                 details={"reason": "day_limit", "sent": sent, "max_per_day": max_per_day},
             )
             break  # дневной лимит писем (как «Макс. кол-во писем в день» в LeadHit)
-        start = cand["rotation_pointer_category_id"] or cand["last_purchase_category_id"] or default_start
-        recent = await _recent_products(con, cand["user_id"])
-        category, product_ids, next_ptr = rotate_and_pick(start, order, top5, recent)
-        if not product_ids:
+        try:
+            n = await _send_one(
+                con, cand, mailer, cfg, look, blocks, template_id, order, top5, default_start)
+            if n:
+                sent += n
+            else:
+                skipped += 1
+        except Exception as e:  # noqa: BLE001 — один битый профиль не останавливает батч
             skipped += 1
-            await activity_log.write(
-                con, level="warn", source="best_offer", event="skip", service="best_offer",
-                user_id=cand["user_id"],
-                message=f"skip: {activity_log.reason_ru('no_products')}",
-                details={"reason": "no_products", "start_category": start, "recent_n": len(recent)},
-            )
-            continue  # нечего предложить
-
-        # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
-        products = images.photo_first(await _load_products(con, product_ids), 5)
-        products = await images.warm_products(products, require_live=True)
-        if not products:
-            # Топ-5 выжжен out-of-stock / без фото → пустое письмо не шлём (как ТЗ 4.8).
-            skipped += 1
-            await activity_log.write(
-                con, level="warn", source="best_offer", event="skip", service="best_offer",
-                user_id=cand["user_id"],
-                message=f"skip: {activity_log.reason_ru('oos')}",
-                details={"reason": "oos", "category": category, "picked": product_ids},
-            )
-            continue
-        if blocks:
-            html = render_blocks(blocks, products, cand["user_id"], "best_offer", look)
-        else:
-            intro = "<h2>Подборка для вас</h2>"
-            html = render_email(intro, products, cand["user_id"], "best_offer", cfg.get("template", "default"), look)
-        # В лог — фактически отправленные (после фильтра in_stock), иначе дедуп «врёт».
-        sent_ids = [p["product_id"] for p in products]
-        # Строку лога создаём ДО отправки (log_id связывает события доставки).
-        log_id = await con.fetchval(
-            """INSERT INTO email_log(user_id, service, category_id, product_ids, template_id,
-                                    subject, html, status)
-               VALUES($1, 'best_offer', $2, $3, $4, $5, $6, 'queued') RETURNING id""",
-            cand["user_id"], category, sent_ids, template_id, cfg["subject"], html,
-        )
-        ok = await mailer.send(cand["email"], cfg["subject"], html,
-                               cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
-        if not ok:
-            await con.execute("UPDATE email_log SET status='failed' WHERE id=$1", log_id)
-            skipped += 1
+            print(f"[best_offer] user {cand['user_id']} ERROR {type(e).__name__}: {e}")
             await activity_log.write(
                 con, level="error", source="best_offer", event="send_failed", service="best_offer",
-                user_id=cand["user_id"], ref_id=log_id,
-                message=f"отправка не удалась: {activity_log.reason_ru('mail_failed')}",
-                details={"reason": "mail_failed", "category": category, "product_ids": sent_ids,
-                         "to": cand["email"]},
+                user_id=cand["user_id"],
+                message=f"ошибка профиля: {type(e).__name__}: {e}",
+                details={"error": str(e)[:500]},
             )
-            continue
-
-        async with con.transaction():
-            await con.execute("UPDATE email_log SET status='sent', sent_at=now() WHERE id=$1", log_id)
-            # Указатель двигается ТОЛЬКО после успешной отправки (ТЗ 2.4).
-            await con.execute(
-                """UPDATE subscribers
-                   SET last_sent_best_offer_at = now(), last_any_trigger_at = now(),
-                       rotation_pointer_category_id = $2
-                   WHERE user_id = $1""",
-                cand["user_id"], next_ptr,
-            )
-        sent += 1
-        await activity_log.write(
-            con, level="info", source="best_offer", event="queued", service="best_offer",
-            user_id=cand["user_id"], ref_id=log_id,
-            message=f"принято в очередь отправки: категория {category}, товаров {len(sent_ids)} "
-                    f"→ {cand['email']}",
-            details={"category": category, "product_ids": sent_ids, "next_pointer": next_ptr,
-                     "to": cand["email"]},
-        )
 
     await activity_log.write(
         con, level="info", source="best_offer", event="batch_done", service="best_offer",
@@ -228,6 +186,75 @@ async def run_batch(con, mailer=None, force: bool = False) -> int:
         details={"sent": sent, "skipped": skipped, "candidates": len(candidates)},
     )
     return sent
+
+
+async def _send_one(con, cand, mailer, cfg, look, blocks, template_id, order, top5, default_start) -> int:
+    start = cand["rotation_pointer_category_id"] or cand["last_purchase_category_id"] or default_start
+    recent = await _recent_products(con, cand["user_id"])
+    category, product_ids, next_ptr = rotate_and_pick(start, order, top5, recent)
+    if not product_ids:
+        await activity_log.write(
+            con, level="warn", source="best_offer", event="skip", service="best_offer",
+            user_id=cand["user_id"],
+            message=f"skip: {activity_log.reason_ru('no_products')}",
+            details={"reason": "no_products", "start_category": start, "recent_n": len(recent)},
+        )
+        return 0
+
+    # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
+    products = images.photo_first(await _load_products(con, product_ids), 5)
+    products = await images.warm_products(products, require_live=True)
+    if not products:
+        await activity_log.write(
+            con, level="warn", source="best_offer", event="skip", service="best_offer",
+            user_id=cand["user_id"],
+            message=f"skip: {activity_log.reason_ru('oos')}",
+            details={"reason": "oos", "category": category, "picked": product_ids},
+        )
+        return 0
+    if blocks:
+        html = render_blocks(blocks, products, cand["user_id"], "best_offer", look)
+    else:
+        intro = "<h2>Подборка для вас</h2>"
+        html = render_email(intro, products, cand["user_id"], "best_offer", cfg.get("template", "default"), look)
+    sent_ids = [p["product_id"] for p in products]
+    log_id = await con.fetchval(
+        """INSERT INTO email_log(user_id, service, category_id, product_ids, template_id,
+                                subject, html, status)
+           VALUES($1, 'best_offer', $2, $3, $4, $5, $6, 'queued') RETURNING id""",
+        cand["user_id"], category, sent_ids, template_id, cfg["subject"], html,
+    )
+    ok = await mailer.send(cand["email"], cfg["subject"], html,
+                           cfg["sender_email"], cfg["sender_name"], meta={"log_id": log_id})
+    if not ok:
+        await con.execute("UPDATE email_log SET status='failed' WHERE id=$1", log_id)
+        await activity_log.write(
+            con, level="error", source="best_offer", event="send_failed", service="best_offer",
+            user_id=cand["user_id"], ref_id=log_id,
+            message=f"отправка не удалась: {activity_log.reason_ru('mail_failed')}",
+            details={"reason": "mail_failed", "category": category, "product_ids": sent_ids,
+                     "to": cand["email"]},
+        )
+        return 0
+
+    async with con.transaction():
+        await con.execute("UPDATE email_log SET status='sent', sent_at=now() WHERE id=$1", log_id)
+        await con.execute(
+            """UPDATE subscribers
+               SET last_sent_best_offer_at = now(), last_any_trigger_at = now(),
+                   rotation_pointer_category_id = $2
+               WHERE user_id = $1""",
+            cand["user_id"], next_ptr,
+        )
+    await activity_log.write(
+        con, level="info", source="best_offer", event="queued", service="best_offer",
+        user_id=cand["user_id"], ref_id=log_id,
+        message=f"принято в очередь отправки: категория {category}, товаров {len(sent_ids)} "
+                f"→ {cand['email']}",
+        details={"category": category, "product_ids": sent_ids, "next_pointer": next_ptr,
+                 "to": cand["email"]},
+    )
+    return 1
 
 
 def _demo() -> None:

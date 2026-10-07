@@ -867,13 +867,29 @@ class TestEmail(BaseModel):
 
 
 async def _sample_products(con, limit: int = 6) -> list[dict]:
-    """Товары для превью и тест-письма — только с фото, прогретые до CDN-URL."""
+    """Товары для превью и тест-письма.
+
+    Сначала позиции топ-5 — те же, что уходят в Best Offer и Постпродажу. Раньше LIMIT
+    без привязки к фиду показывал произвольный срез каталога, и превью авторассылки
+    не совпадало с письмом. Внутри топа фото идут вперёд, затем прогрев CDN-URL.
+    6 штук = две строки карточек по 3. Нет топ-5 — любые в наличии с фото.
+    """
     from app import images
     rows = await con.fetch(
-        """SELECT product_id, name, price, image_url, product_url FROM products
-           WHERE in_stock AND image_url IS NOT NULL AND btrim(image_url) <> ''
-           ORDER BY product_id
-           LIMIT $1""", limit)
+        f"""SELECT product_id, name, price, image_url, product_url FROM (
+             SELECT DISTINCT ON (p.product_id)
+                    p.product_id, p.name, p.price, p.image_url, p.product_url,
+                    (t.product_id IS NULL) AS not_top,
+                    COALESCE(t.position, 99) AS pos
+             FROM products p
+             LEFT JOIN top5_by_category t ON t.product_id = p.product_id
+             WHERE p.in_stock AND {images.HAS_PHOTO_SQL.replace('image_url', 'p.image_url')}
+             ORDER BY p.product_id, t.position NULLS LAST
+           ) s
+           ORDER BY not_top, pos, product_id
+           LIMIT $1""",
+        limit,
+    )
     products = [dict(r, price=float(r["price"])) for r in rows]
     return await images.warm_products(products, require_live=True)
 

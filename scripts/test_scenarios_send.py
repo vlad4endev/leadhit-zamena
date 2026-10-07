@@ -171,6 +171,114 @@ async def test_postsale(con) -> None:
     print("  postsale OK")
 
 
+async def _subscriber(con, user_id: str, email: str) -> None:
+    await con.execute(
+        """INSERT INTO subscribers(user_id, email, is_unsubscribed, consent_at)
+           VALUES($1, $2, FALSE, now())
+           ON CONFLICT (user_id) DO UPDATE SET
+             email = EXCLUDED.email, is_unsubscribed = FALSE, consent_at = now(),
+             last_sent_best_offer_at = NULL, last_sent_cart_at = NULL,
+             last_sent_postsale_at = NULL, last_any_trigger_at = NULL,
+             rotation_pointer_category_id = NULL""",
+        user_id, email,
+    )
+
+
+async def test_best_offer_skips_thin_stock(con) -> None:
+    """Категория с 1 товаром в наличии (<2) не должна уехать письмом — берём следующую."""
+    await con.execute("UPDATE products SET in_stock = FALSE WHERE product_id IN ('s2', 's3')")
+    try:
+        await _subscriber(con, "u_part", "part@example.com")
+        mailer = RecordingMailer()
+        await best_offer.run_batch(con, mailer=mailer, force=True)
+        html = next(m["html"] for m in mailer.sent if m["to"] == "part@example.com")
+        assert "Delta" in html and "Epsilon" in html, html
+        assert "Alpha" not in html, "shoes остался 1 в наличии — категорию надо пропустить"
+        ids = await con.fetchval(
+            "SELECT product_ids FROM email_log WHERE user_id='u_part' AND service='best_offer'")
+        assert set(ids) == {"b1", "b2"}, ids
+    finally:
+        await con.execute(
+            "UPDATE products SET in_stock = TRUE WHERE product_id IN ('s2', 's3')")
+    print("  best_offer thin-stock skip OK")
+
+
+async def test_cart_skips_oos(con) -> None:
+    await _subscriber(con, "u_cart2", "cart2@example.com")
+    await con.execute(
+        """INSERT INTO cart_sessions(session_id, user_id, email, cart_items, state,
+                                     last_ping_at, departed_at, created_at)
+           VALUES('s_oos', 'u_cart2', 'cart2@example.com',
+                  $1::jsonb, 'departed',
+                  now() - interval '1 hour', now() - interval '30 minutes',
+                  now() - interval '2 hours')""",
+        json.dumps([
+            {"product_id": "s1", "qty": 1},
+            {"product_id": "out1", "qty": 1},
+            {"product_id": " s1 ", "qty": 3},
+        ]),
+    )
+    mailer = RecordingMailer()
+    n = await cart.run_due(con, mailer=mailer, force=True)
+    assert n == 1, mailer.sent
+    html = mailer.sent[0]["html"]
+    assert "Alpha" in html and "OOS" not in html, html
+    ids = await con.fetchval(
+        "SELECT product_ids FROM email_log WHERE user_id='u_cart2' AND service='cart'")
+    assert list(ids) == ["s1"], ids
+    print("  cart OOS-skip OK")
+
+
+async def test_postsale_without_category(con) -> None:
+    """Заказ с витрины без category_id всё равно подбирает cross-sell по каталогу."""
+    await _subscriber(con, "u_post2", "post2@example.com")
+    await con.execute(
+        """INSERT INTO orders(order_id, user_id, email, order_date, status, items)
+           VALUES('o_nocat', 'u_post2', 'post2@example.com', now() - interval '8 days', 'paid',
+                  $1::jsonb)""",
+        json.dumps([{"product_id": "s1", "price": 5990, "qty": 1}]),
+    )
+    await con.execute(
+        """INSERT INTO send_queue(user_id, service, order_id, run_after, state)
+           VALUES('u_post2', 'postsale', 'o_nocat', now() - interval '1 hour', 'scheduled')""")
+    mailer = RecordingMailer()
+    n = await postsale.run_due(con, mailer=mailer, force=True)
+    assert n == 1, mailer.sent
+    html = mailer.sent[0]["html"]
+    assert "Beta" in html and "Gamma" in html, html
+    assert "Alpha" not in html
+    print("  postsale no-category OK")
+
+
+async def test_postsale_oos_fallback(con) -> None:
+    """Топ-5 дорогой категории выжжен остатком → cross-sell следующей категории заказа."""
+    await con.execute("UPDATE products SET in_stock = FALSE WHERE product_id IN ('s2', 's3')")
+    try:
+        await _subscriber(con, "u_post3", "post3@example.com")
+        await con.execute(
+            """INSERT INTO orders(order_id, user_id, email, order_date, status, items)
+               VALUES('o_oos', 'u_post3', 'post3@example.com', now() - interval '8 days', 'paid',
+                      $1::jsonb)""",
+            json.dumps([
+                {"product_id": "s1", "price": 9000, "qty": 1},
+                {"product_id": "b1", "price": 1000, "qty": 1},
+            ]),
+        )
+        await con.execute(
+            """INSERT INTO send_queue(user_id, service, order_id, run_after, state)
+               VALUES('u_post3', 'postsale', 'o_oos', now() - interval '1 hour', 'scheduled')""")
+        mailer = RecordingMailer()
+        n = await postsale.run_due(con, mailer=mailer, force=True)
+        assert n == 1, mailer.sent
+        html = mailer.sent[0]["html"]
+        assert "Epsilon" in html, html
+        assert "Alpha" not in html and "Beta" not in html
+    finally:
+        await con.execute(
+            "UPDATE products SET in_stock = TRUE WHERE product_id IN ('s2', 's3')")
+    print("  postsale OOS-fallback OK")
+
+
 async def test_failed_rollback(con) -> None:
     """HttpMailer принял в очередь → сценарий сдвинул таймеры → ESP failed → откат."""
     # Готовим «уже отправленное» Best Offer письмо.
@@ -232,6 +340,10 @@ async def main() -> None:
             await test_best_offer_oos_skip(con)
             await test_cart(con)
             await test_postsale(con)
+            await test_best_offer_skips_thin_stock(con)
+            await test_cart_skips_oos(con)
+            await test_postsale_without_category(con)
+            await test_postsale_oos_fallback(con)
             await test_failed_rollback(con)
         print("scenario send integration OK")
     finally:

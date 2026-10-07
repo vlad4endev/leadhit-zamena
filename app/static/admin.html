@@ -1557,7 +1557,7 @@ function splitBtns(i){return `<div style="display:flex;gap:8px;margin-top:8px">
   <div class="svc-sub" style="margin-top:4px">«Секции» — вид как в оригинале, блоки можно двигать/удалять. «Блоки» — для визуальной правки текста/картинок (дизайн упростится).</div>`;}
 function blkSub(b){
   if(b.type==='heading')return b.text||''; if(b.type==='text')return stripTags(b.html).slice(0,40);
-  if(b.type==='button')return b.text||''; if(b.type==='products')return 'топ-5 сценария';
+  if(b.type==='button')return b.text||''; if(b.type==='products')return tplSvc==='cart'?'товары корзины':'топ категории';
   if(b.type==='spacer')return (b.h||16)+' px'; if(b.type==='image')return b.src?'задана':'нет картинки';
   if(b.type==='quote')return (b.text||'').slice(0,40); if(b.type==='promo')return b.code||'';
   if(b.type==='social'){const n=['vk','telegram','whatsapp','instagram'].filter(k=>b[k]).length;return n?n+' ссылок':'нет ссылок';}
@@ -1780,7 +1780,11 @@ function blkInspector(b,i){
     return openBtn + codeEditor(i,b.type);
   }
   if(b.type==='spacer') return `<label class="tf"><span>Высота, px</span><input class="inp" type="number" min="0" max="120" value="${b.h||16}" oninput="tplBlocks[${i}].h=+this.value;tplTouch()"></label>`;
-  if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">Автоподстановка топ-5 товаров сценария из фида 1С. Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
+  if(b.type==='products') return `<div class="svc-sub" style="padding-top:8px">${tplSvc==='cart'
+    ? 'В письмо подставляются товары из брошенной корзины, которые есть в каталоге и в наличии.'
+    : tplSvc==='postsale'
+      ? 'Cross-sell: топ категории самого дорогого товара в заказе, без уже купленного и без «нет в наличии».'
+      : 'Топ категории по ротации. Позиции «нет в наличии» в письмо не попадают; если в категории осталось меньше двух — берётся следующая.'} Стиль карточек и текст кнопки — во вкладке «Оформление».</div>`;
   return `<div class="svc-sub" style="padding-top:8px">Без настроек.</div>`;
 }
 // ── Редактор кода MJML/HTML ───────────────────────────────────────────────────
@@ -1794,7 +1798,7 @@ const CE_SNIP={
     text:{l:'Текст',t:'Абзац текста',s:'<mj-text font-size="15px" line-height="1.55" color="#333333">Текст письма</mj-text>\n'},
     button:{l:'Кнопка',t:'Кнопка-ссылка',s:'<mj-button href="https://groster.me" background-color="#a81fcb" border-radius="8px">Перейти</mj-button>\n'},
     image:{l:'Картинка',t:'Изображение',s:'<mj-image src="https://" alt="" href="" />\n'},
-    products:{l:'Товары',t:'Цикл по товарам сценария (топ-5)',s:'<mj-section>\n{% for item in get_recommendations() %}\n  <mj-column>\n    <mj-image src="{{ item.picture }}" href="{{ item.url }}" />\n    <mj-text align="center" font-weight="600">{{ item.name }}</mj-text>\n    <mj-text align="center">{{ item.price_str }}</mj-text>\n    <mj-button href="{{ item.url }}" background-color="#a81fcb">Купить</mj-button>\n  </mj-column>\n{% endfor %}\n</mj-section>\n'},
+    products:{l:'Товары',t:'Цикл по товарам сценария — подставляются при отправке',s:'<mj-section>\n{% for item in get_recommendations() %}\n  <mj-column>\n    <mj-image src="{{ item.picture }}" href="{{ item.url }}" />\n    <mj-text align="center" font-weight="600">{{ item.name }}</mj-text>\n    <mj-text align="center">{{ item.price_str }}</mj-text>\n    <mj-button href="{{ item.url }}" background-color="#a81fcb">Купить</mj-button>\n  </mj-column>\n{% endfor %}\n</mj-section>\n'},
     divider:{l:'Разделитель',t:'Горизонтальная линия',s:'<mj-divider border-color="#e6ebf3" border-width="1px" />\n'},
     spacer:{l:'Отступ',t:'Вертикальный отступ',s:'<mj-spacer height="20px" />\n'},
     social:{l:'Соцсети',t:'Иконки соцсетей',s:'<mj-social font-size="13px" mode="horizontal">\n  <mj-social-element name="telegram" href="https://" />\n  <mj-social-element name="instagram" href="https://" />\n</mj-social>\n'},
@@ -1805,7 +1809,7 @@ const CE_SNIP={
     text:{l:'Текст',t:'Абзац текста',s:'<p style="font-size:15px;line-height:1.55;color:#333;margin:8px 0">Текст письма</p>\n'},
     button:{l:'Кнопка',t:'Кнопка-ссылка (таблица, устойчива в почте)',s:'<table role="presentation" cellpadding="0" cellspacing="0" style="margin:14px auto"><tr>\n  <td style="background:#a81fcb;border-radius:8px">\n    <a href="https://groster.me" style="display:inline-block;padding:12px 30px;color:#fff;text-decoration:none;font-weight:600">Перейти</a>\n  </td>\n</tr></table>\n'},
     image:{l:'Картинка',t:'Изображение',s:'<img src="https://" alt="" style="max-width:100%;border-radius:8px;display:block;margin:10px 0">\n'},
-    products:{l:'Товары',t:'Цикл по товарам сценария (топ-5) — подставляются при отправке',s:'<table role="presentation" style="margin:8px 0"><tr>\n{% for item in get_recommendations() %}{% if loop.index0 and loop.index0 % 3 == 0 %}</tr><tr>{% endif %}\n  <td width="180" style="padding:10px;text-align:center;vertical-align:top">\n    <a href="{{ item.url }}"><img src="{{ item.picture }}" width="150" alt="{{ item.name }}" style="max-width:150px;border-radius:8px"></a>\n    <div style="font-weight:600;margin:8px 0 4px">{{ item.name }}</div>\n    <div style="color:#555;margin-bottom:8px">{{ item.price_str }}</div>\n    <a href="{{ item.url }}" style="display:inline-block;background:#a81fcb;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-size:14px">Купить</a>\n  </td>\n{% endfor %}\n</tr></table>\n'},
+    products:{l:'Товары',t:'Цикл по товарам сценария — подставляются при отправке',s:'<table role="presentation" style="margin:8px 0"><tr>\n{% for item in get_recommendations() %}{% if loop.index0 and loop.index0 % 3 == 0 %}</tr><tr>{% endif %}\n  <td width="180" style="padding:10px;text-align:center;vertical-align:top">\n    <a href="{{ item.url }}"><img src="{{ item.picture }}" width="150" alt="{{ item.name }}" style="max-width:150px;border-radius:8px"></a>\n    <div style="font-weight:600;margin:8px 0 4px">{{ item.name }}</div>\n    <div style="color:#555;margin-bottom:8px">{{ item.price_str }}</div>\n    <a href="{{ item.url }}" style="display:inline-block;background:#a81fcb;color:#fff;text-decoration:none;padding:8px 16px;border-radius:8px;font-size:14px">Купить</a>\n  </td>\n{% endfor %}\n</tr></table>\n'},
     divider:{l:'Разделитель',t:'Горизонтальная линия',s:'<hr style="border:0;border-top:1px solid #e6ebf3;margin:18px 0">\n'},
     spacer:{l:'Отступ',t:'Вертикальный отступ',s:'<div style="height:20px;line-height:20px">&nbsp;</div>\n'},
     unsub:{l:'Отписка',t:'Ссылка отписки',s:'<p style="text-align:center;font-size:12px;color:#888;margin-top:16px"><a href="{{unsubscribe_url}}" style="color:#888">Отписаться от рассылки</a></p>\n'},

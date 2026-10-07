@@ -275,16 +275,23 @@ def _render_block(b: dict, products: list[dict], campaign: str, lk: dict, user_i
     return ""
 
 
-def _mjml_items(products: list[dict] | None) -> list[dict]:
+def _mjml_items(products: list[dict] | None, campaign: str) -> list[dict]:
     """Адаптер: наши товары → объекты, которых ждёт MJML-шаблон LeadHit.
     Шаблон обращается к item.url/picture/name/price и делит цену на 100 (LeadHit хранил
     копейки) — поэтому цену в рублях домножаем обратно. Дополнительно даём item.price_str —
-    готовую цену «71,60 ₽» для своих шаблонов (в копейках/100 теряются копейки)."""
+    готовую цену «71,60 ₽» для своих шаблонов (в копейках/100 теряются копейки).
+    url — с UTM, как у нативных карточек: иначе клики из импортированного шаблона не атрибутируются.
+    image/image_url — те же фото, что picture: часть шаблонов ждёт другое имя поля."""
     out = []
     for p in (products or []):
+        picture = p.get("image_url") or ""
+        picture_src = img_src(picture) if picture else ""
         out.append({
-            "url": p.get("product_url") or "#",
-            "picture": img_src(p.get("image_url")),
+            "id": p.get("product_id") or "",
+            "url": _utm(p.get("product_url") or "", campaign),
+            "picture": picture_src,
+            "image": picture_src,
+            "image_url": picture_src,
             "name": p.get("name") or "",
             "price": int(round(float(p.get("price") or 0) * 100)),
             "price_str": _price(p.get("price")),
@@ -334,7 +341,7 @@ def _jinja_render(source: str, products: list[dict], user_id: str, campaign: str
     import datetime
     import jinja2
     unsub = f'{unsub_base()}?u={user_id}&c={campaign}'
-    items = _mjml_items(products)
+    items = _mjml_items(products, campaign)
     # Все вызовы get_*() (get_recommendations/get_cart_items/get_order_items/…) означают
     # «дай товары сценария» — ни одна питон/jinja-функция не начинается с get_.
     ctx = {"unsubscribe_url": unsub}
@@ -494,6 +501,12 @@ def _demo() -> None:
     out = render_blocks(secs, P[:2], "u1", "cart")
     assert "{% for" not in out and "{{ item" not in out, out
     assert "static.groster.me/1.png" in out and "Товар &amp;" in out
+    # Ссылка товара в импортированном шаблоне несёт UTM (как нативная карточка).
+    linked = render_blocks(
+        [{"type": "html", "html": '{% for item in get_recommendations() %}<a href="{{ item.url }}">x</a>{% endfor %}'}],
+        P[:1], "u1", "best_offer")
+    assert "utm_source=trigger" in linked and "utm_campaign=best_offer" in linked, linked
+    assert "https://groster.me/p/1" in linked
 
     # html-блок рядом с нативными блоками — тоже через Jinja + подстановка отписки.
     mixed = render_blocks([{"type": "heading", "text": "Привет"},
