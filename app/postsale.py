@@ -9,7 +9,7 @@ import json
 
 import asyncpg
 
-from app import activity_log, app_settings, images, svc_config
+from app import activity_log, app_settings, images, product_pick, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
 
@@ -45,12 +45,14 @@ def normalize_order_items(items: list[dict], catalog: dict[str, dict]) -> list[d
 
 
 def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]],
-                    limit: int = 30) -> tuple[str | None, list[str]]:
+                    limit: int = 30, recent: set[str] | None = None,
+                    offset: int = 0) -> tuple[str | None, list[str]]:
     """Подбор cross-sell (ТЗ 4.4), без ML.
 
-    Категории заказа по убыванию цены → топ/каталог каждой минус уже купленное.
-    Собираем до `limit` уникальных product_id (по умолчанию 30). Первая непустая
-    категория — «основная» для лога. Пусто → (None, []) — письмо НЕ шлём (критерий 4.8).
+    Категории заказа по убыванию цены → топ/каталог каждой минус уже купленное
+    и минус `recent` (товары из недавних писем этому клиенту). Срез сдвигается
+    на `offset`, чтобы повторные постпродажи не отдавали тот же набор.
+    Собираем до `limit` уникальных product_id. Пусто → (None, []) — не шлём (4.8).
     """
     limit = max(1, int(limit or 30))
     bought = {i["product_id"] for i in items}
@@ -60,19 +62,31 @@ def pick_cross_sell(items: list[dict], top5_by_cat: dict[str, list[str]],
     picked: list[str] = []
     seen_ids: set[str] = set()
     primary: str | None = None
-    for cat in cats_by_price:
-        if cat in seen_cats:
-            continue
-        seen_cats.add(cat)
-        for pid in top5_by_cat.get(cat, []):
-            if pid in bought or pid in seen_ids:
+
+    def _collect(skip_recent: bool) -> None:
+        nonlocal primary
+        for cat in cats_by_price:
+            if cat in seen_cats and not skip_recent:
                 continue
-            if primary is None:
-                primary = cat
-            picked.append(pid)
-            seen_ids.add(pid)
-            if len(picked) >= limit:
-                return primary, picked
+            if cat not in seen_cats:
+                seen_cats.add(cat)
+            pool = product_pick.rotate_ids(top5_by_cat.get(cat, []), offset)
+            for pid in pool:
+                if len(picked) >= limit:
+                    return
+                if pid in seen_ids or pid in bought:
+                    continue
+                if not skip_recent and pid in (recent or ()):
+                    continue
+                if primary is None:
+                    primary = cat
+                picked.append(pid)
+                seen_ids.add(pid)
+
+    _collect(skip_recent=False)
+    # Совсем пусто из‑за recent — ослабляем дедуп (купленное всё равно вне), иначе не шлём.
+    if not picked and recent:
+        _collect(skip_recent=True)
     return (primary, picked) if picked else (None, [])
 
 
@@ -223,7 +237,10 @@ async def _process_one(con: asyncpg.Connection, job, mailer, cfg, look, blocks=N
     items = await _order_items(con, order["items"])
     limit = max(1, min(int(cfg.get("items_limit") or 30), 60))
     top5 = await _top5_map(con, [i["category_id"] for i in items], per_cat=limit)
-    category, product_ids = pick_cross_sell(items, top5, limit=limit)
+    recent = await product_pick.recent_sent_products(con, order["user_id"])
+    offset = await product_pick.send_offset(con, order["user_id"], "postsale")
+    category, product_ids = pick_cross_sell(
+        items, top5, limit=limit, recent=recent, offset=offset)
     if not product_ids:
         await _finish(con, job["id"], "cancelled")  # блок пуст → не шлём (ТЗ 4.8)
         await activity_log.write(
@@ -388,8 +405,9 @@ async def _load_products(con: asyncpg.Connection, product_ids: list[str]) -> lis
 def _demo() -> None:
     """Self-check чистой логики подбора (ТЗ 4.4)."""
     top5 = {"shoes": ["s1", "s2", "s3"], "bags": ["b1", "b2"]}
+    order_shoes = [{"product_id": "s1", "category_id": "shoes", "price": 5990}]
     # Один товар shoes s1 → shoes минус купленное s1 → [s2, s3].
-    assert pick_cross_sell([{"product_id": "s1", "category_id": "shoes", "price": 5990}], top5) == ("shoes", ["s2", "s3"])
+    assert pick_cross_sell(order_shoes, top5) == ("shoes", ["s2", "s3"])
     # Несколько категорий → сначала самый дорогой (bags), затем добор из shoes (до limit).
     cat, ids = pick_cross_sell(
         [{"product_id": "s1", "category_id": "shoes", "price": 5990},
@@ -413,6 +431,13 @@ def _demo() -> None:
     big = {"c": [f"p{i}" for i in range(40)]}
     cat, ids = pick_cross_sell([{"product_id": "x", "category_id": "c", "price": 1}], big, limit=30)
     assert cat == "c" and len(ids) == 30 and len(set(ids)) == 30 and ids[0] == "p0", (cat, len(ids))
+    # recent: не повторяем товары из прошлых писем клиенту.
+    cat, ids = pick_cross_sell(order_shoes, top5, recent={"s2"})
+    assert cat == "shoes" and ids == ["s3"], (cat, ids)
+    # offset сдвигает срез внутри категории.
+    a = pick_cross_sell([{"product_id": "x", "category_id": "c", "price": 1}], big, limit=5, offset=0)[1]
+    b = pick_cross_sell([{"product_id": "x", "category_id": "c", "price": 1}], big, limit=5, offset=5)[1]
+    assert a != b and a[0] == "p0" and b[0] == "p5", (a, b)
     # Заказ с витрины без category_id: категорию берём из каталога, цену заказа не затираем.
     catalog = {"s1": {"category_id": "shoes", "price": 5990}}
     norm = normalize_order_items([{"product_id": " s1 ", "price": 100}], catalog)

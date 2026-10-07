@@ -6,11 +6,9 @@
 """
 from __future__ import annotations
 
-from app import activity_log, app_settings, images, svc_config
+from app import activity_log, app_settings, images, product_pick, svc_config
 from app.mailer import get_mailer
 from app.templates import DEFAULT_BLOCKS, render_blocks, render_email
-
-DEDUP_LAST_N = 3  # дедуп по товарам из последних N писем Best Offer (ТЗ 2.4)
 
 
 def rotate_and_pick(
@@ -20,13 +18,15 @@ def rotate_and_pick(
     recent: set[str],
     min_items: int = 2,
     limit: int = 30,
+    offset: int = 0,
 ) -> tuple[str | None, list[str], str | None]:
-    """Ротация категорий с дедупом (ТЗ 2.4).
+    """Ротация категорий с дедупом (ТЗ 2.4) и сдвигом среза между письмами.
 
     Идём по категориям от start циклично. Первая, где после исключения recent осталось
-    >= min_items товаров, — основная. Дальше добираем уникальные id из следующих
-    категорий до `limit` (по умолчанию 30). Указатель сдвигается на категорию
-    ПОСЛЕ основной. Если ни одна не набирает min_items — фолбэк без дедупа.
+    >= min_items товаров, — основная. Дальше добираем уникальные id (без recent) до
+    `limit`. Срез внутри категории сдвигается на `offset` (счётчик отправок), чтобы
+    повторный заход в ту же категорию давал другие товары. Указатель — на категорию
+    ПОСЛЕ основной. Если ни одна не набирает min_items — фолбэк без дедупа (тоже со сдвигом).
     """
     if not order:
         return None, [], start
@@ -58,7 +58,9 @@ def rotate_and_pick(
     seen: set[str] = set()
     for k in range(n):
         cat = order[(idx0 + primary_k + k) % n]
-        for pid in top5.get(cat, []):
+        # Сдвиг по числу отправок: повторный заход даёт другой срез той же категории.
+        pool = product_pick.rotate_ids(top5.get(cat, []), offset)
+        for pid in pool:
             if pid in seen:
                 continue
             if strict_dedup and pid in recent:
@@ -114,16 +116,8 @@ async def _top5_map(con, per_cat: int = 30,
 
 
 async def _recent_products(con, user_id: str) -> set[str]:
-    rows = await con.fetch(
-        """SELECT product_ids FROM email_log
-           WHERE user_id = $1 AND service = 'best_offer'
-           ORDER BY created_at DESC LIMIT $2""",
-        user_id, DEDUP_LAST_N,
-    )
-    recent: set[str] = set()
-    for r in rows:
-        recent.update(r["product_ids"])
-    return recent
+    """Товары из недавних отправленных писем — Best Offer и Постпродажа."""
+    return await product_pick.recent_sent_products(con, user_id)
 
 
 async def _candidates(con, interval_days: int, after_purchase_days: int):
@@ -168,37 +162,32 @@ async def _load_products(con, product_ids: list[str]) -> list[dict]:
     return [dict(by_id[pid], price=float(by_id[pid]["price"])) for pid in ids if pid in by_id]
 
 
-async def _fallback_catalog_products(con, recent: set[str], limit: int = 30) -> list[dict]:
+async def _fallback_catalog_products(con, recent: set[str], limit: int = 30,
+                                     offset: int = 0) -> list[dict]:
     """Запасная подборка: любые in_stock с фото из каталога, минус недавний дедуп.
-    Нужна, когда топ категории выжжен по фото/OOS, а письмо иначе уйдёт пустым."""
+    Нужна, когда топ категории выжжен по фото/OOS, а письмо иначе уйдёт пустым.
+    offset сдвигает срез — повторный фолбэк не отдаёт тот же хвост каталога."""
     limit = max(1, int(limit or 30))
     rows = await con.fetch(
         f"""SELECT product_id, name, price, image_url, product_url FROM products
            WHERE in_stock AND {images.HAS_PHOTO_SQL}
            ORDER BY updated_at DESC NULLS LAST, product_id
            LIMIT $1""",
-        max(limit * 4, 40),
+        max(limit * 6, 60),
     )
-    picked = []
-    seen: set[str] = set()
-    for r in rows:
-        pid = r["product_id"]
-        if pid in recent or pid in seen:
-            continue
-        picked.append(dict(r, price=float(r["price"])))
-        seen.add(pid)
-        if len(picked) >= limit:
-            break
-    if len(picked) < limit:
-        # Дедуп выжег всё — берём как есть, без повторов.
-        for r in rows:
-            pid = r["product_id"]
-            if pid in seen:
-                continue
-            picked.append(dict(r, price=float(r["price"])))
-            seen.add(pid)
-            if len(picked) >= limit:
+    all_ids = [r["product_id"] for r in rows]
+    by_id = {r["product_id"]: dict(r, price=float(r["price"])) for r in rows}
+    # Сначала свежие (не recent), со сдвигом; потом — только если свежих мало.
+    fresh = product_pick.rotate_ids([pid for pid in all_ids if pid not in recent], offset)
+    picked_ids = fresh[:limit]
+    if len(picked_ids) < limit:
+        rest = product_pick.rotate_ids(
+            [pid for pid in all_ids if pid not in picked_ids], offset)
+        for pid in rest:
+            picked_ids.append(pid)
+            if len(picked_ids) >= limit:
                 break
+    picked = [by_id[pid] for pid in picked_ids if pid in by_id]
     return await images.warm_products(picked, require_live=True)
 
 async def run_batch(con, mailer=None, force: bool = False) -> int:
@@ -275,7 +264,9 @@ async def _send_one(con, cand, mailer, cfg, look, blocks, template_id, order, to
     limit = max(1, min(int(items_limit or 30), 60))
     start = cand["rotation_pointer_category_id"] or cand["last_purchase_category_id"] or default_start
     recent = await _recent_products(con, cand["user_id"])
-    category, product_ids, next_ptr = rotate_and_pick(start, order, top5, recent, limit=limit)
+    offset = await product_pick.send_offset(con, cand["user_id"], "best_offer")
+    category, product_ids, next_ptr = rotate_and_pick(
+        start, order, top5, recent, limit=limit, offset=offset)
     products: list[dict] = []
     if product_ids:
         # Только с фото + прогрев CDN (в письме — абсолютный static URL, не /img/ редирект).
@@ -283,7 +274,7 @@ async def _send_one(con, cand, mailer, cfg, look, blocks, template_id, order, to
         products = await images.warm_products(products, require_live=True)
     if not products:
         # Топ пуст / выжжен по фото — не бросаем письмо: любые in_stock с фото из каталога.
-        products = await _fallback_catalog_products(con, recent, limit=limit)
+        products = await _fallback_catalog_products(con, recent, limit=limit, offset=offset)
         category = category or "catalog"
         if not next_ptr and order:
             next_ptr = order[(order.index(start) + 1) % len(order)] if start in order else order[0]
@@ -367,6 +358,13 @@ def _demo() -> None:
     big = {"c1": [f"a{i}" for i in range(20)], "c2": [f"b{i}" for i in range(20)]}
     cat, ids, nxt = rotate_and_pick("c1", ["c1", "c2"], big, set(), limit=30)
     assert cat == "c1" and len(ids) == 30 and len(set(ids)) == 30 and nxt == "c2", (cat, len(ids), nxt)
+    # offset сдвигает срез: два письма подряд не дают один и тот же набор.
+    a = rotate_and_pick("c1", ["c1", "c2"], big, set(), limit=10, offset=0)[1]
+    b = rotate_and_pick("c1", ["c1", "c2"], big, set(), limit=10, offset=10)[1]
+    assert a != b and len(set(a) & set(b)) < 10, (a, b)
+    # После «отправки» a — дедуп убирает пересечение во втором письме.
+    c = rotate_and_pick("c1", ["c1", "c2"], big, set(a), limit=10, offset=1)[1]
+    assert not (set(c) & set(a)), (a, c)
     print("best_offer._demo OK")
 
 
